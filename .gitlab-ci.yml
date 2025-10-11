@@ -1,0 +1,100 @@
+stages:
+  - build
+
+variables:
+  # Ускоряет установку Rust
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
+  # Отключаем обновление индекса при установке
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+# Кэшируем Rust и Node.js зависимости
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cargo/
+    - .rustup/
+    - node_modules/
+
+# Общий шаблон для заданий
+.tauri-build:
+  image: node:20-bookworm
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        build-essential \
+        libwebkit2gtk-4.1-dev \
+        libappindicator3-dev \
+        librsvg2-dev \
+        patchelf \
+        libgtk-3-dev \
+        libayatana-appindicator3-dev \
+        libwebkit2gtk-4.0-dev \
+        libxtst-dev \
+        libx11-dev \
+        libxrandr-dev \
+        libxinerama-dev \
+        libxcursor-dev \
+        libxcomposite-dev \
+        libxdamage-dev \
+        libxss-dev \
+        libasound2-dev \
+        libssl-dev
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - rustup target add x86_64-unknown-linux-gnu
+    - npm ci
+
+build-linux:
+  extends: .tauri-build
+  stage: build
+  script:
+    - npm run gen-icons
+    - source "$HOME/.cargo/env"
+    - cargo tauri build --target x86_64-unknown-linux-gnu
+    - |
+      # Найдём бинарник (обычно в src-tauri/target/release/)
+      BINARY=$(find src-tauri/target/release -type f -executable -not -name "*.*" | head -n1)
+      if [ -z "$BINARY" ]; then
+        echo "Error: Binary not found!"
+        exit 1
+      fi
+      cp "$BINARY" ./app-linux
+  artifacts:
+    name: "tauri-app-linux-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - app-linux
+    expire_in: 1 week
+  when: manual
+  tags:
+    - linux  # Убедитесь, что у вас есть runner с этой меткой
+
+build-windows:
+  stage: build
+  image: mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2019
+  before_script:
+    # Установка Rust и Node.js в Windows-образе
+    - choco install -y rustup nodejs
+    - refreshenv
+    - rustup default stable
+    - rustup target add x86_64-pc-windows-msvc
+    - npm ci
+  script:
+    - npm run gen-icons
+    - cargo tauri build --target x86_64-pc-windows-msvc
+    - |
+      # Поиск .exe файла
+      for /f "delims=" %%i in ('dir /b /s "src-tauri\target\release\*.exe" ^| findstr /v "\.dll$"') do set BINARY=%%i
+      if not defined BINARY (
+        echo Error: Binary not found!
+        exit /b 1
+      )
+      copy "%BINARY%" app-windows.exe
+  artifacts:
+    name: "tauri-app-windows-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - app-windows.exe
+    expire_in: 1 week
+  when: manual
+  tags:
+    - windows  # Убедитесь, что у вас есть Windows runner с этой меткой
