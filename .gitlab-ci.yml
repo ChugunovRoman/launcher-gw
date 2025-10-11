@@ -29,11 +29,11 @@ build-linux:
     - npm run gen-icons
     - source "$CARGO_HOME/env"
     - npm run tauri build
-    - cp src-tauri/target/release/gw-launcher ./stalker
+    - cp src-tauri/target/release/gw-launcher ./Stalker-GW
   artifacts:
-    name: stalker
+    name: Stalker-GW
     paths:
-      - stalker
+      - Stalker-GW
     expire_in: 1 week
   when: manual
   tags:
@@ -53,11 +53,11 @@ build-windows:
   script:
     - npm run gen-icons
     - npm run tauri-build-windows
-    - cp src-tauri/target/x86_64-pc-windows-msvc/release/gw-launcher.exe stalker.exe
+    - cp src-tauri/target/x86_64-pc-windows-msvc/release/gw-launcher.exe Stalker-GW.exe
   artifacts:
-    name: stalker
+    name: Stalker-GW
     paths:
-      - stalker.exe
+      - Stalker-GW.exe
     expire_in: 1 week
   when: manual
   tags:
