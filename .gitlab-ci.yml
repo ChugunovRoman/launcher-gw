@@ -2,13 +2,10 @@ stages:
   - build
 
 variables:
-  # Ускоряет установку Rust
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
-  # Отключаем обновление индекса при установке
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
-# Кэшируем Rust и Node.js зависимости
 cache:
   key: "$CI_COMMIT_REF_SLUG"
   paths:
@@ -16,7 +13,6 @@ cache:
     - .rustup/
     - node_modules/
 
-# Общий шаблон для заданий
 .tauri-build:
   image: node:20-bookworm
   before_script:
@@ -41,15 +37,14 @@ build-linux:
     expire_in: 1 week
   when: manual
   tags:
-    - saas-linux-medium-amd64  # Убедитесь, что у вас есть runner с этой меткой
+    - saas-linux-medium-amd64
 
 build-windows:
   stage: build
   image: ivangabriele/tauri:debian-bookworm-20
   before_script:
-    # Установка Rust и Node.js в Windows-образе
-    - apt-get -y install nsis # This was needed to resolve a packaging issue
-    - apt-get -y install clang # Had to add to resolve a dialog issue on launch
+    - apt-get -y install nsis
+    - apt-get -y install clang
     - apt-get -y install lld llvm
     - rustup target add x86_64-pc-windows-msvc
     - cargo install --locked cargo-xwin
@@ -66,4 +61,4 @@ build-windows:
     expire_in: 1 week
   when: manual
   tags:
-    - saas-linux-medium-amd64  # Убедитесь, что у вас есть runner с этой меткой
+    - saas-linux-medium-amd64
