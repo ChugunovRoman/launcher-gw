@@ -33,18 +33,11 @@ build-linux:
     - npm run gen-icons
     - source "$HOME/.cargo/env"
     - cargo tauri build --target x86_64-unknown-linux-gnu
-    - |
-      # Найдём бинарник (обычно в src-tauri/target/release/)
-      BINARY=$(find src-tauri/target/release -type f -executable -not -name "*.*" | head -n1)
-      if [ -z "$BINARY" ]; then
-        echo "Error: Binary not found!"
-        exit 1
-      fi
-      cp "$BINARY" ./app-linux
+    - cp src-tauri/target/release/gw-launcher ./stalker
   artifacts:
-    name: "tauri-app-linux-${CI_COMMIT_SHORT_SHA}"
+    name: "stalker"
     paths:
-      - app-linux
+      - stalker
     expire_in: 1 week
   when: manual
   tags:
@@ -63,18 +56,11 @@ build-windows:
   script:
     - npm run gen-icons
     - cargo tauri build --target x86_64-pc-windows-msvc
-    - |
-      # Поиск .exe файла
-      for /f "delims=" %%i in ('dir /b /s "src-tauri\target\release\*.exe" ^| findstr /v "\.dll$"') do set BINARY=%%i
-      if not defined BINARY (
-        echo Error: Binary not found!
-        exit /b 1
-      )
-      copy "%BINARY%" app-windows.exe
+    - copy src-tauri\target\release\gw-launcher.exe stalker.exe
   artifacts:
-    name: "tauri-app-windows-${CI_COMMIT_SHORT_SHA}"
+    name: "stalker"
     paths:
-      - app-windows.exe
+      - stalker.exe
     expire_in: 1 week
   when: manual
   tags:
