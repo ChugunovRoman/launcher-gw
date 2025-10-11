@@ -22,7 +22,7 @@ cache:
   before_script:
     - apt-get update && apt-get install -y --no-install-recommends curl build-essential libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libayatana-appindicator3-dev libwebkit2gtk-4.0-dev libxtst-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxdamage-dev libxss-dev libasound2-dev libssl-dev
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source "$HOME/.cargo/env"
+    - source "$CARGO_HOME/env"
     - rustup target add x86_64-unknown-linux-gnu
     - npm ci
 
@@ -31,7 +31,7 @@ build-linux:
   stage: build
   script:
     - npm run gen-icons
-    - source "$HOME/.cargo/env"
+    - source "$CARGO_HOME/env"
     - cargo tauri build --target x86_64-unknown-linux-gnu
     - cp src-tauri/target/release/gw-launcher ./stalker
   artifacts:
