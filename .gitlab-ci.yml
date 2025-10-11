@@ -53,6 +53,7 @@ build-windows:
     - apt-get -y install lld llvm
     - rustup target add x86_64-pc-windows-msvc
     - cargo install --locked cargo-xwin
+    - source "$CARGO_HOME/env"
     - npm ci
   script:
     - npm run gen-icons
