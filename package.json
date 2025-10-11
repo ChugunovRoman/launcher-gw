@@ -10,7 +10,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "gen-icons": "tauri icon src-tauri/icons/icon.png",
-    "tauri-build-windows": "tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc",
+    "tauri-build-windows": "tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc",
     "tauri": "tauri"
   },
   "license": "MIT",

@@ -52,7 +52,7 @@ build-windows:
     - apt-get -y install clang # Had to add to resolve a dialog issue on launch
     - apt-get -y install lld llvm
     - rustup target add x86_64-pc-windows-msvc
-    - cargo install --locked --quiet cargo-xwin
+    - cargo install --locked cargo-xwin
     - npm ci
   script:
     - npm run gen-icons
