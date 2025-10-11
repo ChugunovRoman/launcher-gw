@@ -32,7 +32,7 @@ build-linux:
   script:
     - npm run gen-icons
     - source "$CARGO_HOME/env"
-    - npm run tauri build --target x86_64-unknown-linux-gnu
+    - npm run tauri build
     - cp src-tauri/target/release/gw-launcher ./stalker
   artifacts:
     name: "stalker"
@@ -48,14 +48,20 @@ build-windows:
   image: mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2019
   before_script:
     # Установка Rust и Node.js в Windows-образе
-    - choco install -y rustup nodejs
+    - choco install -y nodejs
     - refreshenv
+    - |
+      # Установка Rust через официальный установщик
+      $ProgressPreference = 'SilentlyContinue'
+      Invoke-WebRequest -Uri "https://win.rustup.rs" -OutFile "rustup-init.exe"
+      .\rustup-init.exe -y --profile minimal --default-host x86_64-pc-windows-msvc
+    - $env:PATH = "C:\Users\runner\.cargo\bin;$env:PATH"
     - rustup default stable
     - rustup target add x86_64-pc-windows-msvc
     - npm ci
   script:
     - npm run gen-icons
-    - npm run tauri build --target x86_64-pc-windows-msvc
+    - npm run tauri build
     - copy src-tauri\target\release\gw-launcher.exe stalker.exe
   artifacts:
     name: "stalker"
