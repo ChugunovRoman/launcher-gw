@@ -35,7 +35,7 @@ build-linux:
     - npm run tauri build
     - cp src-tauri/target/release/gw-launcher ./stalker
   artifacts:
-    name: "stalker"
+    name: stalker
     paths:
       - stalker
     expire_in: 1 week
@@ -45,25 +45,21 @@ build-linux:
 
 build-windows:
   stage: build
-  image: mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2019
+  image: ivangabriele/tauri:debian-bookworm-20
   before_script:
     # Установка Rust и Node.js в Windows-образе
-    - choco install -y nodejs
-    - |
-      # Установка Rust через официальный установщик
-      $ProgressPreference = 'SilentlyContinue'
-      Invoke-WebRequest -Uri "https://win.rustup.rs" -OutFile "rustup-init.exe"
-      .\rustup-init.exe -y --profile minimal --default-host x86_64-pc-windows-msvc
-    - $env:PATH = "C:\Users\runner\.cargo\bin;$env:PATH"
-    - rustup default stable
+    - apt-get -y install nsis # This was needed to resolve a packaging issue
+    - apt-get -y install clang # Had to add to resolve a dialog issue on launch
+    - apt-get -y install lld llvm
     - rustup target add x86_64-pc-windows-msvc
+    - cargo install --locked --quiet cargo-xwin
     - npm ci
   script:
     - npm run gen-icons
     - npm run tauri build
     - copy src-tauri\target\release\gw-launcher.exe stalker.exe
   artifacts:
-    name: "stalker"
+    name: stalker
     paths:
       - stalker.exe
     expire_in: 1 week
