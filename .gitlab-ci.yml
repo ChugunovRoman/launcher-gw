@@ -58,7 +58,7 @@ build-windows:
   script:
     - npm run gen-icons
     - npm run tauri-build-windows
-    - cp src-tauri/target/release/gw-launcher.exe stalker.exe
+    - cp src-tauri/target/x86_64-pc-windows-msvc/release/gw-launcher.exe stalker.exe
   artifacts:
     name: stalker
     paths:
