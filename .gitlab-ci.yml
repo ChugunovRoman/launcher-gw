@@ -32,7 +32,7 @@ build-linux:
   script:
     - npm run gen-icons
     - source "$CARGO_HOME/env"
-    - cargo tauri build --target x86_64-unknown-linux-gnu
+    - npm run tauri build --target x86_64-unknown-linux-gnu
     - cp src-tauri/target/release/gw-launcher ./stalker
   artifacts:
     name: "stalker"
@@ -55,7 +55,7 @@ build-windows:
     - npm ci
   script:
     - npm run gen-icons
-    - cargo tauri build --target x86_64-pc-windows-msvc
+    - npm run tauri build --target x86_64-pc-windows-msvc
     - copy src-tauri\target\release\gw-launcher.exe stalker.exe
   artifacts:
     name: "stalker"
