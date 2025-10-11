@@ -56,8 +56,8 @@ build-windows:
     - npm ci
   script:
     - npm run gen-icons
-    - npm run tauri build
-    - copy src-tauri\target\release\gw-launcher.exe stalker.exe
+    - npm run tauri-build-windows
+    - cp src-tauri/target/release/gw-launcher.exe stalker.exe
   artifacts:
     name: stalker
     paths:
@@ -65,4 +65,4 @@ build-windows:
     expire_in: 1 week
   when: manual
   tags:
-    - saas-windows-medium-amd64  # Убедитесь, что у вас есть Windows runner с этой меткой
+    - saas-linux-medium-amd64  # Убедитесь, что у вас есть runner с этой меткой
