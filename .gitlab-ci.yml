@@ -49,7 +49,6 @@ build-windows:
   before_script:
     # Установка Rust и Node.js в Windows-образе
     - choco install -y nodejs
-    - refreshenv
     - |
       # Установка Rust через официальный установщик
       $ProgressPreference = 'SilentlyContinue'
