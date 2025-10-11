@@ -1,0 +1,6 @@
+{
+  "svelte.enable-ts-plugin": true,
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  }
+}
