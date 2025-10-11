@@ -67,7 +67,7 @@ build-linux:
     expire_in: 1 week
   when: manual
   tags:
-    - linux  # Убедитесь, что у вас есть runner с этой меткой
+    - saas-linux-small-amd64  # Убедитесь, что у вас есть runner с этой меткой
 
 build-windows:
   stage: build
@@ -97,4 +97,4 @@ build-windows:
     expire_in: 1 week
   when: manual
   tags:
-    - windows  # Убедитесь, что у вас есть Windows runner с этой меткой
+    - saas-windows-medium-amd64  # Убедитесь, что у вас есть Windows runner с этой меткой
