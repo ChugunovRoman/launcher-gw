@@ -1390,7 +1390,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gw-launcher"
+name = "gw_launcher"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -1398,6 +1398,8 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tauri-plugin-window-state",
+ "tokio",
 ]
 
 [[package]]
@@ -3764,6 +3766,21 @@ dependencies = [
  "url",
  "windows",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-window-state"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d5f6fe3291bfa609c7e0b0ee3bedac294d94c7018934086ce782c1d0f2a468e"
+dependencies = [
+ "bitflags 2.9.4",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

@@ -1,0 +1,58 @@
+<script lang="ts">
+  import "normalize.css";
+  import Header from "./Header.svelte";
+</script>
+
+<main class="container">
+  <div class="bgimg" data-tauri-drag-region />
+  <Header />
+</main>
+
+<style>
+  :root {
+    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 400;
+
+    color: #f6f6f6;
+    background-color: #f6f6f6;
+
+    width: 100vw;
+    height: 100vh;
+
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .container {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+  }
+  .bgimg {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    width: 100vw;
+    height: 100vh;
+    background-image: url("/static/bg.png");
+    background-repeat: no-repeat;
+    background-position: center center;
+    background-size: cover;
+    z-index: -1;
+  }
+
+  @media (max-width: 1920px) and (max-height: 1080px) {
+    .container {
+      background-size: 1920px 1080px;
+    }
+  }
+</style>

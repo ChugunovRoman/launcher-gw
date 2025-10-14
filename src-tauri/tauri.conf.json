@@ -12,13 +12,31 @@
   "app": {
     "windows": [
       {
-        "title": "stalker",
-        "width": 800,
-        "height": 600
+        "title": "S.T.A.L.K.E.R Global War",
+        "minWidth": 1200,
+        "width": 1200,
+        "minHeight": 730,
+        "height": 730,
+        "decorations": false,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "draggable-window",
+          "windows": [
+            "*"
+          ],
+          "permissions": [
+            "core:window:allow-start-dragging",
+            "core:webview:allow-internal-toggle-devtools"
+          ]
+        }
+      ]
     }
   },
   "bundle": {
