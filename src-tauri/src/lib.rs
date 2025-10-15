@@ -4,7 +4,7 @@ use handlers::register_window_handlers;
 use tauri::{Builder, Wry};
 
 fn create_tauri_app() -> Builder<Wry> {
-  let mut app = tauri::Builder::default();
+  let mut app = tauri::Builder::default().plugin(tauri_plugin_window_state::Builder::new().build());
   app = register_window_handlers(app);
   return app;
 }

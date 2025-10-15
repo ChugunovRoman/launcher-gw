@@ -11,6 +11,7 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "gen-icons": "tauri icon src-tauri/icons/icon.png",
     "tauri-build-windows": "tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc",
+    "tauri-dev": "tauri dev",
     "tauri": "tauri"
   },
   "license": "MIT",
@@ -18,6 +19,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/cli": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-window-state": "^2.4.0",
     "lucide-svelte": "^0.545.0",
     "normalize.css": "^8.0.1",
     "svelte-preprocess": "^6.0.3",
@@ -25,8 +27,9 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "6.2.1",
-    "svelte": "^5.39.11",
-    "svelte-check": "^4.0.0",
+    "@tsconfig/svelte": "^5.0.5",
+    "svelte": "^5.40.0",
+    "svelte-check": "^4.3.3",
     "typescript": "~5.6.2",
     "vite": "7.1.9"
   }

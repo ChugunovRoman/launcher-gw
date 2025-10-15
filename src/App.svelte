@@ -4,6 +4,7 @@
 </script>
 
 <main class="container">
+  <!-- svelte-ignore element_invalid_self_closing_tag -->
   <div class="bgimg" data-tauri-drag-region />
   <Header />
 </main>
@@ -48,6 +49,8 @@
     background-position: center center;
     background-size: cover;
     z-index: -1;
+
+    -webkit-app-region: drag;
   }
 
   @media (max-width: 1920px) and (max-height: 1080px) {

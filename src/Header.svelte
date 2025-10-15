@@ -1,28 +1,40 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { saveWindowState, StateFlags } from '@tauri-apps/plugin-window-state';
 
   import { X, Minus, Minimize2, Maximize2, Settings } from "lucide-svelte";
 
   let isMaximized = $state(false);
-  let savedSize: { width: number; height: number } | null = null;
+
+  const window = getCurrentWindow();
+
+  const windowMoveHandler = async () => {
+    isMaximized = await window.isMaximized();
+  };
+
+  window.onMoved(windowMoveHandler); 
+  window.onResized(windowMoveHandler); 
 
   const closeWindowHandler = async () => {
-    console.log("Close");
     await invoke("app_exit");
   };
-  const minimizeWindowHandler = () => console.log("Minimize");
+  const minimizeWindowHandler = () => window.minimize();
   const toggleMaximizeHandler = async () => {
-    const [x, y] = await invoke("get_window_size");
-    console.log("Toggle maximize, x, y: ", x, y);
+    await window.toggleMaximize();
+
+    isMaximized = await window.isMaximized();
+
+    await saveWindowState(StateFlags.ALL);
   };
   const openSettingsHandler = () => console.log("Open settings");
 </script>
 
-<header data-tauri-drag-region>
+<header data-tauri-drag-region role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
   <h5 class="titile" data-tauri-drag-region>Global War Launcher</h5>
 
-  <div class="btn"><Settings onclick={openSettingsHandler} size={16} /></div>
+  <!-- <div class="btn"><Settings onclick={openSettingsHandler} size={16} /></div> -->
   <div class="btn">
     {#if isMaximized}
       <Minimize2 onclick={toggleMaximizeHandler} size={16} />
@@ -37,17 +49,22 @@
 <style>
   header {
     display: grid;
-    grid-template-columns: 1fr 32px 32px 32px 32px 32px;
+    grid-template-columns: 1fr 42px 42px 42px 42px;
     align-items: center;
     background-color: rgba(0, 0, 0, 0.5);
     width: 100vw;
+
+    -webkit-app-region: drag;
+  }
+  h5 {
+    -webkit-app-region: drag;
   }
 
   .titile {
     text-align: left;
     text-indent: 3%;
     padding: 0;
-    margin: 2px 0;
+    margin: 4px 0;
   }
 
   .btn {
