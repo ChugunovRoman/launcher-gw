@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from '@tauri-apps/plugin-shell';
 
-  import { Discord, Boosty, Patreon, Steam, Tg, Vk, Youtube } from "../Icons";
+  import { Discord, Boosty, Steam, Tg, Vk, Youtube } from "../Icons";
 </script>
 
 <div class="linksbar">
@@ -11,14 +11,13 @@
   <Steam size={40} onclick={() => open("https://steamcommunity.com/groups/wargreat") } />
   <Youtube size={40} onclick={() => open("https://www.youtube.com/channel/UCz0iDM0TfhtxerHenIXTRuA") } />
   <Boosty size={40} onclick={() => open("https://boosty.to/globalwar") } />
-  <Patreon size={40} onclick={() => open("https://vk.com/wargreat") } />
 </div>
 
 <style>
   .linksbar {
     margin-top: 20px;
     display: grid;
-    grid-template-rows: 80px 80px 80px 80px 80px 80px 80px 1fr;
+    grid-template-rows: 80px 80px 80px 80px 80px 80px 1fr;
     align-items: center;
     background-color: rgba(0, 0, 0, 0.0);
     justify-items: anchor-center;
