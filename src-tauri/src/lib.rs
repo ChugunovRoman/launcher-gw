@@ -13,6 +13,7 @@ fn create_tauri_app() -> Builder<Wry> {
 pub fn run() {
   create_tauri_app()
     .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_window_state::Builder::default().build())
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

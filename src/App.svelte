@@ -1,12 +1,23 @@
 <script lang="ts">
   import "normalize.css";
-  import Header from "./Header.svelte";
+  import Header from "./Components/Header.svelte";
+  import MenuBar from "./Components/MenuBar.svelte";
+  import LinksBar from "./Components/LinksBar.svelte";
 </script>
 
 <main class="container">
   <!-- svelte-ignore element_invalid_self_closing_tag -->
   <div class="bgimg" data-tauri-drag-region />
   <Header />
+  <div class="appbody">
+    <div class="menubar">
+      <MenuBar />
+    </div>
+    <div class="main"></div>
+    <div class="bar">
+      <LinksBar />
+    </div>
+  </div>
 </main>
 
 <style>
@@ -31,12 +42,20 @@
     user-select: none;
   }
 
+  :global(body) {
+    height: 100%;
+  }
+  :global(#app) {
+    height: 100%;
+  }
+
   .container {
     margin: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: 42px 1fr;
     justify-content: center;
     text-align: center;
+    height: 100%;
   }
   .bgimg {
     position: absolute;
@@ -44,13 +63,18 @@
     left: 0px;
     width: 100vw;
     height: 100vh;
-    background-image: url("/static/bg.png");
+    background-image: url("/static/bg.jpg");
     background-repeat: no-repeat;
     background-position: center center;
     background-size: cover;
     z-index: -1;
 
     -webkit-app-region: drag;
+  }
+
+  .appbody {
+    display: grid;
+    grid-template-columns: 80px 1fr 80px;
   }
 
   @media (max-width: 1920px) and (max-height: 1080px) {
