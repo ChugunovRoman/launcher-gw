@@ -10,7 +10,7 @@
   <Tg size={60} onclick={() => open("https://t.me/wargreat") } />
   <Steam size={40} onclick={() => open("https://steamcommunity.com/groups/wargreat") } />
   <Youtube size={40} onclick={() => open("https://www.youtube.com/channel/UCz0iDM0TfhtxerHenIXTRuA") } />
-  <Boosty size={40} onclick={() => open("https://vk.com/wargreat") } />
+  <Boosty size={40} onclick={() => open("https://boosty.to/globalwar") } />
   <Patreon size={40} onclick={() => open("https://vk.com/wargreat") } />
 </div>
 
