@@ -4,8 +4,12 @@ mod logger;
 mod setup;
 
 use configs::AppConfig::AppConfig;
+use configs::GameConfig::{GameConfig, TmpLtx, UserLtx};
 use logger::Logger;
-use std::sync::{Arc, Mutex};
+use std::{
+  path::Path,
+  sync::{Arc, Mutex},
+};
 use tauri::{Builder, Manager, Wry};
 
 use crate::logger::TauriLogger;
@@ -40,11 +44,20 @@ pub fn run() {
   create_tauri_app()
     .setup(|app| {
       let config = AppConfig::load_or_create(app.handle())?;
+      let working_dir = config.install_path.clone();
       let config_arc = Arc::new(Mutex::new(config.clone()));
+
+      let user_ltx = Path::new(&working_dir).join("appdata").join("user.ltx");
+      let tmp_ltx = Path::new(&working_dir).join("appdata").join("tmp.ltx");
+
+      let user_ltx_config = UserLtx(GameConfig::new(&user_ltx));
+      let tmp_ltx_config = TmpLtx(GameConfig::new(&tmp_ltx));
 
       // Сохраняем в состоянии приложения
       app.manage(config_arc);
       app.manage(logger_arc);
+      app.manage(Arc::new(Mutex::new((user_ltx_config.clone()))));
+      app.manage(Arc::new(Mutex::new((tmp_ltx_config.clone()))));
 
       Ok(())
     })

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use crate::configs::AppConfig::AppConfig;
+use crate::configs::{TmpLtx, UserLtx};
 use tauri::Manager;
 
 #[tauri::command]
@@ -20,7 +21,11 @@ pub fn spawn_external_process(path: String, args: Vec<String>) -> Result<u32, St
 }
 
 #[tauri::command]
-pub fn run_game(app: tauri::AppHandle) -> Result<u32, String> {
+pub fn run_game(
+  app: tauri::AppHandle,
+  user_ltx: tauri::State<'_, Arc<Mutex<UserLtx>>>,
+  tmp_ltx: tauri::State<'_, Arc<Mutex<TmpLtx>>>,
+) -> Result<u32, String> {
   let state = app
     .try_state::<Arc<Mutex<AppConfig>>>()
     .ok_or("Config not initialized")?;
@@ -31,6 +36,19 @@ pub fn run_game(app: tauri::AppHandle) -> Result<u32, String> {
     .join("xrEngine.exe");
 
   log::info!("run_game bin_path: {:?}", &bin_path);
+
+  let mut user_config = user_ltx.lock().map_err(|_| "Failed to lock user config")?;
+  user_config.0.load().ok();
+  user_config.0.set(
+    "vid_mode".to_string(),
+    config_guard.run_params.vid_mode.clone(),
+  );
+  let mut tmp_config = tmp_ltx.lock().map_err(|_| "Failed to lock tmp config")?;
+  tmp_config.0.load().ok();
+  tmp_config.0.set(
+    "vid_mode".to_string(),
+    config_guard.run_params.vid_mode.clone(),
+  );
 
   let fsgame_path = Path::new(&config_guard.install_path).join("fsgame.ltx");
   let mut run_params = vec![
