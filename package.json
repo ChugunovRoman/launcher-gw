@@ -12,6 +12,7 @@
     "gen-icons": "tauri icon src-tauri/icons/icon.png",
     "tauri-build-windows": "tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc",
     "tauri-dev": "tauri dev",
+    "tauri-release": "tauri build",
     "tauri": "tauri"
   },
   "license": "MIT",

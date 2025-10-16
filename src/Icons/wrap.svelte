@@ -14,6 +14,6 @@
   }
 
   span:hover {
-    filter: drop-shadow(0 0 8px rgba(61, 93, 236, 0.993));
+    filter: drop-shadow(0 0 10px rgba(61, 93, 236, 0.993));
   }
 </style>

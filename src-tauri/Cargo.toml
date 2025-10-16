@@ -18,11 +18,17 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+chrono = { version = "0.4", features = ["clock"] }
+log = { version = "0.4.20", features = ["std"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-sys = { git = "https://github.com/JonasKruckenberg/tauri-sys", branch = "v2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }
+sysinfo = "0.37.2"
+uuid = { version = "1.8", features = ["v4"] }
+winit = "0.29"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { saveWindowState, StateFlags } from '@tauri-apps/plugin-window-state';
+  import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
 
   import { X, Minus, Minimize2, Maximize2, Settings } from "lucide-svelte";
 
@@ -16,8 +16,8 @@
     isMaximized = await window.isMaximized();
   };
 
-  window.onMoved(windowMoveHandler); 
-  window.onResized(windowMoveHandler); 
+  window.onMoved(windowMoveHandler);
+  window.onResized(windowMoveHandler);
 
   const closeWindowHandler = async () => {
     await invoke("app_exit");
@@ -34,12 +34,12 @@
 
   onMount(async () => {
     version = await getVersion();
-    console.log('version: ', version);
+    console.log("version: ", version);
   });
 </script>
 
-<header data-tauri-drag-region role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
-  <h5 class="titile" data-tauri-drag-region>Global War Launcher {version}</h5>
+<header role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
+  <h5 class="titile">Global War Launcher {version}</h5>
 
   <!-- <div class="btn"><Settings onclick={openSettingsHandler} size={16} /></div> -->
   <div class="btn">
@@ -58,10 +58,8 @@
     display: grid;
     grid-template-columns: 1fr 48px 48px 48px;
     align-items: center;
-    background-color: rgba(0, 0, 0, 0.0);
+    background-color: rgba(0, 0, 0, 0);
     width: 100vw;
-
-    -webkit-app-region: drag;
   }
   h5 {
     -webkit-app-region: drag;

@@ -8,7 +8,7 @@
 
 <Wrap onclick={onclick} size={size}>
   <svg width={size} height={size} viewBox="0 -3 20 20" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-    <title>youtube</title>
+    <title>Youtube</title>
     <g id="Page-1" stroke="none" stroke-width="1" fill={color} fill-rule="evenodd">
       <g id="Dribbble-Light-Preview" transform="translate(-300.000000, -7442.000000)" fill={color}>
         <g id="icons" transform="translate(56.000000, 160.000000)">

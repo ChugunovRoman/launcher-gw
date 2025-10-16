@@ -1,3 +1,6 @@
-pub mod register_window_handlers;
+pub mod register;
 
-pub use register_window_handlers::register_window_handlers;
+pub mod configs;
+pub mod logger;
+pub mod process;
+pub mod window;

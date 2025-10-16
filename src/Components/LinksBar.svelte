@@ -19,7 +19,6 @@
     display: grid;
     grid-template-rows: 80px 80px 80px 80px 80px 80px 1fr;
     align-items: center;
-    background-color: rgba(0, 0, 0, 0.0);
     justify-items: anchor-center;
   }
 </style>

@@ -3,17 +3,20 @@
   import Header from "./Components/Header.svelte";
   import MenuBar from "./Components/MenuBar.svelte";
   import LinksBar from "./Components/LinksBar.svelte";
+  import LaunchBtn from "./Components/LaunchBtn.svelte";
 </script>
 
 <main class="container">
   <!-- svelte-ignore element_invalid_self_closing_tag -->
-  <div class="bgimg" data-tauri-drag-region />
+  <div class="bgimg" />
   <Header />
   <div class="appbody">
     <div class="menubar">
       <MenuBar />
     </div>
-    <div class="main"></div>
+    <div class="main" data-tauri-drag-region>
+      <LaunchBtn />
+    </div>
     <div class="bar">
       <LinksBar />
     </div>
@@ -68,13 +71,17 @@
     background-position: center center;
     background-size: cover;
     z-index: -1;
-
-    -webkit-app-region: drag;
   }
 
   .appbody {
     display: grid;
     grid-template-columns: 80px 1fr 80px;
+  }
+  .main {
+    -webkit-app-region: drag;
+  }
+  .bar {
+    background-color: rgba(0, 0, 0, 0.5);
   }
 
   @media (max-width: 1920px) and (max-height: 1080px) {
