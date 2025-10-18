@@ -16,7 +16,9 @@ use tauri::{Builder, Manager, Wry};
 use crate::logger::TauriLogger;
 
 fn create_tauri_app() -> Builder<Wry> {
-  let mut app = tauri::Builder::default().plugin(tauri_plugin_window_state::Builder::new().build());
+  let mut app = tauri::Builder::default()
+    .plugin(tauri_plugin_clipboard_manager::init())
+    .plugin(tauri_plugin_window_state::Builder::new().build());
 
   app = handlers::register::register_handlers(app);
 

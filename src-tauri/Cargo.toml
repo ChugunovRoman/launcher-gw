@@ -29,6 +29,7 @@ tokio = { version = "1", features = ["sync"] }
 sysinfo = "0.37.2"
 uuid = { version = "1.8", features = ["v4"] }
 winit = "0.29"
+tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"
