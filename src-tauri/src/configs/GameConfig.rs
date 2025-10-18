@@ -68,7 +68,6 @@ impl GameConfig {
   // Установить или обновить значение
   pub fn set(&mut self, key: String, value: String) {
     self.data.insert(key, value);
-    self.save();
   }
 
   // Удалить ключ

@@ -42,15 +42,15 @@
   <h5 class="titile">Global War Launcher {version}</h5>
 
   <!-- <div class="btn"><Settings onclick={openSettingsHandler} size={16} /></div> -->
-  <div class="btn">
+  <div role="button" onclick={toggleMaximizeHandler} class="btn">
     {#if isMaximized}
-      <Minimize2 onclick={toggleMaximizeHandler} size={16} />
+      <Minimize2 size={16} />
     {:else}
-      <Maximize2 onclick={toggleMaximizeHandler} size={16} />
+      <Maximize2 size={16} />
     {/if}
   </div>
-  <div class="btn"><Minus onclick={minimizeWindowHandler} size={16} /></div>
-  <div class="btn close"><X onclick={closeWindowHandler} size={16} /></div>
+  <div role="button" onclick={minimizeWindowHandler} class="btn"><Minus size={16} /></div>
+  <div role="button" onclick={closeWindowHandler} class="btn close"><X size={16} /></div>
 </header>
 
 <style>

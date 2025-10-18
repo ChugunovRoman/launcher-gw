@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use crate::configs::AppConfig::AppConfig;
-use crate::configs::{TmpLtx, UserLtx};
+use crate::configs::GameConfig::GameConfig;
+use crate::configs::{RunParams, TmpLtx, UserLtx};
+use crate::utils::split_args::split_args;
 use tauri::Manager;
 
 #[tauri::command]
@@ -38,17 +40,10 @@ pub fn run_game(
   log::info!("run_game bin_path: {:?}", &bin_path);
 
   let mut user_config = user_ltx.lock().map_err(|_| "Failed to lock user config")?;
-  user_config.0.load().ok();
-  user_config.0.set(
-    "vid_mode".to_string(),
-    config_guard.run_params.vid_mode.clone(),
-  );
+  update_ltx_config(&mut user_config.0, &config_guard.run_params);
+
   let mut tmp_config = tmp_ltx.lock().map_err(|_| "Failed to lock tmp config")?;
-  tmp_config.0.load().ok();
-  tmp_config.0.set(
-    "vid_mode".to_string(),
-    config_guard.run_params.vid_mode.clone(),
-  );
+  update_ltx_config(&mut tmp_config.0, &config_guard.run_params);
 
   let fsgame_path = Path::new(&config_guard.install_path).join("fsgame.ltx");
   let mut run_params = vec![
@@ -59,7 +54,26 @@ pub fn run_game(
       .expect("Path to fsgame.ltx is not valid UTF-8"),
   ];
 
-  run_params.extend(config_guard.run_params.cmd_params.clone());
+  if config_guard.run_params.check_no_staging {
+    run_params.push("-no_staging".to_string());
+  }
+  if config_guard.run_params.check_spawner {
+    run_params.push("-dbg".to_string());
+  }
+  if config_guard.run_params.check_without_cache {
+    run_params.push("-noprefetch".to_string());
+  }
+  if config_guard.run_params.checks {
+    run_params.push("-checks".to_string());
+  }
+  if config_guard.run_params.ui_debug {
+    run_params.push("-uidbg".to_string());
+  }
+  if config_guard.run_params.debug_spawn {
+    run_params.push("-dbgsspwn".to_string());
+  }
+  let users_args = split_args(&config_guard.run_params.cmd_params);
+  run_params.extend(users_args);
 
   let child = Command::new(&bin_path)
     .args(run_params)
@@ -89,4 +103,32 @@ pub fn is_process_alive(pid: u32) -> bool {
     ProcessRefreshKind::nothing(),
   );
   system.processes().contains_key(&pid_sys)
+}
+
+fn update_ltx_config(ltx: &mut GameConfig, run_params: &RunParams) {
+  ltx.load().ok();
+
+  ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
+
+  ltx.set(
+    "keypress_on_start".to_string(),
+    if run_params.check_wait_press_any_key {
+      "1"
+    } else {
+      "0"
+    }
+    .to_string(),
+  );
+
+  ltx.set(
+    "rs_v_sync".to_string(),
+    if run_params.check_vsync { "1" } else { "0" }.to_string(),
+  );
+
+  ltx.set(
+    "rs_fullscreen".to_string(),
+    if run_params.windowed_mode { "0" } else { "1" }.to_string(),
+  );
+
+  ltx.save().ok();
 }

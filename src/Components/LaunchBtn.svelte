@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
 
-  let pid = $state(null);
+  let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
   let interval: number | undefined = undefined;
 
@@ -9,7 +9,7 @@
     if (pid) return;
 
     try {
-      pid = await invoke("run_game");
+      pid = await invoke<number>("run_game");
       await checkProcess();
       interval = setInterval(checkProcess, 1000);
     } catch (err) {
@@ -20,7 +20,7 @@
   const checkProcess = async () => {
     if (!pid) return;
 
-    isProcessAlive = await invoke("is_process_alive", { pid });
+    isProcessAlive = await invoke<boolean>("is_process_alive", { pid });
 
     if (interval && !isProcessAlive) {
       clearInterval(interval);
@@ -31,9 +31,9 @@
 
 <span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={isProcessAlive} onclick={launchApp}>
   {#if !isProcessAlive}
-    Start Game
+    Запустить
   {:else}
-    In the Game...
+    В игре...
   {/if}
 </span>
 
@@ -45,6 +45,7 @@
     padding: 10px 40px;
     background-color: rgba(61, 93, 236, 0.8);
     transition: background-color 0.15s ease;
+    border-radius: 3px;
   }
   .launchbtn:hover {
     background-color: rgba(61, 93, 236, 1);

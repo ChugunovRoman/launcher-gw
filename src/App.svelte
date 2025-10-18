@@ -1,9 +1,68 @@
 <script lang="ts">
   import "normalize.css";
+  import { fly } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
+
   import Header from "./Components/Header.svelte";
   import MenuBar from "./Components/MenuBar.svelte";
   import LinksBar from "./Components/LinksBar.svelte";
-  import LaunchBtn from "./Components/LaunchBtn.svelte";
+
+  import MainView from "./Views/Main.svelte";
+  import SettingsView from "./Views/Settings.svelte";
+  import RunParamsView from "./Views/RunParams.svelte";
+  import { onMount } from "svelte";
+
+  let flyOffset: number = 500;
+  const VIEW_ORDER: string[] = ["home", "runParams", "settings"];
+  let currentView = "home";
+  let previousView: string | null = null;
+
+  // Маппинг view -> компонент
+  const views: Record<string, any> = {
+    home: MainView,
+    runParams: RunParamsView,
+    settings: SettingsView,
+  };
+
+  // Обработчик выбора view
+  function handleSelect(view: string) {
+    if (view !== currentView) {
+      previousView = currentView;
+      currentView = view;
+    }
+  }
+  function getDirection(): "forward" | "backward" {
+    if (!previousView) return "forward";
+
+    const currentIndex = VIEW_ORDER.indexOf(currentView);
+    const prevIndex = VIEW_ORDER.indexOf(previousView);
+
+    if (currentIndex > prevIndex) return "forward"; // вперёд → снизу
+    if (currentIndex < prevIndex) return "backward"; // назад → сверху
+    return "forward";
+  }
+  function getFlyParams() {
+    const dir = getDirection();
+    return {
+      duration: 500,
+      easing: quintOut,
+      y: dir === "forward" ? flyOffset : -flyOffset,
+      opacity: 0.8,
+    };
+  }
+
+  onMount(() => {
+    flyOffset = Math.round(window.innerHeight);
+
+    const handleResize = () => {
+      flyOffset = Math.round(window.innerHeight);
+    };
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  });
 </script>
 
 <main class="container">
@@ -12,10 +71,14 @@
   <Header />
   <div class="appbody">
     <div class="menubar">
-      <MenuBar />
+      <MenuBar onSelect={handleSelect} />
     </div>
     <div class="main" data-tauri-drag-region>
-      <LaunchBtn />
+      {#each [currentView] as view (view)}
+        <div in:fly={getFlyParams()} style="width: 100%; height: 100%;">
+          <svelte:component this={views[view]} />
+        </div>
+      {/each}
     </div>
     <div class="bar">
       <LinksBar />
@@ -79,6 +142,9 @@
   }
   .main {
     -webkit-app-region: drag;
+    position: relative;
+    height: 100%;
+    overflow: hidden;
   }
   .bar {
     background-color: rgba(0, 0, 0, 0.5);
