@@ -1,11 +1,22 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [
+    svelte(),
+    viteStaticCopy({
+      targets: [
+        {
+          src: 'static/bg.jpg',
+          dest: '../build/static',
+        },
+      ],
+    }),
+  ],
 
   root: 'src',
   clearScreen: false,
@@ -27,7 +38,7 @@ export default defineConfig({
       }
       : undefined,
     watch: {
-      ignored: ['**/src-tauri/**'],
+      ignored: ['**/src-tauri/**', '../build'],
     },
   },
 });
