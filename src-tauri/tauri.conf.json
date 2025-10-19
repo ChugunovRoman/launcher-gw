@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "stalker",
+  "productName": "Global War Launcher",
   "version": "0.1.0",
   "identifier": "com.ruut.stalker",
   "build": {
@@ -58,6 +58,11 @@
     }
   },
   "bundle": {
+    "publisher": "Global War Developers",
+    "shortDescription": "Global War Launcher",
+    "copyright": "Copyright (C) 2025 Global War Developers, GSC Game World",
+    "category": "Game",
+    "homepage": "https://vk.com/wargreat",
     "active": false,
     "targets": [],
     "icon": [

@@ -4,8 +4,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
-use tauri::path::BaseDirectory;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum LogLevel {
@@ -53,22 +51,17 @@ pub struct Logger {
 }
 
 impl Logger {
-  pub fn new(
-    app_handle: &tauri::AppHandle,
-    app_name: &str,
-    min_level: LogLevel,
-  ) -> Result<Self, Box<dyn std::error::Error>> {
-    let docs_dir = app_handle
-      .path()
-      .resolve("", BaseDirectory::Document)
-      .map_err(|e| format!("Failed to resolve Documents dir: {}", e))?;
+  pub fn new(min_level: LogLevel) -> Result<Self, Box<dyn std::error::Error>> {
+    let log_dir = std::env::current_dir()
+      .unwrap_or_else(|_| PathBuf::from("."))
+      .join("appdata")
+      .join("logs");
 
-    let log_dir = docs_dir.join(app_name);
     std::fs::create_dir_all(&log_dir)?;
 
-    let log_file_path = log_dir.join("app.log");
+    let log_file_path = log_dir.join("launcher.log");
 
-    std::fs::remove_file(&log_file_path)?;
+    std::fs::remove_file(&log_file_path).unwrap_or_else(|_| println!("Cannot remove log file"));
 
     // Убедимся, что файл существует
     std::fs::OpenOptions::new()

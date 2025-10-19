@@ -31,7 +31,7 @@
   async function handleSave() {
     const runParams: RunParams = {
       cmd_params: launchArgs,
-      check_spawner: debugSpawn,
+      check_spawner: useSpawner,
       check_wait_press_any_key: waitForKeypress,
       check_without_cache: noPrefetch,
       check_vsync: vsyncEnabled,
@@ -55,7 +55,7 @@
     resolutions = config.vid_modes;
     latestResolutions = config.vid_mode_latest;
     launchArgs = config.run_params.cmd_params;
-    debugSpawn = config.run_params.check_spawner;
+    useSpawner = config.run_params.check_spawner;
     waitForKeypress = config.run_params.check_wait_press_any_key;
     noPrefetch = config.run_params.check_without_cache;
     vsyncEnabled = config.run_params.check_vsync;

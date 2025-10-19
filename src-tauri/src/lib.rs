@@ -27,22 +27,17 @@ fn create_tauri_app() -> Builder<Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  // Создаём логгер ДО всего остального
-  // let temp_app = tauri::Builder::default()
-  //   .build(tauri::generate_context!())
-  //   .unwrap();
-  // let app_name = temp_app.config().identifier.clone();
-  // let logger = Logger::new(temp_app.handle(), &app_name, logger::LogLevel::Debug).unwrap();
-  // let logger_arc = Arc::new(Mutex::new(logger));
+  let logger = Logger::new(logger::LogLevel::Debug).unwrap();
+  let logger_arc = Arc::new(Mutex::new(logger));
 
-  // // Устанавливаем глобальный panic hook
-  // setup::setup_panic_logger(logger_arc.clone());
+  // Устанавливаем глобальный panic hook
+  setup::setup_panic_logger(logger_arc.clone());
 
-  // let boxed = Box::new(TauriLogger {
-  //   inner: logger_arc.clone(),
-  // });
-  // log::set_boxed_logger(boxed).unwrap();
-  // log::set_max_level(log::LevelFilter::Trace);
+  let boxed = Box::new(TauriLogger {
+    inner: logger_arc.clone(),
+  });
+  log::set_boxed_logger(boxed).unwrap();
+  log::set_max_level(log::LevelFilter::Trace);
 
   create_tauri_app()
     .setup(|app| {

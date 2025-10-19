@@ -29,7 +29,6 @@ build-linux:
     - npm run gen-icons
     - source "$CARGO_HOME/env"
     - npm run tauri build
-    - cp src-tauri/target/release/gw_launcher ./Stalker-GW
   artifacts:
     name: Stalker-GW
     paths:
@@ -53,7 +52,6 @@ build-windows:
   script:
     - npm run gen-icons
     - npm run tauri-build-windows
-    - cp src-tauri/target/x86_64-pc-windows-msvc/release/gw_launcher.exe Stalker-GW.exe
   artifacts:
     name: Stalker-GW
     paths:

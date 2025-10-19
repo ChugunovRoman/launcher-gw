@@ -75,6 +75,12 @@ pub fn run_game(
   let users_args = split_args(&config_guard.run_params.cmd_params);
   run_params.extend(users_args);
 
+  log::info!(
+    "Start game bin_path: {:?} with params: {:?}",
+    &bin_path,
+    run_params
+  );
+
   let child = Command::new(&bin_path)
     .args(run_params)
     .stdin(Stdio::null())
