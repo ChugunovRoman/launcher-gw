@@ -5,14 +5,9 @@ mod logger;
 mod setup;
 mod utils;
 
-use configs::AppConfig::AppConfig;
-use configs::GameConfig::{GameConfig, TmpLtx, UserLtx};
 use logger::Logger;
-use std::{
-  path::Path,
-  sync::{Arc, Mutex},
-};
-use tauri::{Builder, Manager, Wry};
+use std::sync::{Arc, Mutex};
+use tauri::{Builder, Wry};
 
 use crate::logger::TauriLogger;
 

@@ -5,7 +5,7 @@ use std::{
 };
 
 use tauri::App;
-use tauri::{Manager, WebviewWindow};
+use tauri::Manager;
 
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig, TmpLtx, UserLtx},
@@ -48,6 +48,8 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   let user_ltx_config = UserLtx(GameConfig::new(&user_ltx));
   let tmp_ltx_config = TmpLtx(GameConfig::new(&tmp_ltx));
+
+  log::info!("BUBA is: {}", std::env!("BUBA"));
 
   let gl = gitlab::Gitlab::Gitlab::new("https://gitlab.com/api/v4", std::env!("BUBA"))
     .map_err(|e| log::error!("Cannot init gitlab client, error: {}", e.to_string()))
