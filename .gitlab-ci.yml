@@ -35,6 +35,8 @@ build-linux:
       - Stalker-GW
     expire_in: 1 week
   when: manual
+  variables:
+    BUBA: $BUBA
   tags:
     - saas-linux-medium-amd64
 
@@ -58,5 +60,7 @@ build-windows:
       - Stalker-GW.exe
     expire_in: 1 week
   when: manual
+  variables:
+    BUBA: $BUBA
   tags:
     - saas-linux-medium-amd64

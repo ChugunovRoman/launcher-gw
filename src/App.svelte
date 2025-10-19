@@ -11,7 +11,9 @@
   import SettingsView from "./Views/Settings.svelte";
   import RunParamsView from "./Views/RunParams.svelte";
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
 
+  let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
   const VIEW_ORDER: string[] = ["home", "runParams", "settings"];
   let currentView = "home";
@@ -51,7 +53,19 @@
     };
   }
 
+  async function loadBackground() {
+    try {
+      const bytes = await invoke<number[]>("gl_get_bg");
+      const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
+      bgUrl = URL.createObjectURL(blob);
+    } catch (err) {
+      console.error("Failed to load background:", err);
+    }
+  }
+
   onMount(() => {
+    loadBackground();
+
     flyOffset = Math.round(window.innerHeight);
 
     const handleResize = () => {
@@ -67,7 +81,7 @@
 
 <main class="container">
   <!-- svelte-ignore element_invalid_self_closing_tag -->
-  <div class="bgimg" />
+  <div class="bgimg" style="background-image: url({bgUrl})" />
   <Header />
   <div class="appbody">
     <div class="menubar">
@@ -129,10 +143,10 @@
     left: 0px;
     width: 100vw;
     height: 100vh;
-    background-image: url("/static/bg.jpg");
     background-repeat: no-repeat;
     background-position: center center;
     background-size: cover;
+    transition: background-image 0.5s ease;
     z-index: -1;
   }
 
