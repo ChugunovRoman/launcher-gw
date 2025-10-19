@@ -2,6 +2,7 @@ stages:
   - build
 
 variables:
+  BUBA: "$BUBA"
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -36,8 +37,6 @@ build-linux:
       - Stalker-GW
     expire_in: 1 week
   when: manual
-  variables:
-    BUBA: $BUBA
   tags:
     - saas-linux-medium-amd64
 
@@ -62,7 +61,5 @@ build-windows:
       - Stalker-GW.exe
     expire_in: 1 week
   when: manual
-  variables:
-    BUBA: $BUBA
   tags:
     - saas-linux-medium-amd64
