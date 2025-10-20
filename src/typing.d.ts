@@ -20,6 +20,7 @@ declare interface RunParams {
   [index: string]: unknown;
 }
 declare interface AppConfig {
+  latest_pid: number;
   first_run: boolean;
   install_path: string;
   client_uuid: string;

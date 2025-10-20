@@ -1,13 +1,14 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
   let interval: number | undefined = undefined;
 
   const launchApp = async () => {
-    if (pid) return;
+    if (pid && pid > 0) return;
 
     try {
       pid = await invoke<number>("run_game");
@@ -28,6 +29,16 @@
       pid = null;
     }
   };
+
+  onMount(async () => {
+    const config = await invoke<AppConfig>("get_config");
+    pid = config.latest_pid;
+
+    if (pid < 0) return;
+
+    await checkProcess();
+    interval = setInterval(checkProcess, 1000);
+  });
 </script>
 
 <span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={isProcessAlive} onclick={launchApp}>

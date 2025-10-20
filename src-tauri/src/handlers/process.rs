@@ -31,7 +31,7 @@ pub fn run_game(
   let state = app
     .try_state::<Arc<Mutex<AppConfig>>>()
     .ok_or("Config not initialized")?;
-  let config_guard = state.lock().map_err(|_| "Poisoned mutex")?;
+  let mut config_guard = state.lock().map_err(|_| "Poisoned mutex")?;
 
   let bin_path = Path::new(&config_guard.install_path)
     .join("bin")
@@ -88,6 +88,9 @@ pub fn run_game(
     .stderr(Stdio::null())
     .spawn()
     .map_err(|e| e.to_string())?;
+
+  config_guard.latest_pid = i64::from(child.id().clone());
+  config_guard.save();
 
   Ok(child.id())
 }

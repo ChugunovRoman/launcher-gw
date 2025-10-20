@@ -4,7 +4,7 @@ use crate::utils::video::get_available_resolutions;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tauri::Manager;
 use tauri::path::BaseDirectory;
 use uuid::Uuid;
@@ -56,6 +56,8 @@ impl Default for RunParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
   #[serde(default)]
+  pub latest_pid: i64,
+  #[serde(default)]
   pub first_run: bool,
   #[serde(default)]
   pub install_path: String,
@@ -88,6 +90,7 @@ impl Default for AppConfig {
     run_params.vid_mode = max_mode.clone();
 
     Self {
+      latest_pid: -1,
       first_run: true,
       install_path,
       client_uuid: Uuid::new_v4().to_string(),
