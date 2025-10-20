@@ -47,11 +47,14 @@
     background-color: rgba(61, 93, 236, 0.8);
     transition: background-color 0.15s ease;
     border-radius: 3px;
+    -webkit-app-region: no-drag;
   }
   .launchbtn:hover {
+    cursor: pointer;
     background-color: rgba(61, 93, 236, 1);
   }
   .launchbtn_inactive {
+    cursor: default;
     background-color: rgba(0, 0, 0, 0.8);
   }
   .launchbtn_inactive:hover {

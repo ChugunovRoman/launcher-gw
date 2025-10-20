@@ -55,8 +55,8 @@
   });
 </script>
 
-<header role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
-  <h5 class="titile">Global War Launcher {version}</h5>
+<header>
+  <h5 class="titile" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>Global War Launcher {version}</h5>
 
   <div role="button" onclick={toggleLang} class="btn">
     <img class="langicon" src={langIconPath} alt={langs[currentLangIndex]} />
@@ -101,7 +101,6 @@
     justify-content: center;
     width: 32px;
     height: 32px;
-    cursor: pointer;
     border-radius: 4px;
     color: var(--text-color, white);
     transition:
@@ -113,6 +112,7 @@
 
   .btn:hover {
     color: rgba(197, 228, 254, 0.9);
+    cursor: pointer;
   }
   .close:hover {
     color: rgba(254, 197, 208, 0.9);
