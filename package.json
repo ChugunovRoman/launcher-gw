@@ -25,6 +25,7 @@
     "@tauri-apps/plugin-window-state": "^2.4.0",
     "lucide-svelte": "^0.545.0",
     "normalize.css": "^8.0.1",
+    "svelte-i18n": "^4.0.1",
     "svelte-preprocess": "^6.0.3",
     "tauri-plugin-window-state-api": "github:tauri-apps/tauri-plugin-window-state#v1"
   },

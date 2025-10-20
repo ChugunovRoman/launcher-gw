@@ -1,0 +1,45 @@
+{
+  "app": {
+    "menu": {
+      "main": "Main page",
+      "runparams": "The game run parameters",
+      "settings": "Launcher settings"
+    },
+    "launch": {
+      "start": "Start Game",
+      "inGame": "In the Game..."
+    },
+    "save": {
+      "1": "Save",
+      "2": "Saved"
+    },
+    "copy": {
+      "1": "Copy",
+      "2": "Copied"
+    },
+    "clear": "Clear",
+    "labels": {
+      "runparams": "Mod launch parameters",
+      "runparams_holder": "Please enter additional launch arguments...",
+      "settings": "Launcher settings"
+    },
+    "params": {
+      "screen": "Screen resolution:",
+      "vsync": "Vertical synchronization",
+      "windowed": "Windowed mode",
+      "presskey": "Waiting for a key press",
+      "nostaging": "Load textures directly into video memory (-no_staging)",
+      "noprefetch": "No caching (-noprefetch)",
+      "dbg": "Enable Spawner (-dbg)",
+      "uidbg": "Enable UI debugging features (-uidbg)",
+      "checks": "Enable checks at game start (-checks)",
+      "checksnote": "(increases loading time)",
+      "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)"
+    }
+  },
+  "social": {
+    "vk": "Vk",
+    "steam": "Steam",
+    "discord": "Discord"
+  }
+}

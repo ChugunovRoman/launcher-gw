@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -24,15 +25,15 @@
 </script>
 
 <div class="settings_view">
-  <h2>Настройки лаунчера</h2>
+  <h2>{$_("app.labels.settings")}</h2>
 
   <div class="input-row">
     <input type="text" readonly bind:value={uuid} placeholder="" class="uuid-input" />
     <button type="button" onclick={copyUuid} class="copy-btn" class:copy-btn__coping={coping} class:long_t={coping2}>
       {#if coping}
-        Скопировано
+        {$_("app.copy.2")}
       {:else}
-        Скопировать
+        {$_("app.copy.1")}
       {/if}
     </button>
   </div>

@@ -14,6 +14,10 @@ export default defineConfig({
           src: 'static/bg.jpg',
           dest: '../build/static',
         },
+        {
+          src: 'static/lang',
+          dest: '../build/static',
+        },
       ],
     }),
   ],

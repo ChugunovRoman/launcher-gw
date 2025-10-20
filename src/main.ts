@@ -1,8 +1,9 @@
 import App from './App.svelte';
 import { mount } from 'svelte';
+import { langInit } from "./langInit";
 
-const app = mount(App, {
-  target: document.getElementById('app')!
+langInit().then(() => {
+  mount(App, {
+    target: document.getElementById('app')!
+  });
 });
-
-export default app;

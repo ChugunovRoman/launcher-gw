@@ -68,6 +68,8 @@ pub struct AppConfig {
   #[serde(default)]
   pub log_level: LogLevel,
   #[serde(default)]
+  pub lang: String,
+  #[serde(default)]
   pub run_params: RunParams,
 
   pub path: String,
@@ -92,6 +94,7 @@ impl Default for AppConfig {
       vid_modes: modes,
       vid_mode_latest: max_mode,
       log_level: LogLevel::Info,
+      lang: "ru".to_string(),
       run_params: run_params,
       path: "".to_string(),
     }

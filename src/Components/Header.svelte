@@ -4,11 +4,17 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
+  import { locale } from "svelte-i18n";
 
-  import { X, Minus, Minimize2, Maximize2, Settings } from "lucide-svelte";
+  import { X, Minus, Minimize2, Maximize2 } from "lucide-svelte";
+  import { Lang } from "../consts";
 
   let isMaximized = $state(false);
   let version = $state("0.1.0");
+
+  let langs = $state([Lang.Ru, Lang.En]);
+  let currentLangIndex = $state(0);
+  let langIconPath = $derived(`/static/lang/${langs[currentLangIndex]}.png`);
 
   const window = getCurrentWindow();
 
@@ -30,18 +36,32 @@
 
     await saveWindowState(StateFlags.ALL);
   };
-  const openSettingsHandler = () => console.log("Open settings");
+  const toggleLang = async () => {
+    currentLangIndex++;
+    if (currentLangIndex >= langs.length) currentLangIndex = 0;
+
+    const lang = langs[currentLangIndex];
+    $locale = lang;
+
+    await invoke<string>("set_lang", { lang });
+  };
 
   onMount(async () => {
     version = await getVersion();
+    const lang = await invoke<Lang>("get_lang");
+    currentLangIndex = langs.indexOf(lang);
     console.log("version: ", version);
+    console.log("lang: ", lang, currentLangIndex);
   });
 </script>
 
 <header role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
   <h5 class="titile">Global War Launcher {version}</h5>
 
-  <!-- <div class="btn"><Settings onclick={openSettingsHandler} size={16} /></div> -->
+  <div role="button" onclick={toggleLang} class="btn">
+    <img class="langicon" src={langIconPath} alt={langs[currentLangIndex]} />
+  </div>
+  <div></div>
   <div role="button" onclick={toggleMaximizeHandler} class="btn">
     {#if isMaximized}
       <Minimize2 size={16} />
@@ -56,7 +76,7 @@
 <style>
   header {
     display: grid;
-    grid-template-columns: 1fr 48px 48px 48px;
+    grid-template-columns: 1fr 48px 10px 48px 48px 48px;
     align-items: center;
     background-color: rgba(0, 0, 0, 0);
     width: 100vw;
@@ -70,6 +90,9 @@
     text-indent: 3%;
     padding: 0;
     margin: 4px 0;
+  }
+  .langicon {
+    width: 18px;
   }
 
   .btn {
@@ -85,6 +108,7 @@
       color 0.15s ease,
       background-color 0.15s ease;
     outline: none;
+    -webkit-app-region: no-drag;
   }
 
   .btn:hover {

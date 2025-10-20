@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
 
@@ -69,17 +70,16 @@
 </script>
 
 <div class="launch-params-view">
-  <h2>Параметры запуска мода</h2>
+  <h2>{$_("app.labels.runparams")}</h2>
   <!-- Поле для ключей запуска -->
   <div class="input-row">
-    <input type="text" bind:value={launchArgs} placeholder="Введите дополнительные аргументы запуска..." class="launch-args-input" />
-    <button type="button" onclick={clearLaunchArgs} class="clear-btn"> Очистить </button>
+    <input type="text" bind:value={launchArgs} placeholder={$_("app.labels.runparams_holder")} class="launch-args-input" />
+    <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.clear")} </button>
   </div>
 
-  <!-- Разрешение и VSync -->
   <div class="options-row">
     <label>
-      Разрешение экрана:
+      {$_("app.params.screen")}
       <select bind:value={selectedResolution}>
         {#each resolutions as res}
           <option value={res}>{res}</option>
@@ -89,7 +89,7 @@
 
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={vsyncEnabled} />
-      Вертикальная синхронизация
+      {$_("app.params.vsync")}
     </label>
   </div>
 
@@ -97,44 +97,44 @@
   <div class="flags-section">
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={windowedMode} />
-      Оконный режим
+      {$_("app.params.windowed")}
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={waitForKeypress} />
-      Ожидание нажатия клавиши
+      {$_("app.params.presskey")}
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={noStaging} />
-      Загружать текстуры напрямую в видеопамять (-no_staging)
+      {$_("app.params.nostaging")}
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={noPrefetch} />
-      Без кэширования (-noprefetch)
+      {$_("app.params.noprefetch")}
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={useSpawner} />
-      Спавнер (-dbg)
+      {$_("app.params.dbg")}
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={uiDebug} />
-      Вкл. функций отладки UI (-uidbg)
+      {$_("app.params.uidbg")}
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={checks} />
-      Вкл. проверки при старте игры (-checks) <span class="warntext">(увеличивает время загрузки)</span>
+      {$_("app.params.checks")} <span class="warntext">{$_("app.params.checksnote")}</span>
     </label>
     <label class="checkbox-label">
       <input type="checkbox" bind:checked={debugSpawn} />
-      Вкл. debug_start_spawn (-dbgsspwn)
+      {$_("app.params.dbgsspwn")}
     </label>
   </div>
 
   <!-- Кнопка сохранения -->
   <span role="button" tabindex="0" onclick={handleSave} class="save-btn" class:save-btn__saving={saving} class:long_t={saving2}>
     {#if saving}
-      Сохранено
+      {$_("app.save.2")}
     {:else}
-      Сохранить
+      {$_("app.save.1")}
     {/if}
   </span>
 </div>

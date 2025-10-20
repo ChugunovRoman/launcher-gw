@@ -31,3 +31,22 @@ pub fn update_run_params(app: tauri::AppHandle, runParams: RunParams) -> Result<
   config_guard.save();
   Ok(())
 }
+
+#[tauri::command]
+pub fn get_lang(app: tauri::AppHandle) -> Result<String, String> {
+  let state = app
+    .try_state::<Arc<Mutex<AppConfig>>>()
+    .ok_or("Config not initialized")?;
+  let config_guard = state.lock().map_err(|_| "Poisoned mutex")?;
+  Ok(config_guard.clone().lang)
+}
+#[tauri::command]
+pub fn set_lang(app: tauri::AppHandle, lang: String) -> Result<(), String> {
+  let state = app
+    .try_state::<Arc<Mutex<AppConfig>>>()
+    .ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().map_err(|_| "Poisoned mutex")?;
+  config_guard.lang = lang;
+  config_guard.save();
+  Ok(())
+}

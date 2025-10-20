@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
 
   let pid: number | null = $state(null);
@@ -31,9 +32,9 @@
 
 <span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={isProcessAlive} onclick={launchApp}>
   {#if !isProcessAlive}
-    Запустить
+    {$_("app.launch.start")}
   {:else}
-    В игре...
+    {$_("app.launch.inGame")}
   {/if}
 </span>
 

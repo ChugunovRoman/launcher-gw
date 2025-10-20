@@ -15,6 +15,8 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::get_config,
     handlers::configs::save_config,
     handlers::configs::update_run_params,
+    handlers::configs::get_lang,
+    handlers::configs::set_lang,
     // gitlab
     handlers::gitlab::gl_get_bg,
     // logger
