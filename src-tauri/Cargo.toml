@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 chrono = { version = "0.4", features = ["clock"] }
 log = { version = "0.4.20", features = ["std"] }
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-sys = { git = "https://github.com/JonasKruckenberg/tauri-sys", branch = "v2" }
 serde = { version = "1", features = ["derive"] }
