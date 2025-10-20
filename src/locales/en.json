@@ -1,5 +1,10 @@
 {
   "app": {
+    "h": {
+      "connnecting": "(a connection to the server is being established...)",
+      "connnected": "(connection to the server established successfully)",
+      "connnect_error": "(Server connection error. Functionality is limited..)"
+    },
     "menu": {
       "main": "Main page",
       "runparams": "The game run parameters",

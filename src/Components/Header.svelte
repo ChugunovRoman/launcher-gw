@@ -4,6 +4,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { saveWindowState, StateFlags } from "@tauri-apps/plugin-window-state";
+  import { _ } from "svelte-i18n";
   import { locale } from "svelte-i18n";
 
   import { X, Minus, Minimize2, Maximize2 } from "lucide-svelte";
@@ -11,6 +12,8 @@
 
   let isMaximized = $state(false);
   let version = $state("0.1.0");
+  let connectStatus = $state("connnecting");
+  let fontColor = $state("rgba(243, 240, 63, 1)");
 
   let langs = $state([Lang.Ru, Lang.En]);
   let currentLangIndex = $state(0);
@@ -47,6 +50,16 @@
   };
 
   onMount(async () => {
+    invoke<number[]>("gl_get_bg")
+      .then(() => {
+        connectStatus = "connnected";
+        fontColor = "rgba(69, 240, 97, 1)";
+      })
+      .catch(() => {
+        connectStatus = "connnect_error";
+        fontColor = "rgba(254, 197, 208, 1)";
+      });
+
     version = await getVersion();
     const lang = await invoke<Lang>("get_lang");
     currentLangIndex = langs.indexOf(lang);
@@ -56,7 +69,9 @@
 </script>
 
 <header>
-  <h5 class="titile" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>Global War Launcher {version}</h5>
+  <h5 class="titile" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
+    Global War Launcher {version} <span style="color: {fontColor}; font-size: 0.7rem">{$_(`app.h.${connectStatus}`)}</span>
+  </h5>
 
   <div role="button" onclick={toggleLang} class="btn">
     <img class="langicon" src={langIconPath} alt={langs[currentLangIndex]} />
@@ -78,7 +93,7 @@
     display: grid;
     grid-template-columns: 1fr 48px 10px 48px 48px 48px;
     align-items: center;
-    background-color: rgba(0, 0, 0, 0);
+    background-color: rgba(51, 219, 79, 0);
     width: 100vw;
   }
   h5 {
