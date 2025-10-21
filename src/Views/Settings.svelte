@@ -31,9 +31,9 @@
     <input type="text" readonly bind:value={uuid} placeholder="" class="uuid-input" />
     <button type="button" onclick={copyUuid} class="copy-btn" class:copy-btn__coping={coping} class:long_t={coping2}>
       {#if coping}
-        {$_("app.copy.2")}
-      {:else}
         {$_("app.copy.1")}
+      {:else}
+        {$_("app.copy.2")}
       {/if}
     </button>
   </div>
