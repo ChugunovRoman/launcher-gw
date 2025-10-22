@@ -8,6 +8,8 @@ import Youtube from "./Youtube.svelte";
 import Home from "./Home.svelte";
 import Settings from "./Settings.svelte";
 import RunParams from "./RunParams.svelte";
+import Pack from "./Pack.svelte";
+import Unpack from "./Unpack.svelte";
 
 export {
   Discord,
@@ -20,4 +22,6 @@ export {
   Home,
   Settings,
   RunParams,
+  Pack,
+  Unpack,
 };

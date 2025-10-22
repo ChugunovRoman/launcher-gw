@@ -74,6 +74,15 @@ pub struct AppConfig {
   #[serde(default)]
   pub run_params: RunParams,
 
+  #[serde(default)]
+  pub pack_source_dir: String,
+  #[serde(default)]
+  pub pack_target_dir: String,
+  #[serde(default)]
+  pub unpack_source_dir: String,
+  #[serde(default)]
+  pub unpack_target_dir: String,
+
   pub path: String,
 }
 
@@ -100,6 +109,10 @@ impl Default for AppConfig {
       lang: "ru".to_string(),
       run_params: run_params,
       path: "".to_string(),
+      pack_source_dir: "".to_string(),
+      pack_target_dir: "".to_string(),
+      unpack_source_dir: "".to_string(),
+      unpack_target_dir: "".to_string(),
     }
   }
 }

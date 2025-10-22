@@ -1,0 +1,168 @@
+use crate::utils::{self, resources};
+use std::path::Path;
+use tauri::Emitter;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command as TokioCommand;
+
+#[tauri::command]
+pub async fn create_archive(
+  app_handle: tauri::AppHandle,
+  sourceDir: String,
+  archiveName: String,
+  excludePatterns: Vec<String>,
+) -> Result<String, String> {
+  let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
+
+  let archive_path = Path::new(&archiveName);
+  let parent_dir = archive_path
+    .parent()
+    .ok_or_else(|| "Invalid archive path: no parent directory".to_string())?
+    .to_string_lossy()
+    .into_owned();
+
+  log::info!("create_archive, clear dir: {:?}", &parent_dir);
+
+  utils::clear_dir::clear_dir(parent_dir).expect("Не удалось очистить папку");
+
+  log::info!("create_archive, sevenz: {:?}", &sevenz);
+
+  let mut args = vec![
+    "a".to_string(),
+    "-t7z".to_string(),
+    "-m0=lzma2".to_string(),
+    "-mx=9".to_string(),
+    "-mfb=64".to_string(),
+    "-md=1g".to_string(), // 1 ГБ словарь — для максимального сжатия
+    "-ms=on".to_string(), // solid archive
+    "-v50m".to_string(),  // тома по 50 МБ
+    "-bsp1".to_string(),  // вывод прогресса в stdout
+    "-bb3".to_string(),
+    archiveName,
+    sourceDir,
+  ];
+
+  // Добавляем исключения: -x!pattern
+  for pat in excludePatterns {
+    args.push(format!("-xr!{}", pat));
+  }
+
+  log::info!("create_archive, start");
+  log::info!("create_archive, command: {:?} {:?}", &sevenz, &args);
+
+  let mut child = TokioCommand::new(sevenz)
+    .args(args)
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .spawn()
+    .map_err(|e| e.to_string())?;
+
+  let stderr = child.stdout.take().unwrap();
+  let reader = BufReader::new(stderr);
+  let mut lines = reader.lines();
+
+  // Асинхронно читаем stderr
+  tokio::spawn(async move {
+    while let Ok(Some(line)) = lines.next_line().await {
+      log::info!("Print line: {}", &line);
+      if let Some(percent) = parse_progress(&line) {
+        let _ = app_handle.emit("pack_archive_progress", percent);
+      }
+    }
+  });
+
+  // Ждём завершения
+  let status = child.wait().await.map_err(|e| e.to_string())?;
+
+  if !status.success() {
+    return Err("7zz failed".to_string());
+  }
+
+  Ok("Archive created successfully".to_string())
+}
+
+#[tauri::command]
+pub async fn extract_archive(
+  app_handle: tauri::AppHandle,
+  archivePath: String, // путь к первому тому (например, "backup.7z" или "backup.7z.001")
+  outputDir: String,   // куда распаковывать
+) -> Result<String, String> {
+  let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
+
+  // Убедимся, что выходная директория существует
+  std::fs::create_dir_all(&outputDir)
+    .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+  log::info!("extract_archive, clear dir: {:?}", &outputDir);
+
+  utils::clear_dir::clear_dir(&outputDir).expect("Не удалось очистить папку");
+
+  // Проверим, что архив существует
+  if !Path::new(&archivePath).exists() {
+    return Err(format!("Archive not found: {}", archivePath));
+  }
+
+  let args = vec![
+    "x".to_string(), // извлечь с сохранением путей
+    archivePath,
+    format!("-o{}", outputDir), // обязательно без пробела после -o
+    "-y".to_string(),           // автоматически подтверждать перезапись
+    "-bsp1".to_string(),
+    "-bb3".to_string(),
+  ];
+
+  log::info!(
+    "extract_archive: running {:?} with args: {:?}",
+    sevenz,
+    args
+  );
+
+  let mut child = TokioCommand::new(sevenz)
+    .args(args)
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .spawn()
+    .map_err(|e| e.to_string())?;
+
+  let stderr = child.stdout.take().unwrap();
+  let reader = BufReader::new(stderr);
+  let mut lines = reader.lines();
+
+  // Асинхронно читаем stderr
+  tokio::spawn(async move {
+    while let Ok(Some(line)) = lines.next_line().await {
+      log::info!("Print line: {}", &line);
+      if let Some(percent) = parse_progress(&line) {
+        let _ = app_handle.emit("unpack_archive_progress", percent);
+      }
+    }
+  });
+
+  // Ждём завершения
+  let status = child.wait().await.map_err(|e| e.to_string())?;
+
+  if !status.success() {
+    return Err("7zz failed".to_string());
+  }
+
+  log::info!("extract_archive: completed successfully");
+  Ok("Archive extracted successfully".to_string())
+}
+
+fn parse_progress(line: &str) -> Option<u8> {
+  // Пропускаем начальные пробелы
+  let trimmed = line.trim_start();
+
+  // Находим позицию символа '%'
+  if let Some(percent_pos) = trimmed.find('%') {
+    // Берём подстроку до '%'
+    let percent_str = &trimmed[..percent_pos];
+
+    // Убеждаемся, что это только цифры (возможно, с пробелами до — но trim_start уже сделан)
+    if let Ok(pct) = percent_str.trim().parse::<u8>() {
+      if pct <= 100 {
+        return Some(pct);
+      }
+    }
+  }
+  None
+}

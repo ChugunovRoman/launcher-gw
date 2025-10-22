@@ -26,7 +26,33 @@
     "labels": {
       "runparams": "Mod launch parameters",
       "runparams_holder": "Please enter additional launch arguments...",
-      "settings": "Launcher settings"
+      "settings": "Launcher settings",
+      "pack": "Pack",
+      "unpack": "Unpack"
+    },
+    "unpack": {
+      "unpacking": "Unpack",
+      "start": "Unpack",
+      "source": {
+        "placeholder": "Path to the folder containing the archive",
+        "btn": "Choose"
+      },
+      "target": {
+        "placeholder": "Path to the folder where to unzip",
+        "btn": "Choose"
+      }
+    },
+    "pack": {
+      "packing": "Pack",
+      "start": "Pack",
+      "source": {
+        "placeholder": "Path to the game folder",
+        "btn": "Choose"
+      },
+      "target": {
+        "placeholder": "Path to the folder where the archive is saved",
+        "btn": "Choose"
+      }
     },
     "params": {
       "screen": "Screen resolution:",

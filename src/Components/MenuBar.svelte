@@ -1,9 +1,17 @@
 <script lang="ts">
-  import { Home, Settings, RunParams } from "../Icons";
+  import { invoke } from "@tauri-apps/api/core";
+  import { Home, Settings, RunParams, Pack, Unpack } from "../Icons";
+  import { onMount } from "svelte";
+  import type { Lang } from "../consts";
 
   export let onSelect: (view: string) => void;
 
   let activeItem = "home";
+  let allowPackMod = false;
+
+  onMount(async () => {
+    allowPackMod = await invoke<boolean>("allow_pack_mod");
+  });
 </script>
 
 <div class="menubar">
@@ -23,6 +31,27 @@
         activeItem = "runParams";
       }} />
   </div>
+  {#if allowPackMod}
+    <div class="baritem" class:active={activeItem === "pack"}>
+      <Pack
+        size={40}
+        onclick={() => {
+          onSelect("pack");
+          activeItem = "pack";
+        }} />
+    </div>
+    <div class="baritem" class:active={activeItem === "unpack"}>
+      <Unpack
+        size={40}
+        onclick={() => {
+          onSelect("unpack");
+          activeItem = "unpack";
+        }} />
+    </div>
+  {:else}
+    <div></div>
+    <div></div>
+  {/if}
   <div></div>
   <div class="baritem" class:active={activeItem === "settings"}>
     <Settings
@@ -39,7 +68,7 @@
   .menubar {
     margin-top: 20px;
     display: grid;
-    grid-template-rows: 80px 80px 1fr 80px 40px;
+    grid-template-rows: 80px 80px 80px 80px 1fr 80px 40px;
     align-items: center;
     background-color: rgba(0, 0, 0, 0);
     justify-items: anchor-center;

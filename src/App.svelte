@@ -9,13 +9,15 @@
 
   import MainView from "./Views/Main.svelte";
   import SettingsView from "./Views/Settings.svelte";
+  import PackView from "./Views/Pack.svelte";
+  import UnpackView from "./Views/Unpack.svelte";
   import RunParamsView from "./Views/RunParams.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
-  const VIEW_ORDER: string[] = ["home", "runParams", "settings"];
+  const VIEW_ORDER: string[] = ["home", "runParams", "pack", "unpack", "settings"];
   let currentView = "home";
   let previousView: string | null = null;
 
@@ -23,6 +25,8 @@
   const views: Record<string, any> = {
     home: MainView,
     runParams: RunParamsView,
+    pack: PackView,
+    unpack: UnpackView,
     settings: SettingsView,
   };
 

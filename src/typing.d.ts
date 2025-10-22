@@ -28,4 +28,8 @@ declare interface AppConfig {
   vid_mode_latest: string;
   log_level: LogLevel;
   run_params: RunParams;
+  pack_source_dir: string;
+  pack_target_dir: string;
+  unpack_source_dir: string;
+  unpack_target_dir: string;
 }

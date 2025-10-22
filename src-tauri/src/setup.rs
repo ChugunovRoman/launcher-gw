@@ -6,6 +6,7 @@ use std::{
 
 use tauri::App;
 use tauri::Manager;
+use tauri::async_runtime;
 
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig, TmpLtx, UserLtx},
@@ -49,18 +50,25 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let user_ltx_config = UserLtx(GameConfig::new(&user_ltx));
   let tmp_ltx_config = TmpLtx(GameConfig::new(&tmp_ltx));
 
-  log::info!("BUBA is: {}", std::env!("BUBA"));
-
   let gl = gitlab::Gitlab::Gitlab::new("https://gitlab.com/api/v4", std::env!("BUBA"))
     .map_err(|e| log::error!("Cannot init gitlab client, error: {}", e.to_string()))
     .unwrap();
   let gl_arc = Arc::new(Mutex::new(gl.clone()));
+
+  let uuid = &config.client_uuid;
+  let user_data = async_runtime::block_on(async { gl.get_user(uuid).await })
+    .map_err(|e| {
+      log::error!("Failed to fetch user  {}", e);
+      e
+    })
+    .unwrap();
 
   // Сохраняем в состоянии приложения
   app.manage(config_arc);
   // app.manage(logger_arc);
   app.manage(Arc::new(Mutex::new(user_ltx_config.clone())));
   app.manage(Arc::new(Mutex::new(tmp_ltx_config.clone())));
+  app.manage(Arc::new(Mutex::new(user_data.clone())));
   app.manage(gl_arc);
 
   Ok(())
