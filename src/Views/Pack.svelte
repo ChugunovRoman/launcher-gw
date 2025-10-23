@@ -1,17 +1,28 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
-  import type { Event } from "@tauri-apps/api/event";
   import { join } from "@tauri-apps/api/path";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
-  let finish = false;
+  import { progress, isInProcess, finish, completed } from "../store/pack";
+
   let packPath = "";
   let targetPath = "";
-  let isInProcess = false;
-  let progress = 0;
+
+  $: if ($completed) {
+    $completed = false;
+
+    const timeout1 = setTimeout(() => ($finish = true), 500);
+    const timeout2 = setTimeout(() => ($isInProcess = false), 1000);
+    const timeout3 = setTimeout(() => ($finish = false), 1500);
+
+    onDestroy(() => {
+      clearTimeout(timeout1);
+      clearTimeout(timeout2);
+      clearTimeout(timeout3);
+    });
+  }
 
   async function choosePath() {
     packPath = await selectFolder(packPath);
@@ -23,10 +34,11 @@
     console.log("startPack");
     console.log("startPack, packPath: ", packPath);
     console.log("startPack, targetPath: ", targetPath);
-    if (packPath === "" || targetPath === "" || isInProcess) return;
+    if (packPath === "" || targetPath === "" || $isInProcess) return;
 
-    progress = 0;
-    isInProcess = true;
+    $progress = 0;
+    $isInProcess = true;
+    $finish = false;
 
     await invoke<AppConfig>("set_pack_paths", { source: packPath, target: targetPath });
 
@@ -70,12 +82,9 @@
       ],
     });
 
-    progress = 100;
+    $progress = 100;
+    $completed = true;
     console.log("pack result: ", result);
-
-    setTimeout(() => (finish = true), 500);
-    setTimeout(() => (isInProcess = false), 1000);
-    setTimeout(() => (finish = false), 1500);
   }
 
   async function selectFolder(def: string) {
@@ -102,10 +111,6 @@
 
     packPath = config.pack_source_dir;
     targetPath = config.pack_target_dir;
-
-    listen("pack_archive_progress", (event: Event<number>) => {
-      progress = event.payload;
-    });
   });
 </script>
 
@@ -133,8 +138,8 @@
   </div>
 
   <div class="progress-container">
-    <div class="progress-bar" style="width: {Math.min(100, Math.max(0, progress))}%;"></div>
-    <span class="progress-text">{Math.round(progress)}%</span>
+    <div class="progress-bar" style="width: {Math.min(100, Math.max(0, $progress))}%;"></div>
+    <span class="progress-text">{Math.round($progress)}%</span>
   </div>
 
   <span
@@ -142,10 +147,10 @@
     tabindex="0"
     class="packbtn"
     onclick={startPack}
-    class:packbtn__coping={isInProcess}
-    class:packbtn__finish={finish}
-    class:long_t={finish}>
-    {#if isInProcess}
+    class:packbtn__coping={$isInProcess}
+    class:packbtn__finish={$finish}
+    class:long_t={$finish}>
+    {#if $isInProcess}
       {$_("app.pack.packing")}
       <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
         ><path
