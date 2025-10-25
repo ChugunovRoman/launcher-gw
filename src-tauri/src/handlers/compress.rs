@@ -1,5 +1,11 @@
+use crate::consts::MANIFEST_NAME;
+use crate::handlers::dto::ReleaseManifest;
+use crate::utils::parse_strings::*;
 use crate::utils::{self, resources};
+use futures_util::lock::Mutex;
+use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
@@ -8,21 +14,21 @@ use tokio::process::Command as TokioCommand;
 pub async fn create_archive(
   app_handle: tauri::AppHandle,
   sourceDir: String,
-  archiveName: String,
+  targetPath: String,
   excludePatterns: Vec<String>,
 ) -> Result<String, String> {
   let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
 
-  let archive_path = Path::new(&archiveName);
-  let parent_dir = archive_path
-    .parent()
-    .ok_or_else(|| "Invalid archive path: no parent directory".to_string())?
+  let archive_path = Path::new(&targetPath).join("main");
+  let manifest_path = Path::new(&targetPath)
+    .clone()
+    .join(MANIFEST_NAME)
     .to_string_lossy()
     .into_owned();
 
-  log::info!("create_archive, clear dir: {:?}", &parent_dir);
+  log::info!("create_archive, clear dir: {:?}", &targetPath);
 
-  utils::clear_dir::clear_dir(parent_dir).expect("Не удалось очистить папку");
+  utils::paths::clear_dir(targetPath).expect("Не удалось очистить папку");
 
   log::info!("create_archive, sevenz: {:?}", &sevenz);
 
@@ -37,7 +43,7 @@ pub async fn create_archive(
     "-v50m".to_string(),  // тома по 50 МБ
     "-bsp1".to_string(),  // вывод прогресса в stdout
     "-bb3".to_string(),
-    archiveName,
+    archive_path.to_string_lossy().into(),
     sourceDir,
   ];
 
@@ -49,7 +55,16 @@ pub async fn create_archive(
   log::info!("create_archive, start");
   log::info!("create_archive, command: {:?} {:?}", &sevenz, &args);
 
-  let mut child = TokioCommand::new(sevenz)
+  let mut command = TokioCommand::new(sevenz);
+
+  #[cfg(target_os = "windows")]
+  {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+  }
+
+  let mut child = command
     .args(args)
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
@@ -60,10 +75,26 @@ pub async fn create_archive(
   let reader = BufReader::new(stderr);
   let mut lines = reader.lines();
 
+  let manifest = Arc::new(Mutex::new(ReleaseManifest {
+    total_files_count: 0,
+    total_size: 0,
+    compressed_size: 0,
+  }));
+
   // Асинхронно читаем stderr
-  tokio::spawn(async move {
+  let manifest_clone = Arc::clone(&manifest);
+  let reader_handle = tokio::spawn(async move {
     while let Ok(Some(line)) = lines.next_line().await {
       log::info!("Print line: {}", &line);
+      if let Ok(data) = extract_total(&line) {
+        let mut m = manifest_clone.lock().await;
+        m.total_files_count = data.0.clone();
+        m.total_size = data.1.clone();
+      }
+      if let Ok(size) = extract_output(&line) {
+        let mut m = manifest_clone.lock().await;
+        m.compressed_size = size.clone();
+      }
       if let Some(percent) = parse_progress(&line) {
         let _ = app_handle.emit("pack_archive_progress", percent);
       }
@@ -72,6 +103,14 @@ pub async fn create_archive(
 
   // Ждём завершения
   let status = child.wait().await.map_err(|e| e.to_string())?;
+  let _ = reader_handle.await.map_err(|e| e.to_string())?;
+
+  let final_manifest = manifest.lock().await;
+  log::info!("Created manifest: {:?}", &*final_manifest);
+  log::info!("manifest path: {:?}", &manifest_path);
+
+  let json = serde_json::to_string_pretty(&*final_manifest).map_err(|e| e.to_string())?;
+  fs::write(&manifest_path, json).map_err(|e| e.to_string())?;
 
   if !status.success() {
     return Err("7zz failed".to_string());
@@ -94,7 +133,7 @@ pub async fn extract_archive(
 
   log::info!("extract_archive, clear dir: {:?}", &outputDir);
 
-  utils::clear_dir::clear_dir(&outputDir).expect("Не удалось очистить папку");
+  utils::paths::clear_dir(&outputDir).expect("Не удалось очистить папку");
 
   // Проверим, что архив существует
   if !Path::new(&archivePath).exists() {
@@ -116,7 +155,16 @@ pub async fn extract_archive(
     args
   );
 
-  let mut child = TokioCommand::new(sevenz)
+  let mut command = TokioCommand::new(sevenz);
+
+  #[cfg(target_os = "windows")]
+  {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+  }
+
+  let mut child = command
     .args(args)
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())

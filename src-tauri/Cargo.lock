@@ -6,8 +6,11 @@ version = 4
 name = "Stalker-GW"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
+ "futures-util",
  "log",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

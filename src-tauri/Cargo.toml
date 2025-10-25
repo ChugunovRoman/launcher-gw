@@ -26,14 +26,17 @@ tauri-sys = { git = "https://github.com/JonasKruckenberg/tauri-sys", branch = "v
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "process", "io-util", "rt"] }
+futures-util = "0.3"
 sysinfo = "0.37.2"
+anyhow = "1.0"
 uuid = { version = "1.8", features = ["v4"] }
 winit = "0.29"
 tauri-plugin-clipboard-manager = "2"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 urlencoding = "2.1"
 sha2 = "0.10"
 tauri-plugin-dialog = "2.4.0"
+regex = "1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

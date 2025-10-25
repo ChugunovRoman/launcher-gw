@@ -1,4 +1,4 @@
-use crate::gitlab::Gitlab::Gitlab;
+use crate::gitlab::{Gitlab::Gitlab, files::GitLabFiles};
 use std::sync::{Arc, Mutex};
 
 #[tauri::command]

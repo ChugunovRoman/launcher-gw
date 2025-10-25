@@ -44,7 +44,7 @@
 
     const result = await invoke<string>("create_archive", {
       sourceDir: await join(packPath, "*"),
-      archiveName: await join(targetPath, "game"),
+      targetPath: targetPath,
       excludePatterns: [
         "*.git",
         "*.gitlab-ci.yml",
@@ -108,6 +108,11 @@
 
   onMount(async () => {
     const config = await invoke<AppConfig>("get_config");
+    const versions = await invoke<Version[]>("get_available_versions");
+
+    console.log("versions: ", versions);
+
+    // await invoke<AppConfig>("start_download_version", { versionId: versions[2].id });
 
     packPath = config.pack_source_dir;
     targetPath = config.pack_target_dir;

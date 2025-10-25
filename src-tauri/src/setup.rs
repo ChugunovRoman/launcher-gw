@@ -10,7 +10,7 @@ use tauri::async_runtime;
 
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig, TmpLtx, UserLtx},
-  gitlab,
+  gitlab::{self, client::GitLabClient},
   logger::Logger,
 };
 
@@ -70,6 +70,9 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(Arc::new(Mutex::new(tmp_ltx_config.clone())));
   app.manage(Arc::new(Mutex::new(user_data.clone())));
   app.manage(gl_arc);
+
+  let versions_dir = Path::new(&working_dir).join("versions");
+  std::fs::create_dir_all(versions_dir);
 
   Ok(())
 }

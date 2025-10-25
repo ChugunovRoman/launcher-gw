@@ -21,6 +21,9 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_unpack_paths,
     // gitlab
     handlers::gitlab::gl_get_bg,
+    // releases
+    handlers::release::get_available_versions,
+    handlers::release::start_download_version,
     // compress
     handlers::compress::create_archive,
     handlers::compress::extract_archive,

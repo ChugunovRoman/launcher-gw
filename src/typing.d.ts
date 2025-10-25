@@ -5,6 +5,30 @@ declare enum LogLevel {
   Error = "error",
 }
 
+declare interface Dict<T> {
+  [ket: string]: T;
+}
+
+declare interface Version {
+  id: string;
+  name: string;
+  path: string;
+  installed_updates: string[];
+}
+declare interface VersionProgress {
+  id: string;
+  name: string;
+  path: string;
+  files: Dict<FileProgress>;
+  is_downloaded: boolean;
+  file_count: number;
+}
+declare interface FileProgress {
+  id: string;
+  name: string;
+  path: string;
+  is_downloaded: boolean;
+}
 declare interface RunParams {
   cmd_params: string;
   check_spawner: boolean;
@@ -32,4 +56,6 @@ declare interface AppConfig {
   pack_target_dir: string;
   unpack_source_dir: string;
   unpack_target_dir: string;
+  installed_versions: Dict<Version>;
+  progress: Dict<VersionProgress>;
 }

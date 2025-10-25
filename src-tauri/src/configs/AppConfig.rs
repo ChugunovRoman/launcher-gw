@@ -1,13 +1,56 @@
+use crate::handlers::dto::ReleaseManifest;
 use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, hash_map};
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 use tauri::path::BaseDirectory;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Version {
+  #[serde(default)]
+  pub id: u32,
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub path: String,
+  #[serde(default)]
+  pub installed_updates: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionProgress {
+  #[serde(default)]
+  pub id: u32,
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub path: String,
+  #[serde(default)]
+  pub files: HashMap<String, FileProgress>,
+  #[serde(default)]
+  pub is_downloaded: bool,
+  #[serde(default)]
+  pub file_count: u16,
+
+  pub manifest: Option<ReleaseManifest>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileProgress {
+  #[serde(default)]
+  pub id: String,
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub path: String,
+  #[serde(default)]
+  pub is_downloaded: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunParams {
@@ -75,6 +118,11 @@ pub struct AppConfig {
   pub run_params: RunParams,
 
   #[serde(default)]
+  pub installed_versions: HashMap<u32, Version>,
+  #[serde(default)]
+  pub progress: HashMap<u32, VersionProgress>,
+
+  #[serde(default)]
   pub pack_source_dir: String,
   #[serde(default)]
   pub pack_target_dir: String,
@@ -83,7 +131,10 @@ pub struct AppConfig {
   #[serde(default)]
   pub unpack_target_dir: String,
 
+  #[serde(skip)]
   pub path: String,
+  #[serde(skip)]
+  pub versions: Vec<Version>,
 }
 
 impl Default for AppConfig {
@@ -113,6 +164,9 @@ impl Default for AppConfig {
       pack_target_dir: "".to_string(),
       unpack_source_dir: "".to_string(),
       unpack_target_dir: "".to_string(),
+      installed_versions: HashMap::new(),
+      versions: vec![],
+      progress: HashMap::new(),
     }
   }
 }

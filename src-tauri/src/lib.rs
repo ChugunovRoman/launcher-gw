@@ -1,4 +1,5 @@
 mod configs;
+mod consts;
 mod gitlab;
 mod handlers;
 mod logger;
