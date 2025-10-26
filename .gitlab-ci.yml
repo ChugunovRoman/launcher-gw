@@ -2,7 +2,6 @@ stages:
   - build
 
 variables:
-  BUBA: "$BUBA"
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
