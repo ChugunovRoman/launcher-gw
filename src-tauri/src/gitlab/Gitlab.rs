@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, bail};
 use reqwest::{
   Client,
   header::{AUTHORIZATION, HeaderMap, HeaderValue},
@@ -15,14 +16,10 @@ pub struct Gitlab {
 }
 
 impl Gitlab {
-  pub fn new(h: &str, b: &str) -> Result<Self, Box<dyn std::error::Error>> {
+  pub fn new(h: &str) -> Result<Self> {
     log::info!("Satrt init Gitlab client");
-    let mut headers = HeaderMap::new();
-    let auth_value = HeaderValue::from_str(&format!("Bearer {}", b))
-      .or_else(|_| HeaderValue::from_str(&format!("PRIVATE-TOKEN {}", b)))?;
-    headers.insert(AUTHORIZATION, auth_value);
 
-    let client = Client::builder().default_headers(headers).build()?;
+    let client = Client::builder().build()?;
 
     Ok(Self {
       host: h.to_string(),
@@ -30,12 +27,19 @@ impl Gitlab {
     })
   }
 
+  pub fn set_token(&mut self, token: String) -> Result<()> {
+    let mut headers = HeaderMap::new();
+    let auth_value = HeaderValue::from_str(&format!("Bearer {}", token))
+      .or_else(|_| HeaderValue::from_str(&format!("PRIVATE-TOKEN {}", token)))?;
+    headers.insert(AUTHORIZATION, auth_value);
+
+    self.client = Client::builder().default_headers(headers).build()?;
+
+    Ok(())
+  }
+
   // not use for now
-  pub async fn create_user(
-    &self,
-    login: String,
-    psk: String,
-  ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+  pub async fn create_user(&self, login: String, psk: String) -> Result<Vec<u8>> {
     let data = format!(
       r#"{{"login":"{}","psk":"{}","flags":[]}}"#,
       &login,
@@ -58,7 +62,7 @@ impl Gitlab {
     } else {
       let status = resp.status();
       let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-      Err(format!("GitLab API error {}: {}", status, body).into())
+      bail!("GitLab API error {}: {}", status, body)
     }
   }
 

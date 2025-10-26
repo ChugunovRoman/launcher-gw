@@ -42,3 +42,38 @@ impl Default for UserData {
     }
   }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRepoBody {
+  pub name: String,
+  pub path: String,
+  pub visibility: String,
+  pub lfs_enabled: bool,
+  pub namespace_id: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRepoResponse {
+  pub id: u32,
+  pub name: String,
+  pub path: String,
+  pub visibility: String,
+  pub lfs_enabled: bool,
+  pub namespace_id: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreategGroupBody {
+  pub name: String,
+  pub path: String,
+  pub visibility: String,
+  pub lfs_enabled: bool,
+  pub parent_id: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreategGroupResponse {
+  pub id: u32,
+  pub name: String,
+  pub path: String,
+  pub lfs_enabled: bool,
+  pub parent_id: u32,
+}
