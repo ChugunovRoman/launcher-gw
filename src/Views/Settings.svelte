@@ -1,8 +1,8 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
-  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+  import { providersWasInited } from "../store/main";
 
   let coping = $state(false);
   let coping2 = $state(false);
@@ -17,10 +17,12 @@
     setTimeout(() => (coping2 = false), 1500);
   }
 
-  onMount(async () => {
-    const config = await invoke<AppConfig>("get_config");
-
-    uuid = config.client_uuid;
+  $effect(() => {
+    if ($providersWasInited) {
+      invoke<AppConfig>("get_config").then((config) => {
+        uuid = config.client_uuid;
+      });
+    }
   });
 </script>
 

@@ -19,9 +19,13 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_lang,
     handlers::configs::set_pack_paths,
     handlers::configs::set_unpack_paths,
-    // gitlab
-    handlers::gitlab::gl_get_bg,
-    handlers::gitlab::gl_set_token,
+    // user.ltx
+    handlers::user_ltx::userltx_set_path,
+    // service
+    handlers::service::ping_all_providers,
+    handlers::service::get_fastest_provider,
+    handlers::service::get_launcher_bg,
+    handlers::service::set_token_for_provider,
     // releases
     handlers::release::get_available_versions,
     handlers::release::start_download_version,

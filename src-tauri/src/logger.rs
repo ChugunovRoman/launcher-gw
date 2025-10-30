@@ -52,10 +52,7 @@ pub struct Logger {
 
 impl Logger {
   pub fn new(min_level: LogLevel) -> Result<Self, Box<dyn std::error::Error>> {
-    let log_dir = std::env::current_dir()
-      .unwrap_or_else(|_| PathBuf::from("."))
-      .join("appdata")
-      .join("logs");
+    let log_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     std::fs::create_dir_all(&log_dir)?;
 
@@ -64,16 +61,9 @@ impl Logger {
     std::fs::remove_file(&log_file_path).unwrap_or_else(|_| println!("Cannot remove log file"));
 
     // Убедимся, что файл существует
-    std::fs::OpenOptions::new()
-      .create(true)
-      .write(true)
-      .append(true)
-      .open(&log_file_path)?;
+    std::fs::OpenOptions::new().create(true).write(true).append(true).open(&log_file_path)?;
 
-    Ok(Logger {
-      log_file_path,
-      min_level,
-    })
+    Ok(Logger { log_file_path, min_level })
   }
 
   fn should_log(&self, level: &LogLevel) -> bool {

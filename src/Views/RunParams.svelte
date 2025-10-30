@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { providersWasInited } from "../store/main";
 
   let saving = $state(false);
   let saving2 = $state(false);
@@ -50,22 +50,24 @@
     setTimeout(() => (saving2 = false), 1500);
   }
 
-  onMount(async () => {
-    const config = await invoke<AppConfig>("get_config");
-
-    resolutions = config.vid_modes;
-    latestResolutions = config.vid_mode_latest;
-    launchArgs = config.run_params.cmd_params;
-    useSpawner = config.run_params.check_spawner;
-    waitForKeypress = config.run_params.check_wait_press_any_key;
-    noPrefetch = config.run_params.check_without_cache;
-    vsyncEnabled = config.run_params.check_vsync;
-    noStaging = config.run_params.check_no_staging;
-    windowedMode = config.run_params.windowed_mode;
-    uiDebug = config.run_params.ui_debug;
-    checks = config.run_params.checks;
-    debugSpawn = config.run_params.debug_spawn;
-    selectedResolution = config.run_params.vid_mode;
+  $effect(() => {
+    if ($providersWasInited) {
+      invoke<AppConfig>("get_config").then((config) => {
+        resolutions = config.vid_modes;
+        latestResolutions = config.vid_mode_latest;
+        launchArgs = config.run_params.cmd_params;
+        useSpawner = config.run_params.check_spawner;
+        waitForKeypress = config.run_params.check_wait_press_any_key;
+        noPrefetch = config.run_params.check_without_cache;
+        vsyncEnabled = config.run_params.check_vsync;
+        noStaging = config.run_params.check_no_staging;
+        windowedMode = config.run_params.windowed_mode;
+        uiDebug = config.run_params.ui_debug;
+        checks = config.run_params.checks;
+        debugSpawn = config.run_params.debug_spawn;
+        selectedResolution = config.run_params.vid_mode;
+      });
+    }
   });
 </script>
 

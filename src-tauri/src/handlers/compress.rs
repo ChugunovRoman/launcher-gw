@@ -2,13 +2,13 @@ use crate::consts::MANIFEST_NAME;
 use crate::handlers::dto::ReleaseManifest;
 use crate::utils::parse_strings::*;
 use crate::utils::{self, resources};
-use futures_util::lock::Mutex;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
+use tokio::sync::Mutex;
 
 #[tauri::command]
 pub async fn create_archive(
@@ -20,11 +20,7 @@ pub async fn create_archive(
   let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
 
   let archive_path = Path::new(&targetPath).join("main");
-  let manifest_path = Path::new(&targetPath)
-    .clone()
-    .join(MANIFEST_NAME)
-    .to_string_lossy()
-    .into_owned();
+  let manifest_path = Path::new(&targetPath).clone().join(MANIFEST_NAME).to_string_lossy().into_owned();
 
   log::info!("create_archive, clear dir: {:?}", &targetPath);
 
@@ -128,8 +124,7 @@ pub async fn extract_archive(
   let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
 
   // Убедимся, что выходная директория существует
-  std::fs::create_dir_all(&outputDir)
-    .map_err(|e| format!("Failed to create output directory: {}", e))?;
+  std::fs::create_dir_all(&outputDir).map_err(|e| format!("Failed to create output directory: {}", e))?;
 
   log::info!("extract_archive, clear dir: {:?}", &outputDir);
 
@@ -149,11 +144,7 @@ pub async fn extract_archive(
     "-bb3".to_string(),
   ];
 
-  log::info!(
-    "extract_archive: running {:?} with args: {:?}",
-    sevenz,
-    args
-  );
+  log::info!("extract_archive: running {:?} with args: {:?}", sevenz, args);
 
   let mut command = TokioCommand::new(sevenz);
 

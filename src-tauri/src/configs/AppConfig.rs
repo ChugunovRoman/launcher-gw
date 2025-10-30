@@ -2,9 +2,10 @@ use crate::handlers::dto::ReleaseManifest;
 use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
 
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, hash_map};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -40,6 +41,7 @@ pub struct VersionProgress {
 
   pub manifest: Option<ReleaseManifest>,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileProgress {
   #[serde(default)]
@@ -140,13 +142,10 @@ pub struct AppConfig {
 impl Default for AppConfig {
   fn default() -> Self {
     let install_path = Self::get_path();
-    let modes = get_available_resolutions()
-      .ok()
-      .unwrap_or_else(|| vec!["800x600 (60Hz)".to_string()]);
-    let max_mode = modes[0].clone();
+    let modes = get_available_resolutions().unwrap_or_else(|_| vec!["800x600 (60Hz)".to_string()]);
+    let max_mode = modes.first().cloned().unwrap_or_else(|| "800x600 (60Hz)".to_string());
 
     let mut run_params = RunParams::default();
-
     run_params.vid_mode = max_mode.clone();
 
     Self {
@@ -158,7 +157,7 @@ impl Default for AppConfig {
       vid_mode_latest: max_mode,
       log_level: LogLevel::Info,
       lang: "ru".to_string(),
-      run_params: run_params,
+      run_params,
       path: "".to_string(),
       pack_source_dir: "".to_string(),
       pack_target_dir: "".to_string(),
@@ -173,150 +172,137 @@ impl Default for AppConfig {
 
 impl AppConfig {
   /// Загружает конфиг из файла. Если файла нет — создаёт новый с first_run = true.
-  pub fn load_or_create(app_handle: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
+  pub fn load_or_create(app_handle: &tauri::AppHandle) -> Result<Self> {
     let config_dir = app_handle
       .path()
       .resolve("config.json", BaseDirectory::AppConfig)
-      .map(|p| p.parent().unwrap().to_path_buf())?;
+      .context("Failed to resolve config directory")?
+      .parent()
+      .unwrap()
+      .to_path_buf();
 
-    fs::create_dir_all(&config_dir)?;
+    fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
     let config_path = config_dir.join("config.json");
     let path = config_path
-      .clone()
-      .into_os_string()
       .to_str()
-      .unwrap()
+      .ok_or_else(|| anyhow::anyhow!("Invalid UTF-8 in config path"))?
       .to_string();
 
-    let config = if config_path.exists() {
-      let content = fs::read_to_string(&config_path)?;
-      let mut json_value: Value = serde_json::from_str(&content)?;
-      let mut default = AppConfig::default();
-      let default_value: Value = serde_json::to_value(default.clone())?;
-
-      // Извлекаем мапы
-      let loaded_map = match &mut json_value {
-        Value::Object(m) => m,
-        _ => return Err("config.json root must be an object".into()),
-      };
-
-      let default_map = match &default_value {
-        Value::Object(m) => m,
-        _ => unreachable!(),
-      };
-
-      // Мержим все поля, кроме run_params
-      for (key, value) in default_map {
-        if key == "run_params" {
-          continue;
-        }
-        loaded_map
-          .entry(key.clone())
-          .or_insert_with(|| value.clone());
-      }
-
-      // Обработка run_params
-      if let Some(default_run_params) = default_map.get("run_params") {
-        let entry = loaded_map
-          .entry("run_params".to_string())
-          .or_insert_with(|| default_run_params.clone());
-
-        match entry {
-          Value::Object(loaded_rp) => {
-            if let Value::Object(default_rp) = default_run_params {
-              for (k, v) in default_rp {
-                loaded_rp.entry(k.clone()).or_insert_with(|| v.clone());
-              }
-            }
-          }
-          _ => {
-            // Заменяем повреждённый run_params на дефолтный
-            *entry = default_run_params.clone();
-          }
-        }
-      }
-
-      let mut config = match serde_json::from_value::<AppConfig>(json_value.clone()) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-          log::error!(
-            "⚠️ Failed to parse config.json (possibly outdated schema): {}",
-            e
-          );
-          log::error!("   Replacing with default config.");
-          // Возвращаем дефолтный конфиг и сохраняем его
-          let preserved_uuid = if let Value::Object(map) = &json_value {
-            match map.get("client_uuid") {
-              Some(Value::String(uuid_str)) => uuid_str.clone(),
-              _ => Uuid::new_v4().to_string(), // если нет или не строка — генерируем новый
-            }
-          } else {
-            Uuid::new_v4().to_string()
-          };
-
-          default.first_run = false;
-          default.client_uuid = preserved_uuid;
-          default.install_path = Self::get_path();
-          default.path = path.clone();
-          // Перезаписываем файл
-          default.save()?;
-          default
-        }
-      };
-
-      config.first_run = false;
-      config.install_path = Self::get_path();
-      config.path = path.clone();
-      config.save()?; // сохраняем обновлённый файл
-      config
-    } else {
+    if !config_path.exists() {
       let mut config = AppConfig::default();
       config.first_run = true;
       config.install_path = Self::get_path();
-      config.path = path.clone();
+      config.path = path;
       config.save()?;
-      config
+      return Ok(config);
+    }
+
+    let content = fs::read_to_string(&config_path).context("Failed to read config.json")?;
+    let mut json_value: Value = serde_json::from_str(&content).context("Failed to parse config.json as JSON")?;
+
+    let mut default = AppConfig::default();
+    let default_value: Value = serde_json::to_value(&default).context("Failed to serialize default config")?;
+
+    let loaded_map = match &mut json_value {
+      Value::Object(m) => m,
+      _ => bail!("config.json root must be a JSON object"),
     };
+
+    let default_map = match &default_value {
+      Value::Object(m) => m,
+      _ => unreachable!(),
+    };
+
+    // Merge all fields except run_params
+    for (key, value) in default_map {
+      if key == "run_params" {
+        continue;
+      }
+      loaded_map.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+
+    // Handle run_params merge
+    if let Some(default_run_params) = default_map.get("run_params") {
+      let entry = loaded_map.entry("run_params".to_string()).or_insert_with(|| default_run_params.clone());
+
+      match entry {
+        Value::Object(loaded_rp) => {
+          if let Value::Object(default_rp) = default_run_params {
+            for (k, v) in default_rp {
+              loaded_rp.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+          }
+        }
+        _ => {
+          *entry = default_run_params.clone();
+        }
+      }
+    }
+
+    let mut config = match serde_json::from_value::<AppConfig>(json_value.clone()) {
+      Ok(cfg) => cfg,
+      Err(e) => {
+        log::error!("⚠️ Failed to parse config.json (possibly outdated schema): {}", e);
+        log::error!("   Replacing with default config.");
+
+        let preserved_uuid = if let Value::Object(map) = &json_value {
+          match map.get("client_uuid") {
+            Some(Value::String(uuid_str)) => uuid_str.clone(),
+            _ => Uuid::new_v4().to_string(),
+          }
+        } else {
+          Uuid::new_v4().to_string()
+        };
+
+        default.first_run = false;
+        default.client_uuid = preserved_uuid;
+        default.install_path = Self::get_path();
+        default.path = path.clone();
+        default.save().context("Failed to save fallback config")?;
+        default
+      }
+    };
+
+    config.first_run = false;
+    config.install_path = Self::get_path();
+    config.path = path;
+    config.save().context("Failed to save merged config")?;
 
     Ok(config)
   }
 
   fn get_path() -> String {
     std::env::current_exe()
-      .map(|exe| {
-        exe
-          .parent()
-          .map(|p| p.to_path_buf())
-          .unwrap_or_else(|| PathBuf::from("."))
-      })
+      .map(|exe| exe.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")))
       .unwrap_or_else(|_| PathBuf::from("."))
       .to_string_lossy()
       .into_owned()
   }
 
   /// Перезагружает конфиг из файла (актуализирует текущую структуру)
-  pub fn reload(
-    &mut self,
-    app_handle: &tauri::AppHandle,
-  ) -> Result<(), Box<dyn std::error::Error>> {
+  pub fn reload(&mut self, app_handle: &tauri::AppHandle) -> Result<()> {
     let config_dir = app_handle
       .path()
       .resolve("config.json", BaseDirectory::AppConfig)
-      .map(|p| p.parent().unwrap().to_path_buf())?;
+      .context("Failed to resolve config path")?
+      .parent()
+      .unwrap()
+      .to_path_buf();
 
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
-      let content = fs::read_to_string(&config_path)?;
-      *self = serde_json::from_str(&content)?;
+      let content = fs::read_to_string(&config_path).context("Failed to read config.json during reload")?;
+      *self = serde_json::from_str(&content).context("Failed to parse config.json during reload")?;
     }
     Ok(())
   }
 
   /// Сохраняет текущее состояние конфига в файл
-  pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-    let json = serde_json::to_string_pretty(self)?;
-    fs::write(&self.path, json)?;
+  pub fn save(&self) -> Result<()> {
+    ensure!(!self.path.is_empty(), "Config path is not set");
+    let json = serde_json::to_string_pretty(self).context("Failed to serialize config to JSON")?;
+    fs::write(&self.path, json).context("Failed to write config file")?;
     Ok(())
   }
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { providersWasInited } from "../store/main";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
@@ -20,7 +20,7 @@
   };
 
   const checkProcess = async () => {
-    if (!pid) return;
+    if (!pid || pid === -1) return;
 
     isProcessAlive = await invoke<boolean>("is_process_alive", { pid });
 
@@ -30,14 +30,20 @@
     }
   };
 
-  onMount(async () => {
-    const config = await invoke<AppConfig>("get_config");
-    pid = config.latest_pid;
+  $effect(() => {
+    if ($providersWasInited) {
+      invoke<AppConfig>("get_config")
+        .then((config) => {
+          pid = config.latest_pid;
 
-    if (pid < 0) return;
+          if (pid < 0) return;
 
-    await checkProcess();
-    interval = setInterval(checkProcess, 1000);
+          return checkProcess();
+        })
+        .then(() => {
+          interval = setInterval(checkProcess, 1000);
+        });
+    }
   });
 </script>
 

@@ -3,26 +3,13 @@
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy } from "svelte";
 
   import { progress, isInProcess, finish, completed } from "../store/pack";
+  import { providersWasInited } from "../store/main";
 
-  let packPath = "";
-  let targetPath = "";
-
-  $: if ($completed) {
-    $completed = false;
-
-    const timeout1 = setTimeout(() => ($finish = true), 500);
-    const timeout2 = setTimeout(() => ($isInProcess = false), 1000);
-    const timeout3 = setTimeout(() => ($finish = false), 1500);
-
-    onDestroy(() => {
-      clearTimeout(timeout1);
-      clearTimeout(timeout2);
-      clearTimeout(timeout3);
-    });
-  }
+  let packPath = $state("");
+  let targetPath = $state("");
 
   async function choosePath() {
     packPath = await selectFolder(packPath);
@@ -106,16 +93,26 @@
     }
   }
 
-  onMount(async () => {
-    const config = await invoke<AppConfig>("get_config");
-    const versions = await invoke<Version[]>("get_available_versions");
+  $effect(() => {
+    if ($providersWasInited) {
+      invoke<AppConfig>("get_config").then((config) => {
+        packPath = config.pack_source_dir;
+        targetPath = config.pack_target_dir;
+      });
+    }
+    if ($completed) {
+      $completed = false;
 
-    console.log("versions: ", versions);
+      const timeout1 = setTimeout(() => ($finish = true), 500);
+      const timeout2 = setTimeout(() => ($isInProcess = false), 1000);
+      const timeout3 = setTimeout(() => ($finish = false), 1500);
 
-    // await invoke<AppConfig>("start_download_version", { versionId: versions[2].id });
-
-    packPath = config.pack_source_dir;
-    targetPath = config.pack_target_dir;
+      onDestroy(() => {
+        clearTimeout(timeout1);
+        clearTimeout(timeout2);
+        clearTimeout(timeout3);
+      });
+    }
   });
 </script>
 

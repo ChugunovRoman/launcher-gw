@@ -1,13 +1,15 @@
 import App from './App.svelte';
 import { mount } from 'svelte';
-import { langInit } from "./langInit";
+import { initLang } from "./langInit";
 import { initPackListener } from "./lib/pack";
+import { initMainListeners } from "./lib/main";
 import { initUnpackListener } from "./lib/unpack";
 
+initMainListeners();
 initPackListener();
 initUnpackListener();
 
-langInit().then(() => {
+initLang().then(() => {
   mount(App, {
     target: document.getElementById('app')!
   });

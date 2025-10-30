@@ -28,14 +28,10 @@ pub fn run_game(
   user_ltx: tauri::State<'_, Arc<Mutex<UserLtx>>>,
   tmp_ltx: tauri::State<'_, Arc<Mutex<TmpLtx>>>,
 ) -> Result<u32, String> {
-  let state = app
-    .try_state::<Arc<Mutex<AppConfig>>>()
-    .ok_or("Config not initialized")?;
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let mut config_guard = state.lock().map_err(|_| "Poisoned mutex")?;
 
-  let bin_path = Path::new(&config_guard.install_path)
-    .join("bin")
-    .join("xrEngine.exe");
+  let bin_path = Path::new(&config_guard.install_path).join("bin").join("xrEngine.exe");
 
   log::info!("run_game bin_path: {:?}", &bin_path);
 
@@ -48,10 +44,7 @@ pub fn run_game(
   let fsgame_path = Path::new(&config_guard.install_path).join("fsgame.ltx");
   let mut run_params = vec![
     String::from("-fsltx"),
-    fsgame_path
-      .into_os_string()
-      .into_string()
-      .expect("Path to fsgame.ltx is not valid UTF-8"),
+    fsgame_path.into_os_string().into_string().expect("Path to fsgame.ltx is not valid UTF-8"),
   ];
 
   if config_guard.run_params.check_no_staging {
@@ -75,11 +68,7 @@ pub fn run_game(
   let users_args = split_args(&config_guard.run_params.cmd_params);
   run_params.extend(users_args);
 
-  log::info!(
-    "Start game bin_path: {:?} with params: {:?}",
-    &bin_path,
-    run_params
-  );
+  log::info!("Start game bin_path: {:?} with params: {:?}", &bin_path, run_params);
 
   let child = Command::new(&bin_path)
     .args(run_params)
@@ -106,11 +95,7 @@ pub fn get_passed_args() -> Vec<String> {
 pub fn is_process_alive(pid: u32) -> bool {
   let mut system = System::new();
   let pid_sys = Pid::from(pid as usize);
-  system.refresh_processes_specifics(
-    ProcessesToUpdate::Some(&[pid_sys]),
-    true,
-    ProcessRefreshKind::nothing(),
-  );
+  system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid_sys]), true, ProcessRefreshKind::nothing());
   system.processes().contains_key(&pid_sys)
 }
 
@@ -121,23 +106,12 @@ fn update_ltx_config(ltx: &mut GameConfig, run_params: &RunParams) {
 
   ltx.set(
     "keypress_on_start".to_string(),
-    if run_params.check_wait_press_any_key {
-      "1"
-    } else {
-      "0"
-    }
-    .to_string(),
+    if run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
   );
 
-  ltx.set(
-    "rs_v_sync".to_string(),
-    if run_params.check_vsync { "1" } else { "0" }.to_string(),
-  );
+  ltx.set("rs_v_sync".to_string(), if run_params.check_vsync { "1" } else { "0" }.to_string());
 
-  ltx.set(
-    "rs_fullscreen".to_string(),
-    if run_params.windowed_mode { "0" } else { "1" }.to_string(),
-  );
+  ltx.set("rs_fullscreen".to_string(), if run_params.windowed_mode { "0" } else { "1" }.to_string());
 
   ltx.save().ok();
 }

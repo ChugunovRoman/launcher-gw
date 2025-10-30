@@ -1,16 +1,17 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { Home, Settings, RunParams, Pack, Unpack } from "../Icons";
-  import { onMount } from "svelte";
-  import type { Lang } from "../consts";
+  import { providersWasInited } from "../store/main";
 
-  export let onSelect: (view: string) => void;
+  const { onSelect } = $props<{ onSelect: (view: string) => void }>();
 
-  let activeItem = "home";
-  let allowPackMod = false;
+  let activeItem = $state("home");
+  let allowPackMod = $state(false);
 
-  onMount(async () => {
-    allowPackMod = await invoke<boolean>("allow_pack_mod");
+  $effect(() => {
+    if ($providersWasInited) {
+      invoke<boolean>("allow_pack_mod").then((value) => (allowPackMod = value));
+    }
   });
 </script>
 

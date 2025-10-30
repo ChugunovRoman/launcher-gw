@@ -1,8 +1,9 @@
 use crate::{
   configs::AppConfig::{AppConfig, FileProgress, Version, VersionProgress},
-  consts::MANIFEST_NAME,
-  gitlab::{Gitlab::Gitlab, files::GitLabFiles, models::TreeItem, release::GitLabRelease},
+  consts::{MANIFEST_NAME, VERSIONS_DIR},
   handlers::dto::DownloadProgress,
+  providers::dto::TreeItem,
+  service::{files::Servicefiles, get_release::ServiceRelease, main::Service},
 };
 use anyhow::{Context, Result as AnyhowResult}; // переименовываем, чтобы не конфликтовало
 use std::{
@@ -10,27 +11,15 @@ use std::{
   path::Path,
   sync::{Arc, Mutex},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 // Вспомогательная функция с anyhow
-async fn get_available_versions_inner(
-  gl: &Arc<Mutex<Gitlab>>,
-  app_config: &Arc<Mutex<AppConfig>>,
-) -> AnyhowResult<Vec<Version>> {
-  let client = gl
-    .lock()
-    .map_err(|_| anyhow::anyhow!("Lock failed"))?
-    .clone();
-
-  let releases = client
-    .get_releases()
-    .await
-    .context("Cannot get game releases")?;
+async fn get_available_versions_inner(app: &tauri::AppHandle, app_config: &Arc<Mutex<AppConfig>>) -> AnyhowResult<Vec<Version>> {
+  let service = app.state::<Service>();
+  let releases = service.get_releases().await.context("Cannot get game releases")?;
 
   {
-    let mut config_guard = app_config
-      .lock()
-      .map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
+    let mut config_guard = app_config.lock().map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
     config_guard.versions = releases.clone();
   }
 
@@ -38,30 +27,14 @@ async fn get_available_versions_inner(
 }
 
 #[tauri::command]
-pub async fn get_available_versions(
-  gl: tauri::State<'_, Arc<Mutex<Gitlab>>>,
-  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
-) -> Result<Vec<Version>, String> {
-  get_available_versions_inner(&gl, &app_config)
-    .await
-    .map_err(|e| e.to_string())
+pub async fn get_available_versions(app: tauri::AppHandle, app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
+  get_available_versions_inner(&app, &app_config).await.map_err(|e| e.to_string())
 }
 
-async fn start_download_versions_inner(
-  app_handle: tauri::AppHandle,
-  app_config: &Arc<Mutex<AppConfig>>,
-  gl: &Arc<Mutex<Gitlab>>,
-  version_id: u32,
-) -> AnyhowResult<()> {
-  let client = gl
-    .lock()
-    .map_err(|_| anyhow::anyhow!("Lock failed"))?
-    .clone();
+async fn start_download_versions_inner(app: &tauri::AppHandle, app_config: &Arc<Mutex<AppConfig>>, version_id: u32) -> AnyhowResult<()> {
+  let service = app.state::<Service>();
 
-  let cfg = app_config
-    .lock()
-    .map_err(|_| anyhow::anyhow!("Lock failed"))?
-    .clone();
+  let cfg = app_config.lock().map_err(|_| anyhow::anyhow!("Lock failed"))?.clone();
 
   let selected_version = cfg
     .versions
@@ -69,10 +42,7 @@ async fn start_download_versions_inner(
     .find(|v| v.id == version_id)
     .ok_or_else(|| anyhow::anyhow!("Version with id {} not found", version_id))?;
 
-  log::info!(
-    "start_download_versions, selected_version: {:?}",
-    selected_version
-  );
+  log::info!("start_download_versions, selected_version: {:?}", selected_version);
 
   let mut version = VersionProgress {
     id: selected_version.id,
@@ -84,19 +54,12 @@ async fn start_download_versions_inner(
     manifest: None,
   };
 
-  let _ = app_handle.emit("download_start_get_file_list", 0);
+  let _ = app.emit("download_start_get_file_list", 0);
 
-  let download_dir = Path::new(&cfg.install_path)
-    .join("versions")
-    .join(format!("{}_data", version.path));
-  std::fs::create_dir_all(&download_dir).with_context(|| {
-    format!(
-      "Failed to create output download directory: {:?}",
-      download_dir
-    )
-  })?;
+  let download_dir = Path::new(&cfg.install_path).join(VERSIONS_DIR).join(format!("{}_data", version.path));
+  std::fs::create_dir_all(&download_dir).with_context(|| format!("Failed to create output download directory: {:?}", download_dir))?;
 
-  let all_files = client
+  let all_files = service
     .get_main_release_files(version_id)
     .await
     .context("Failed to get main release files")?;
@@ -118,7 +81,7 @@ async fn start_download_versions_inner(
 
   // TODO: подумать как потом прокинуть манифет на фронт
   if let Some(manifest) = manifest_blob {
-    let data = client
+    let data = service
       .fetch_manifest_from_blob(&manifest.project_id, &manifest.id)
       .await
       .context("Failed to fetch manifest from blob")?;
@@ -140,14 +103,12 @@ async fn start_download_versions_inner(
   }
 
   {
-    let mut config_guard = app_config
-      .lock()
-      .map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
+    let mut config_guard = app_config.lock().map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
     config_guard.progress.insert(version.id, version.clone());
     config_guard.save();
   }
 
-  let _ = app_handle.emit("download_finish_get_file_list", 0);
+  let _ = app.emit("download_finish_get_file_list", 0);
 
   let mut downloaded_files_cnt: u16 = 0;
 
@@ -156,22 +117,15 @@ async fn start_download_versions_inner(
 
     let file_path = download_dir.join(&file.path);
 
-    client
+    service
       .download_blob_to_file(&file.project_id, &file.id, &file_path)
       .await
-      .with_context(|| {
-        format!(
-          "Failed to download release file: {:?} for version: {}",
-          file_path, version.name
-        )
-      })?;
+      .with_context(|| format!("Failed to download release file: {:?} for version: {}", file_path, version.name))?;
 
     log::info!("Download file complete {:?}", file.name);
 
     {
-      let mut config_guard = app_config
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
+      let mut config_guard = app_config.lock().map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
 
       if let Some(ver) = config_guard.progress.get_mut(&version.id) {
         if let Some(file_progress) = ver.files.get_mut(&file.id) {
@@ -184,14 +138,9 @@ async fn start_download_versions_inner(
     downloaded_files_cnt += 1;
     let progress = (downloaded_files_cnt as f32 / version.file_count as f32) * 100.0;
 
-    log::info!(
-      "download_files_progress: {} ({}/{})",
-      progress,
-      downloaded_files_cnt,
-      version.file_count,
-    );
+    log::info!("download_files_progress: {} ({}/{})", progress, downloaded_files_cnt, version.file_count,);
 
-    let _ = app_handle.emit(
+    let _ = app.emit(
       "download_files_progress",
       DownloadProgress {
         progress,
@@ -202,9 +151,7 @@ async fn start_download_versions_inner(
   }
 
   {
-    let mut config_guard = app_config
-      .lock()
-      .map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
+    let mut config_guard = app_config.lock().map_err(|_| anyhow::anyhow!("Failed to lock app config"))?;
 
     config_guard.installed_versions.insert(
       version.id,
@@ -228,12 +175,11 @@ async fn start_download_versions_inner(
 
 #[tauri::command]
 pub async fn start_download_version(
-  app_handle: tauri::AppHandle,
+  app: tauri::AppHandle,
   app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
-  gl: tauri::State<'_, Arc<Mutex<Gitlab>>>,
   version_id: u32,
 ) -> Result<(), String> {
-  start_download_versions_inner(app_handle, &app_config, &gl, version_id)
+  start_download_versions_inner(&app, &app_config, version_id)
     .await
     .map_err(|e| e.to_string())
 }

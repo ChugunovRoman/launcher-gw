@@ -9,11 +9,10 @@
 
   import { X, Minus, Minimize2, Maximize2 } from "lucide-svelte";
   import { Lang } from "../consts";
+  import { connectStatus, fontColor } from "../store/main";
 
   let isMaximized = $state(false);
   let version = $state("0.1.0");
-  let connectStatus = $state("connnecting");
-  let fontColor = $state("rgba(243, 240, 63, 1)");
 
   let langs = $state([Lang.Ru, Lang.En]);
   let currentLangIndex = $state(0);
@@ -49,28 +48,23 @@
     await invoke<string>("set_lang", { lang });
   };
 
-  onMount(async () => {
-    invoke<number[]>("gl_get_bg")
-      .then(() => {
-        connectStatus = "connnected";
-        fontColor = "rgba(69, 240, 97, 1)";
-      })
-      .catch(() => {
-        connectStatus = "connnect_error";
-        fontColor = "rgba(254, 197, 208, 1)";
-      });
-
-    version = await getVersion();
+  async function loadLang() {
     const lang = await invoke<Lang>("get_lang");
     currentLangIndex = langs.indexOf(lang);
+    $locale = lang;
+    console.log("loadLang: ", lang, currentLangIndex);
+  }
+
+  onMount(async () => {
+    version = await getVersion();
     console.log("version: ", version);
-    console.log("lang: ", lang, currentLangIndex);
+    loadLang();
   });
 </script>
 
 <header>
-  <h5 class="titile" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
-    Global War Launcher {version} <span style="color: {fontColor}; font-size: 0.7rem">{$_(`app.h.${connectStatus}`)}</span>
+  <h5 class="title" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
+    Global War Launcher {version} <span style="color: {$fontColor}; font-size: 0.7rem">{$_(`app.h.${$connectStatus}`)}</span>
   </h5>
 
   <div role="button" onclick={toggleLang} class="btn">
@@ -100,7 +94,7 @@
     -webkit-app-region: drag;
   }
 
-  .titile {
+  .title {
     text-align: left;
     text-indent: 3%;
     padding: 0;

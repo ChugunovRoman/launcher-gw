@@ -1,28 +1,15 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy } from "svelte";
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
   import { open } from "@tauri-apps/plugin-dialog";
 
   import { progress, isInProcess, finish, completed } from "../store/unpack";
+  import { providersWasInited } from "../store/main";
 
-  let sourcePath = "";
-  let targetPath = "";
-
-  $: if ($completed) {
-    $completed = false;
-
-    const timeout1 = setTimeout(() => ($finish = true), 500);
-    const timeout2 = setTimeout(() => ($isInProcess = false), 1000);
-    const timeout3 = setTimeout(() => ($finish = false), 1500);
-
-    onDestroy(() => {
-      clearTimeout(timeout1);
-      clearTimeout(timeout2);
-      clearTimeout(timeout3);
-    });
-  }
+  let sourcePath = $state("");
+  let targetPath = $state("");
 
   async function choosePath() {
     sourcePath = await selectFolder(sourcePath);
@@ -75,11 +62,26 @@
     }
   }
 
-  onMount(async () => {
-    const config = await invoke<AppConfig>("get_config");
+  $effect(() => {
+    if ($providersWasInited) {
+      invoke<AppConfig>("get_config").then((config) => {
+        sourcePath = config.unpack_source_dir;
+        targetPath = config.unpack_target_dir;
+      });
+    }
+    if ($completed) {
+      $completed = false;
 
-    sourcePath = config.unpack_source_dir;
-    targetPath = config.unpack_target_dir;
+      const timeout1 = setTimeout(() => ($finish = true), 500);
+      const timeout2 = setTimeout(() => ($isInProcess = false), 1000);
+      const timeout3 = setTimeout(() => ($finish = false), 1500);
+
+      onDestroy(() => {
+        clearTimeout(timeout1);
+        clearTimeout(timeout2);
+        clearTimeout(timeout3);
+      });
+    }
   });
 </script>
 

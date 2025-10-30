@@ -1,14 +1,15 @@
 mod configs;
 mod consts;
-mod gitlab;
 mod handlers;
 mod logger;
+mod providers;
+mod service;
 mod setup;
 mod utils;
 
 use logger::Logger;
 use std::sync::{Arc, Mutex};
-use tauri::{Builder, Wry};
+use tauri::{Builder, Manager, Wry};
 
 use crate::logger::TauriLogger;
 
@@ -30,14 +31,18 @@ pub fn run() {
   // Устанавливаем глобальный panic hook
   setup::setup_panic_logger(logger_arc.clone());
 
-  let boxed = Box::new(TauriLogger {
-    inner: logger_arc.clone(),
-  });
+  let boxed = Box::new(TauriLogger { inner: logger_arc.clone() });
   log::set_boxed_logger(boxed).unwrap();
   log::set_max_level(log::LevelFilter::Trace);
 
   create_tauri_app()
-    .setup(setup::tauri_setup)
+    .setup(|app| {
+      setup::tauri_setup(app)?;
+
+      app.manage(logger_arc);
+
+      Ok(())
+    })
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())

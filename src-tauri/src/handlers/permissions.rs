@@ -1,12 +1,11 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-use crate::gitlab::models::UserData;
+use crate::service::dto::UserData;
 
 #[tauri::command]
-pub fn allow_pack_mod(user_data: tauri::State<'_, Arc<Mutex<UserData>>>) -> Result<bool, String> {
-  let data = user_data.lock().map_err(|_| "Failed to lock user config")?;
+pub async fn allow_pack_mod(user_data: tauri::State<'_, Arc<Mutex<Option<UserData>>>>) -> Result<bool, String> {
+  let data = user_data.lock().await;
 
-  let has = data.flags.iter().any(|value| value == "allowPackMod");
-
-  Ok(has)
+  Ok(data.as_ref().map_or(false, |user| user.flags.iter().any(|value| value == "allowPackMod")))
 }

@@ -11,10 +11,3 @@ export async function initUnpackListener() {
     progress.set(event.payload);
   });
 }
-
-export function cleanupPackListener() {
-  if (unlisten) {
-    unlisten();
-    unlisten = null;
-  }
-}

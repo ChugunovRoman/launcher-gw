@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { setupGlobalErrorHandlers } from "./errors";
+  setupGlobalErrorHandlers();
+
   import "normalize.css";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
@@ -15,6 +18,8 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
+  import { providersWasInited } from "./store/main";
+
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
   const VIEW_ORDER: string[] = ["home", "runParams", "pack", "unpack", "settings"];
@@ -29,6 +34,10 @@
     unpack: UnpackView,
     settings: SettingsView,
   };
+
+  $: if ($providersWasInited) {
+    loadBackground();
+  }
 
   // Обработчик выбора view
   function handleSelect(view: string) {
@@ -59,7 +68,7 @@
 
   async function loadBackground() {
     try {
-      const bytes = await invoke<number[]>("gl_get_bg");
+      const bytes = await invoke<number[]>("get_launcher_bg");
       const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
       bgUrl = URL.createObjectURL(blob);
     } catch (err) {
@@ -68,8 +77,6 @@
   }
 
   onMount(() => {
-    loadBackground();
-
     flyOffset = Math.round(window.innerHeight);
 
     const handleResize = () => {
