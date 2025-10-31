@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -26,6 +26,10 @@ impl GameConfig {
 
   /// Загрузить из файла
   pub fn load(&mut self) -> Result<()> {
+    if &self.file_path == "" {
+      bail!("load() user.ltx read error ! file_path is not set ! Empty string !")
+    }
+
     let content = fs::read_to_string(&self.file_path).with_context(|| format!("Failed to read config file: {}", self.file_path))?;
 
     self.data.clear();
@@ -51,6 +55,10 @@ impl GameConfig {
 
   /// Сохранить в файл
   pub fn save(&self) -> Result<()> {
+    if &self.file_path == "" {
+      bail!("save() user.ltx read error ! file_path is not set ! Empty string !")
+    }
+
     let mut lines: Vec<String> = self.data.iter().map(|(k, v)| format!("{} {}", k, v)).collect();
 
     lines.sort(); // опционально: для стабильного вывода
