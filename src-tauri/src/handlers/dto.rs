@@ -15,7 +15,7 @@ pub struct ReleaseManifest {
   #[serde(default)]
   pub total_files_count: u32,
   #[serde(default)]
-  pub total_size: u32,
+  pub total_size: usize,
   #[serde(default)]
-  pub compressed_size: u32,
+  pub compressed_size: usize,
 }

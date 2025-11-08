@@ -1,4 +1,5 @@
 pub mod encoding;
+pub mod errors;
 pub mod git;
 pub mod parse_strings;
 pub mod paths;

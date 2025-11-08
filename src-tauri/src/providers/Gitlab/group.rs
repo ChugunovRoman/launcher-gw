@@ -1,9 +1,9 @@
 use crate::providers::{
   Gitlab::{
     Gitlab::Gitlab,
-    models::{CreateRepoBodyGitlab, CreateRepoResponseGitlab, CreategGroupBodyGitlab, CreategGroupResponseGitlab},
+    models::{CreategGroupBodyGitlab, CreategGroupResponseGitlab, UpdateGroupDtoGitlab, Visibility},
   },
-  dto::{CreateRepoResponse, CreategGroupResponse},
+  dto::CreategGroupResponse,
 };
 
 use anyhow::{Context, Result, bail};
@@ -15,7 +15,7 @@ pub async fn __create_group(s: &Gitlab, name: &str, parent_id: &u32) -> Result<C
     name: name.to_owned(),
     path: Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string(),
     lfs_enabled: true,
-    visibility: "public".to_owned(),
+    visibility: Visibility::Private,
     parent_id: parent_id.clone(),
   };
 
@@ -41,20 +41,16 @@ pub async fn __create_group(s: &Gitlab, name: &str, parent_id: &u32) -> Result<C
   })
 }
 
-pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &u32) -> Result<CreateRepoResponse> {
-  let url = format!("{}/projects", s.host);
-  let data = CreateRepoBodyGitlab {
-    name: name.to_owned(),
-    path: Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string(),
-    lfs_enabled: true,
-    visibility: "public".to_owned(),
-    namespace_id: parent_id.clone(),
-  };
+pub async fn __update_group(s: &Gitlab, group_id: &u32, data: UpdateGroupDtoGitlab) -> Result<()> {
+  let url = format!("{}/groups/{}", s.host, &group_id);
 
-  let resp = s.get_client().post(&url).json(&data).send().await.context(format!(
-    "Failed to send request to GitLab (create_repo) name: {}, parent_id: {}",
-    name, parent_id
-  ))?;
+  let resp = s
+    .get_client()
+    .put(&url)
+    .json(&data)
+    .send()
+    .await
+    .context(format!("Failed to send request to GitLab (update_group) group_id: {}", &group_id))?;
 
   if !resp.status().is_success() {
     let status = resp.status();
@@ -62,15 +58,5 @@ pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &u32) -> Result<Cr
     bail!("GitLab API error ({}): {}", status, body);
   }
 
-  let result: CreateRepoResponseGitlab = resp.json().await?;
-
-  Ok(CreateRepoResponse {
-    id: result.id,
-    name: result.name,
-    path: result.path,
-    ssh_url_to_repo: result.ssh_url_to_repo,
-    visibility: result.visibility,
-    lfs_enabled: result.lfs_enabled,
-    namespace_id: result.namespace_id,
-  })
+  Ok(())
 }

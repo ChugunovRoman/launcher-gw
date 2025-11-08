@@ -17,9 +17,10 @@ use crate::{
   consts::REPO_LAUNCGER_ID,
   providers::{
     ApiProvider::ApiProvider,
-    Gitlab::{create::*, files::*, issues::*, models::ManifestGitlab, release::*},
+    Gitlab::{files::*, group::*, issues::*, models::ManifestGitlab, release::*, repo::*},
     dto::{Issue, *},
   },
+  service::main::LogCallback,
 };
 
 pub struct Gitlab {
@@ -29,10 +30,14 @@ pub struct Gitlab {
 
   pub status: Arc<Mutex<ProviderStatus>>,
   pub manifest: Arc<Mutex<ManifestGitlab>>,
+
+  pub logger: LogCallback,
+
+  token: Arc<Mutex<String>>,
 }
 
 impl Gitlab {
-  pub fn new(h: &str, suppot_subgroups: bool) -> Result<Self> {
+  pub fn new(h: &str, suppot_subgroups: bool, logger: LogCallback) -> Result<Self> {
     log::info!("Satrt init Gitlab client");
 
     let client = Client::builder().build()?;
@@ -45,7 +50,9 @@ impl Gitlab {
         latency_ms: None,
       })),
       suppot_subgroups,
-      manifest: Arc::new(Mutex::new(ManifestGitlab { root_id: None })),
+      manifest: Arc::new(Mutex::new(ManifestGitlab { root_id: None, max_size: 0 })),
+      token: Arc::new(Mutex::new("".to_owned())),
+      logger,
     })
   }
 
@@ -57,6 +64,8 @@ impl Gitlab {
 #[async_trait]
 impl ApiProvider for Gitlab {
   fn set_token(&self, token: String) -> Result<()> {
+    *self.token.lock().unwrap() = token.clone();
+
     let mut headers = HeaderMap::new();
     let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).or_else(|_| HeaderValue::from_str(&format!("PRIVATE-TOKEN {}", token)))?;
     headers.insert(AUTHORIZATION, auth_value);
@@ -64,6 +73,9 @@ impl ApiProvider for Gitlab {
     *self.client.lock().unwrap() = Client::builder().default_headers(headers).build()?;
 
     Ok(())
+  }
+  fn get_token(&self) -> String {
+    self.token.lock().unwrap().clone()
   }
 
   fn id(&self) -> &'static str {
@@ -123,6 +135,7 @@ impl ApiProvider for Gitlab {
       } else {
         None
       },
+      max_size: manifest.max_size,
     })
   }
 
@@ -158,6 +171,9 @@ impl ApiProvider for Gitlab {
   // Release
   async fn get_releases(&self) -> Result<Vec<Release>> {
     __get_releases(self).await
+  }
+  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()> {
+    __set_release_visibility(self, path, visibility).await
   }
   async fn get_release_repos(&self, release_id: u32) -> Result<Vec<Project>> {
     __get_release_repos(self, release_id).await

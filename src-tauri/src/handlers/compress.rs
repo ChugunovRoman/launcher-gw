@@ -1,7 +1,9 @@
 use crate::consts::MANIFEST_NAME;
 use crate::handlers::dto::ReleaseManifest;
+use crate::utils::errors::log_full_error;
 use crate::utils::parse_strings::*;
 use crate::utils::{self, resources};
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -17,10 +19,13 @@ pub async fn create_archive(
   targetPath: String,
   excludePatterns: Vec<String>,
 ) -> Result<String, String> {
-  let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
+  let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| {
+    log_full_error(&e);
+    e.to_string()
+  })?;
 
-  let archive_path = Path::new(&targetPath).join("main");
-  let manifest_path = Path::new(&targetPath).clone().join(MANIFEST_NAME).to_string_lossy().into_owned();
+  let archive_path = Path::new(&targetPath).join("game");
+  let manifest_path = Path::new(&targetPath).join(MANIFEST_NAME).to_string_lossy().into_owned();
 
   log::info!("create_archive, clear dir: {:?}", &targetPath);
 
@@ -84,14 +89,17 @@ pub async fn create_archive(
       log::info!("Print line: {}", &line);
       if let Ok(data) = extract_total(&line) {
         let mut m = manifest_clone.lock().await;
+        log::info!("extract_total: {:?}", &data);
         m.total_files_count = data.0.clone();
         m.total_size = data.1.clone();
       }
       if let Ok(size) = extract_output(&line) {
         let mut m = manifest_clone.lock().await;
+        log::info!("extract_output: {:?}", &size);
         m.compressed_size = size.clone();
       }
       if let Some(percent) = parse_progress(&line) {
+        log::info!("parse_progress: {:?}", &percent);
         let _ = app_handle.emit("pack_archive_progress", percent);
       }
     }

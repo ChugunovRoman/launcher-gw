@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Home, Settings, RunParams, Pack, Unpack } from "../Icons";
+  import { Home, Settings, RunParams, Pack, Unpack, Releases, Tokens } from "../Icons";
   import { providersWasInited } from "../store/main";
 
   const { onSelect } = $props<{ onSelect: (view: string) => void }>();
@@ -49,7 +49,25 @@
           activeItem = "unpack";
         }} />
     </div>
+    <div class="baritem" class:active={activeItem === "releases"}>
+      <Releases
+        size={40}
+        onclick={() => {
+          onSelect("releases");
+          activeItem = "releases";
+        }} />
+    </div>
+    <div class="baritem" class:active={activeItem === "tokens"}>
+      <Tokens
+        size={40}
+        onclick={() => {
+          onSelect("tokens");
+          activeItem = "tokens";
+        }} />
+    </div>
   {:else}
+    <div></div>
+    <div></div>
     <div></div>
     <div></div>
   {/if}
@@ -69,7 +87,7 @@
   .menubar {
     margin-top: 20px;
     display: grid;
-    grid-template-rows: 80px 80px 80px 80px 1fr 80px 40px;
+    grid-template-rows: 80px 80px 80px 80px 80px 80px 1fr 80px 40px;
     align-items: center;
     background-color: rgba(0, 0, 0, 0);
     justify-items: anchor-center;

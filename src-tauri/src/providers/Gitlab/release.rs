@@ -1,6 +1,6 @@
 use crate::providers::{
   ApiProvider::ApiProvider,
-  Gitlab::{Gitlab::Gitlab, models::*},
+  Gitlab::{Gitlab::Gitlab, group::__update_group, models::*, repo::__update_repo},
   dto::*,
 };
 
@@ -100,4 +100,82 @@ pub async fn __get_updates_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Proj
     .collect();
 
   Ok(versions)
+}
+
+pub async fn __set_release_visibility(s: &Gitlab, path: String, visibility: bool) -> Result<()> {
+  let releases = __get_releases(s).await?;
+  let release_id = match releases.iter().find(|r| r.path == path) {
+    Some(data) => data.id,
+    None => {
+      bail!("set_release_visibility(), Release by path: {} not found !", &path)
+    }
+  };
+
+  let url = format!("{}/groups/{}/projects", &s.host, &release_id);
+  let resp = s
+    .get_client()
+    .get(&url)
+    .send()
+    .await
+    .context("set_release_visibility(), Failed to send request to GitLab (get_repos)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("set_release_visibility(), GitLab API error {}: {}", status, body);
+  }
+
+  let repos: Vec<ProjectGitlab> = resp
+    .json()
+    .await
+    .context("set_release_visibility(), Failed to parse GitLab projects response as JSON")?;
+
+  if visibility {
+    __update_group(
+      s,
+      &release_id,
+      UpdateGroupDtoGitlab {
+        visibility: if visibility {
+          Some(Visibility::Public)
+        } else {
+          Some(Visibility::Private)
+        },
+        ..UpdateGroupDtoGitlab::default()
+      },
+    )
+    .await?;
+  }
+  for repo in repos {
+    let _ = __update_repo(
+      s,
+      &repo.id,
+      UpdateRepoDtoGitlab {
+        visibility: if visibility {
+          Some(Visibility::Public)
+        } else {
+          Some(Visibility::Private)
+        },
+        ..UpdateRepoDtoGitlab::default()
+      },
+    )
+    .await?;
+  }
+
+  if !visibility {
+    __update_group(
+      s,
+      &release_id,
+      UpdateGroupDtoGitlab {
+        visibility: if visibility {
+          Some(Visibility::Public)
+        } else {
+          Some(Visibility::Private)
+        },
+        ..UpdateGroupDtoGitlab::default()
+      },
+    )
+    .await?;
+  }
+
+  Ok(())
 }

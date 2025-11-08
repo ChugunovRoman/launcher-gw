@@ -26,9 +26,9 @@ tauri-sys = { git = "https://github.com/JonasKruckenberg/tauri-sys", branch = "v
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "process", "io-util", "rt", "full"] }
-futures-util = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 sysinfo = "0.37.2"
-anyhow = "1.0"
+anyhow = { version = "1", features = ["backtrace"] }
 uuid = { version = "1.8", features = ["v4"] }
 winit = "0.29"
 tauri-plugin-clipboard-manager = "2"
@@ -42,6 +42,8 @@ async-trait = "0.1.89"
 bytes = "1.10.1"
 base64 = "0.22.1"
 url = "2.5.7"
+fs2 = "0.4.3"
+tokio-stream = "0.1.17"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-window-state = "2"

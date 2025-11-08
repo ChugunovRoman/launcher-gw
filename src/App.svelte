@@ -14,7 +14,9 @@
   import SettingsView from "./Views/Settings.svelte";
   import PackView from "./Views/Pack.svelte";
   import UnpackView from "./Views/Unpack.svelte";
+  import ReleasesView from "./Views/Releases.svelte";
   import RunParamsView from "./Views/RunParams.svelte";
+  import TokensView from "./Views/Tokens.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
@@ -22,7 +24,7 @@
 
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
-  const VIEW_ORDER: string[] = ["home", "runParams", "pack", "unpack", "settings"];
+  const VIEW_ORDER: string[] = ["home", "runParams", "pack", "unpack", "releases", "tokens", "settings"];
   let currentView = "home";
   let previousView: string | null = null;
 
@@ -32,6 +34,8 @@
     runParams: RunParamsView,
     pack: PackView,
     unpack: UnpackView,
+    releases: ReleasesView,
+    tokens: TokensView,
     settings: SettingsView,
   };
 
@@ -68,7 +72,13 @@
 
   async function loadBackground() {
     try {
-      const bytes = await invoke<number[]>("get_launcher_bg");
+      const [bytes, versions, localVersions] = await Promise.all([
+        invoke<number[]>("get_launcher_bg"),
+        invoke<Version[]>("get_available_versions"),
+        invoke<Version[]>("get_local_version"),
+      ]);
+      console.log("load versions: ", versions);
+      console.log("load localVersions: ", localVersions);
       const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
       bgUrl = URL.createObjectURL(blob);
     } catch (err) {
@@ -169,7 +179,6 @@
     -webkit-app-region: drag;
     position: relative;
     height: 100%;
-    overflow: hidden;
   }
   .bar {
     background-color: rgba(0, 0, 0, 0.5);

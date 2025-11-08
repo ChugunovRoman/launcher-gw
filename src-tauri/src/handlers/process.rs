@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+use tokio::sync::Mutex;
 
 use crate::configs::AppConfig::AppConfig;
 use crate::configs::GameConfig::GameConfig;
@@ -23,22 +24,22 @@ pub fn spawn_external_process(path: String, args: Vec<String>) -> Result<u32, St
 }
 
 #[tauri::command]
-pub fn run_game(
+pub async fn run_game(
   app: tauri::AppHandle,
   user_ltx: tauri::State<'_, Arc<Mutex<UserLtx>>>,
   tmp_ltx: tauri::State<'_, Arc<Mutex<TmpLtx>>>,
 ) -> Result<u32, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
-  let mut config_guard = state.lock().map_err(|_| "Poisoned mutex")?;
+  let mut config_guard = state.lock().await;
 
   let bin_path = Path::new(&config_guard.install_path).join("bin").join("xrEngine.exe");
 
   log::info!("run_game bin_path: {:?}", &bin_path);
 
-  let mut user_config = user_ltx.lock().map_err(|_| "Failed to lock user config")?;
+  let mut user_config = user_ltx.lock().await;
   update_ltx_config(&mut user_config.0, &config_guard.run_params);
 
-  let mut tmp_config = tmp_ltx.lock().map_err(|_| "Failed to lock tmp config")?;
+  let mut tmp_config = tmp_ltx.lock().await;
   update_ltx_config(&mut tmp_config.0, &config_guard.run_params);
 
   let fsgame_path = Path::new(&config_guard.install_path).join("fsgame.ltx");

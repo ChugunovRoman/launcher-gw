@@ -9,6 +9,7 @@ pub struct ProviderStatus {
 #[derive(Deserialize, Debug, Clone)]
 pub struct Manifest {
   pub root_id: Option<String>,
+  pub max_size: u64,
 }
 
 #[derive(Deserialize, Debug, Clone)]

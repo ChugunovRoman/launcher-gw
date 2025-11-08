@@ -22,6 +22,8 @@ pub struct Version {
   pub path: String,
   #[serde(default)]
   pub installed_updates: Vec<String>,
+  #[serde(default)]
+  pub is_local: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +42,21 @@ pub struct VersionProgress {
   pub file_count: u16,
 
   pub manifest: Option<ReleaseManifest>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionProgressUpload {
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub path_dir: String,
+  #[serde(default)]
+  pub path_repo: String,
+  #[serde(default)]
+  pub files_per_commit: usize,
+  #[serde(default)]
+  pub total_groups: usize,
+  #[serde(default)]
+  pub uploaded_groups: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,9 +137,11 @@ pub struct AppConfig {
   pub run_params: RunParams,
 
   #[serde(default)]
-  pub installed_versions: HashMap<u32, Version>,
+  pub installed_versions: HashMap<String, Version>,
   #[serde(default)]
-  pub progress: HashMap<u32, VersionProgress>,
+  pub progress_download: HashMap<u32, VersionProgress>,
+  #[serde(default)]
+  pub progress_upload: Option<VersionProgressUpload>,
 
   #[serde(default)]
   pub pack_source_dir: String,
@@ -137,6 +156,9 @@ pub struct AppConfig {
   pub path: String,
   #[serde(skip)]
   pub versions: Vec<Version>,
+
+  #[serde(default)]
+  pub tokens: HashMap<String, String>,
 }
 
 impl Default for AppConfig {
@@ -155,7 +177,7 @@ impl Default for AppConfig {
       client_uuid: Uuid::new_v4().to_string(),
       vid_modes: modes,
       vid_mode_latest: max_mode,
-      log_level: LogLevel::Info,
+      log_level: LogLevel::Debug,
       lang: "ru".to_string(),
       run_params,
       path: "".to_string(),
@@ -165,7 +187,9 @@ impl Default for AppConfig {
       unpack_target_dir: "".to_string(),
       installed_versions: HashMap::new(),
       versions: vec![],
-      progress: HashMap::new(),
+      progress_download: HashMap::new(),
+      tokens: HashMap::new(),
+      progress_upload: None,
     }
   }
 }

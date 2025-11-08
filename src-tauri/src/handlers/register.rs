@@ -19,6 +19,8 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_lang,
     handlers::configs::set_pack_paths,
     handlers::configs::set_unpack_paths,
+    handlers::configs::get_tokens,
+    handlers::configs::get_upload_manifest,
     // user.ltx
     handlers::user_ltx::userltx_set_path,
     // service
@@ -26,9 +28,14 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::service::get_fastest_provider,
     handlers::service::get_launcher_bg,
     handlers::service::set_token_for_provider,
+    handlers::service::get_provider_ids,
     // releases
     handlers::release::get_available_versions,
     handlers::release::start_download_version,
+    handlers::release::create_release_repos,
+    handlers::release::get_local_version,
+    handlers::upload::upload_release,
+    handlers::continue_upload::continue_upload,
     // compress
     handlers::compress::create_archive,
     handlers::compress::extract_archive,

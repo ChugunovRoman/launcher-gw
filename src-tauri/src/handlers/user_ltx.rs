@@ -5,21 +5,24 @@ use tokio::sync::Mutex;
 use crate::{
   configs::{AppConfig::AppConfig, TmpLtx, UserLtx},
   consts::VERSIONS_DIR,
-  service::{get_release::ServiceRelease, main::Service},
+  service::{get_release::ServiceGetRelease, main::Service},
 };
 
 #[tauri::command]
-pub async fn userltx_set_path(app: tauri::AppHandle, releaseId: u32) -> Result<(), String> {
+pub async fn userltx_set_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
   let service_guard = state.lock().await;
 
-  let releases = service_guard.get_releases().await.map_err(|e| e.to_string())?;
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let config_guard = state.lock().await;
+
+  let releases = service_guard.get_local_version().await.map_err(|e| e.to_string())?;
 
   let version_path_str = releases
     .iter()
-    .find(|r| r.id == releaseId)
+    .find(|r| r.path == path)
     .map(|r| r.path.clone())
-    .ok_or_else(|| format!("Version not found! releaseId: {}", releaseId))?;
+    .ok_or_else(|| format!("Local version not found ! By path: {}", path))?;
 
   let state_config = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("AppConfig not initialized")?;
   let config_guard = state_config.lock().await;

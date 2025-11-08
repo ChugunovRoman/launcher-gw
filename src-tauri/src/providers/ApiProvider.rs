@@ -22,6 +22,7 @@ pub trait ApiProvider: Send + Sync {
   fn is_suppot_subgroups(&self) -> bool;
 
   fn set_token(&self, token: String) -> Result<()>;
+  fn get_token(&self) -> String;
 
   async fn load_manifest(&self) -> Result<()>;
   fn get_manifest(&self) -> Result<Manifest>;
@@ -34,6 +35,7 @@ pub trait ApiProvider: Send + Sync {
   async fn find_issue(&self, repo_id: &u32, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
 
   async fn get_releases(&self) -> Result<Vec<Release>>;
+  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
   async fn get_release_repos(&self, release_id: u32) -> Result<Vec<Project>>;
   async fn get_updates_repos(&self, release_id: u32) -> Result<Vec<Project>>;
 

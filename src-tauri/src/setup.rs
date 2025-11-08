@@ -60,8 +60,14 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let user_ltx_config = UserLtx(GameConfig::new(""));
   let tmp_ltx_config = TmpLtx(GameConfig::new(""));
 
+  let handle = app.handle().clone();
+  let logger = Arc::new(move |msg: &str| {
+    log::info!("{}", &msg);
+    let _ = handle.emit("upload-log", msg);
+  });
+
   // Создаём сервис
-  let service = Service::new();
+  let service = Service::new(config_arc.clone(), logger);
   let service_arc = Arc::new(Mutex::new(service));
   let service_clone = service_arc.clone();
 
@@ -101,13 +107,14 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
       log::info!("Manifest loaded");
 
       // 3. Получение данных пользователя
-      let uuid = {
+      let data = {
         let guard = config_arc_clone.lock().await;
-        guard.client_uuid.clone()
+        (guard.client_uuid.clone(), guard.tokens.clone())
       };
       let user_data = {
         let service_clone_guard = service_clone.lock().await;
-        service_clone_guard.get_user(uuid).await?
+        service_clone_guard.set_tokens(data.1).await?;
+        service_clone_guard.get_user(data.0).await?
       };
       log::info!("User data fetched");
 

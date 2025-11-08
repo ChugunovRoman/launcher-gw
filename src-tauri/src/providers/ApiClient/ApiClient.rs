@@ -1,16 +1,23 @@
-use crate::providers::{ApiProvider::ApiProvider, dto::ProviderStatus};
+use crate::{
+  providers::{ApiProvider::ApiProvider, dto::ProviderStatus},
+  service::main::LogCallback,
+  utils::encoding::decode,
+};
+use anyhow::Result;
 use std::collections::HashMap;
 
 pub struct ApiClient {
   providers: HashMap<&'static str, Box<dyn ApiProvider + Send + Sync>>,
   current_provider_id: Option<&'static str>,
+  pub logger: LogCallback,
 }
 
 impl ApiClient {
-  pub fn new() -> Self {
+  pub fn new(logger: LogCallback) -> Self {
     Self {
       providers: HashMap::new(),
       current_provider_id: None,
+      logger,
     }
   }
 
@@ -32,6 +39,10 @@ impl ApiClient {
   pub fn current_provider(&self) -> anyhow::Result<&(dyn ApiProvider + Send + Sync)> {
     let id = self.current_provider_id.ok_or_else(|| anyhow::anyhow!("No current provider set"))?;
     self.get_provider(id)
+  }
+
+  pub fn get_provider_ids(&self) -> Vec<String> {
+    self.providers.keys().map(|&id| id.to_string()).collect()
   }
 
   pub fn get_provider(&self, id: &str) -> anyhow::Result<&(dyn ApiProvider + Send + Sync)> {
@@ -86,5 +97,18 @@ impl ApiClient {
 
     available.sort_by_key(|(_, s)| s.latency_ms.unwrap_or(u64::MAX));
     available
+  }
+
+  pub async fn set_tokens(&self, tokens: HashMap<String, String>) -> Result<()> {
+    for (id, token) in tokens {
+      let provider = self.get_provider(&id)?;
+      let decoded_value = match decode(&token) {
+        Ok(decoded) => decoded,
+        Err(_) => token.clone(),
+      };
+      provider.set_token(decoded_value)?;
+    }
+
+    Ok(())
   }
 }

@@ -10,6 +10,8 @@ import Settings from "./Settings.svelte";
 import RunParams from "./RunParams.svelte";
 import Pack from "./Pack.svelte";
 import Unpack from "./Unpack.svelte";
+import Releases from "./Releases.svelte";
+import Tokens from "./Tokens.svelte";
 
 export {
   Discord,
@@ -24,4 +26,6 @@ export {
   RunParams,
   Pack,
   Unpack,
+  Releases,
+  Tokens,
 };

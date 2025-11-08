@@ -1,18 +1,18 @@
 {
   "app": {
     "h": {
-      "connnecting": "(a connection to the server is being established...)",
-      "connnected": "(connection to the server established successfully)",
-      "connnect_error": "(Server connection error. Functionality is limited..)"
+      "connnecting": "(Connecting to the server...)",
+      "connnected": "(Successfully connected to the server)",
+      "connnect_error": "(Server connection error. Functionality is limited.)"
     },
     "menu": {
-      "main": "Main page",
-      "runparams": "The game run parameters",
-      "settings": "Launcher settings"
+      "main": "Main Page",
+      "runparams": "Game Launch Parameters",
+      "settings": "Launcher Settings"
     },
     "launch": {
       "start": "Start Game",
-      "inGame": "In the Game..."
+      "inGame": "In Game..."
     },
     "save": {
       "1": "Save",
@@ -24,52 +24,75 @@
     },
     "clear": "Clear",
     "labels": {
-      "runparams": "Mod launch parameters",
-      "runparams_holder": "Please enter additional launch arguments...",
-      "settings": "Launcher settings",
+      "runparams": "Mod Launch Parameters",
+      "runparams_holder": "Enter additional launch arguments...",
+      "settings": "Launcher Settings",
+      "tokens": "Tokens",
+      "releases": "Releases",
       "pack": "Pack",
       "unpack": "Unpack"
     },
     "unpack": {
-      "unpacking": "Unpack",
+      "unpacking": "Unpacking",
       "start": "Unpack",
       "source": {
         "placeholder": "Path to the folder containing the archive",
         "btn": "Choose"
       },
       "target": {
-        "placeholder": "Path to the folder where to unzip",
+        "placeholder": "Destination folder for extracted files",
         "btn": "Choose"
       }
     },
     "pack": {
-      "packing": "Pack",
+      "packing": "Packing",
       "start": "Pack",
       "source": {
         "placeholder": "Path to the game folder",
         "btn": "Choose"
       },
       "target": {
-        "placeholder": "Path to the folder where the archive is saved",
+        "placeholder": "Folder where the archive will be saved",
         "btn": "Choose"
       }
     },
+    "tokens": {
+      "label": {
+        "gitlab": "GitLab Token"
+      },
+      "hide": "Hide",
+      "show": "Show",
+      "save": "Save"
+    },
+    "releases": {
+      "add": "Add New Release",
+      "name": "Release Name",
+      "filespc": "Number of Files per Commit",
+      "path": "Path to the folder containing files created during packaging",
+      "browse": "Browse",
+      "create": "Create",
+      "uploading": "Uploading Release",
+      "uploaded": "files uploaded: ",
+      "stoped": "Release Upload Paused",
+      "continue": "Resume Upload",
+      "installed": "Uploaded"
+    },
     "params": {
-      "screen": "Screen resolution:",
-      "vsync": "Vertical synchronization",
-      "windowed": "Windowed mode",
-      "presskey": "Waiting for a key press",
+      "screen": "Screen Resolution:",
+      "vsync": "Vertical Sync",
+      "windowed": "Windowed Mode",
+      "presskey": "Waiting for Key Press",
       "nostaging": "Load textures directly into video memory (-no_staging)",
-      "noprefetch": "No caching (-noprefetch)",
+      "noprefetch": "Disable caching (-noprefetch)",
       "dbg": "Enable Spawner (-dbg)",
-      "uidbg": "Enable UI debugging features (-uidbg)",
-      "checks": "Enable checks at game start (-checks)",
+      "uidbg": "Enable UI Debugging Features (-uidbg)",
+      "checks": "Enable startup checks (-checks)",
       "checksnote": "(increases loading time)",
       "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)"
     }
   },
   "social": {
-    "vk": "Vk",
+    "vk": "VK",
     "steam": "Steam",
     "discord": "Discord"
   }

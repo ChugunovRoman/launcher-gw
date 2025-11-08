@@ -27,7 +27,9 @@ pub async fn __find_issue(s: &Gitlab, repo_id: &u32, search_params: HashMap<Stri
     bail!(msg)
   }
 
-  let issues: Vec<IssueGitlab> = response.json().await?;
+  let text = response.text().await?;
+  // log::info!("Get Issues: {}", &text);
+  let issues: Vec<IssueGitlab> = serde_json::from_str(&text)?;
   let common: Vec<Issue> = issues
     .iter()
     .map(|issue| Issue {

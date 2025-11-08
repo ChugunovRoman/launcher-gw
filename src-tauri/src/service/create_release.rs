@@ -26,21 +26,32 @@ impl ServiceRelease for Service {
 async fn __create_release_repos_gitlablike(s: &Service, name: &str, parent_id: &u32, main_cnt: &u16, updates_cnt: &u16) -> Result<()> {
   let api = s.api_client.current_provider()?;
 
+  (s.logger)(&format!(
+    "Create group for release: {} main_cnt: {} updates_cnt: {}",
+    name, &main_cnt, &updates_cnt
+  ));
   let release_group = api.create_group(name, parent_id).await?;
+  (s.logger)(&format!("Create group for release: {} COMPLETE !", name));
 
-  for i in 1..main_cnt.to_owned() {
-    let name = format!("main_{}", &i);
-    let _ = api.create_repo(&name, &release_group.id).await?;
+  for i in 1..main_cnt.to_owned() + 1 {
+    let repo_name = format!("main_{}", &i);
+    (s.logger)(&format!("Create main repo for release: {} repo: {}", name, &repo_name));
+    let _ = api.create_repo(&repo_name, &release_group.id).await?;
+    (s.logger)(&format!("Create main repo for release: {} repo: {} COMPLETE !", name, &repo_name));
+
+    sleep(Duration::from_millis(1000)).await;
+  }
+
+  for i in 1..updates_cnt.to_owned() + 1 {
+    let repo_name = format!("updates_{}", &i);
+    (s.logger)(&format!("Create main repo for release: {} repo: {}", name, &repo_name));
+    let _ = api.create_repo(&repo_name, &release_group.id).await?;
+    (s.logger)(&format!("Create main repo for release: {} repo: {} COMPLETE !", name, &repo_name));
 
     sleep(Duration::from_millis(1000)).await;
   }
 
-  for i in 1..updates_cnt.to_owned() {
-    let name = format!("updates_{}", &i);
-    let _ = api.create_repo(&name, &release_group.id).await?;
-
-    sleep(Duration::from_millis(1000)).await;
-  }
+  (s.logger)(&format!("Create all repos for release: {} is COMPLETED !", name));
 
   Ok(())
 }

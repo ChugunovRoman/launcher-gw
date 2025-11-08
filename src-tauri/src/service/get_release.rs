@@ -1,15 +1,19 @@
-use crate::{configs::AppConfig::Version, providers::dto::TreeItem, service::main::Service};
+use std::path::Path;
+
+use crate::{configs::AppConfig::Version, consts::VERSIONS_DIR, providers::dto::TreeItem, service::main::Service};
 
 use anyhow::{Result, bail};
 use futures_util::future::join_all;
+use regex::Regex;
 
-pub trait ServiceRelease {
+pub trait ServiceGetRelease {
   async fn get_releases(&self) -> Result<Vec<Version>>;
-  // async fn get_repos(&self, group_id: u32) -> Result<Vec<Version>>;
   async fn get_main_release_files(&self, release_id: u32) -> Result<Vec<TreeItem>>;
+  async fn get_local_version(&self) -> Result<Vec<Version>>;
+  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
 }
 
-impl ServiceRelease for Service {
+impl ServiceGetRelease for Service {
   async fn get_releases(&self) -> Result<Vec<Version>> {
     let api = self.api_client.current_provider()?;
     let releases = api.get_releases().await?;
@@ -21,42 +25,12 @@ impl ServiceRelease for Service {
         name: release.name.clone(),
         path: release.path.clone(),
         installed_updates: vec![],
+        is_local: false,
       })
       .collect();
 
     Ok(result)
   }
-
-  // async fn get_repos(&self, group_id: u32) -> Result<Vec<Version>> {
-  //   let url = format!("{}/groups/{}/projects", self.host, group_id);
-  //   let resp = self
-  //     .client
-  //     .get(&url)
-  //     .send()
-  //     .await
-  //     .context("Failed to send request to GitLab (get_repos)")?;
-
-  //   if resp.status().is_success() {
-  //     let repos: Vec<Group> = resp.json().await.context("Failed to parse GitLab projects response as JSON")?;
-
-  //     let versions = repos
-  //       .into_iter()
-  //       .filter(|repo: &Group| repo.marked_for_deletion_on.is_none())
-  //       .map(|repo| Version {
-  //         id: repo.id,
-  //         name: repo.name,
-  //         path: repo.path,
-  //         installed_updates: vec![],
-  //       })
-  //       .collect();
-
-  //     Ok(versions)
-  //   } else {
-  //     let status = resp.status();
-  //     let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-  //     bail!("GitLab API error {}: {}", status, body);
-  //   }
-  // }
 
   async fn get_main_release_files(&self, release_id: u32) -> Result<Vec<TreeItem>> {
     let api = self.api_client.current_provider()?;
@@ -101,5 +75,49 @@ impl ServiceRelease for Service {
     }
 
     Ok(all_files)
+  }
+
+  async fn get_local_version(&self) -> Result<Vec<Version>> {
+    let install_path = {
+      let config_guard = self.config.lock().await;
+      config_guard.install_path.clone()
+    };
+    let versions_dir = Path::new(&install_path).join(VERSIONS_DIR);
+
+    let mut versions: Vec<Version> = vec![];
+
+    for entry in std::fs::read_dir(&versions_dir)? {
+      let entry = entry?;
+      let path = entry.path();
+
+      let key_path = entry.file_name().clone().into_string().expect("OsString was not valid UTF-8");
+      let name = Regex::new(r"[-]+").unwrap().replace_all(&key_path, " ").to_string();
+
+      log::info!(
+        "Get local version, name {:?} path: {:?} file_name: {:?} entry: {:?}",
+        &name,
+        &path,
+        &entry.file_name(),
+        &entry
+      );
+
+      versions.push(Version {
+        id: 0,
+        name: name,
+        path: key_path,
+        installed_updates: vec![],
+        is_local: true,
+      });
+    }
+
+    Ok(versions)
+  }
+
+  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()> {
+    let api = self.api_client.current_provider()?;
+
+    api.set_release_visibility(path, visibility).await?;
+
+    Ok(())
   }
 }
