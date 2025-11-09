@@ -1,6 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
 import { fontColor, connectStatus, providersWasInited } from '../store/main';
+import { ConnectStatus } from "../consts";
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -9,14 +10,14 @@ export async function initMainListeners() {
     console.log("background-init-success !");
 
     providersWasInited.set(true);
-    connectStatus.set("connnected");
+    connectStatus.set(ConnectStatus.Connnected);
     fontColor.set("rgba(69, 240, 97, 1)");
   }));
   unlisten.set('background-init-failed', await listen('background-init-failed', (event: Event<string>) => {
     console.log("background-init-failed !, error: ", event.payload);
 
     providersWasInited.set(false);
-    connectStatus.set("connnect_error");
+    connectStatus.set(ConnectStatus.ConnnectError);
     fontColor.set("rgba(254, 197, 208, 1)");
   }));
 }

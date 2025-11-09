@@ -1,4 +1,6 @@
 use std::backtrace::Backtrace;
+use std::process::Command;
+use std::{env, process};
 use std::{panic, path::Path, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -6,6 +8,7 @@ use tauri::Manager;
 use tauri::{App, Emitter};
 
 use crate::consts::VERSIONS_DIR;
+use crate::service::wake_detector::WakeDetector;
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig, TmpLtx, UserLtx},
   logger::Logger,
@@ -75,6 +78,14 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   log::info!("Init Service Completed");
 
+  let app_handle = app.handle().clone();
+  let wake_callback = move || {
+    restart_app(&app_handle);
+  };
+
+  let wake = WakeDetector::new(wake_callback);
+  wake.start_watcher(5.0);
+
   // Регистрируем всё в стейте
   app.manage(config_arc);
   app.manage(Arc::new(Mutex::new(user_ltx_config)));
@@ -140,4 +151,28 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   log::info!("init App Completed");
 
   Ok(())
+}
+
+fn restart_app(app_handle: &tauri::AppHandle) {
+  // 1. Закрываем все окна (опционально, но вежливо)
+  let _ = app_handle.webview_windows().iter().for_each(|(_, window)| {
+    let _ = window.close();
+  });
+
+  // 2. Получаем путь к текущему бинарнику
+  let exe_path = env::current_exe().expect("Failed to get executable path");
+
+  // 3. Запускаем новый экземпляр
+  match Command::new(exe_path).spawn() {
+    Ok(_) => {
+      println!("✅ Запущен новый экземпляр приложения");
+    }
+    Err(e) => {
+      eprintln!("❌ Не удалось запустить новый экземпляр: {}", e);
+      // Даже если не удалось — всё равно выходим
+    }
+  }
+
+  // 4. Завершаем текущий процесс
+  process::exit(0);
 }

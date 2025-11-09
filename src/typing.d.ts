@@ -93,3 +93,8 @@ declare interface RepoSyncState {
   total_files_count: number;
   uploaded_files_count: number;
 }
+
+declare interface ProviderStatus {
+  available: boolean;
+  latency_ms: number;
+}
