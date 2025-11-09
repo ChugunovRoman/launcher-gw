@@ -90,6 +90,20 @@ impl ServiceGetRelease for Service {
       let entry = entry?;
       let path = entry.path();
 
+      if path.is_file() {
+        continue;
+      }
+
+      let bin_path = path.join("bin");
+      if !bin_path.exists() {
+        continue;
+      }
+
+      let engine_path = bin_path.join("xrEngine.exe");
+      if !engine_path.exists() {
+        continue;
+      }
+
       let key_path = entry.file_name().clone().into_string().expect("OsString was not valid UTF-8");
       let name = Regex::new(r"[-]+").unwrap().replace_all(&key_path, " ").to_string();
 
