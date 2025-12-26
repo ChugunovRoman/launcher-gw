@@ -62,7 +62,7 @@ build-windows:
   artifacts:
     paths:
       - dist/windows/
-jobs:publish-release:script config should be a string or a nested array of strings up to 10 levels deep
+
 publish-release:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
