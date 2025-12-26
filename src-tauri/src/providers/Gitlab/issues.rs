@@ -17,7 +17,7 @@ pub async fn __find_issue(s: &Gitlab, repo_id: &u32, search_params: HashMap<Stri
     path = format!("{}?{}", &path, encode(&params));
   }
 
-  let response = s.get_client().get(&path).send().await?;
+  let response = s.get(&path).send().await?;
 
   if !response.status().is_success() {
     let status = response.status();

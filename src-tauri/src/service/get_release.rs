@@ -1,6 +1,13 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
-use crate::{configs::AppConfig::Version, consts::VERSIONS_DIR, providers::dto::TreeItem, service::main::Service};
+use crate::{
+  configs::AppConfig::Version,
+  consts::*,
+  handlers::dto::ReleaseManifest,
+  providers::dto::TreeItem,
+  service::main::Service,
+  utils::{encoding::read_cp1251_file, resources::game_exe},
+};
 
 use anyhow::{Result, bail};
 use futures_util::future::join_all;
@@ -8,8 +15,10 @@ use regex::Regex;
 
 pub trait ServiceGetRelease {
   async fn get_releases(&self) -> Result<Vec<Version>>;
+  async fn get_release_manifest(&self, release_name: String) -> Result<ReleaseManifest>;
   async fn get_main_release_files(&self, release_id: u32) -> Result<Vec<TreeItem>>;
   async fn get_local_version(&self) -> Result<Vec<Version>>;
+  async fn get_main_version(&self) -> Option<Version>;
   async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
 }
 
@@ -24,12 +33,30 @@ impl ServiceGetRelease for Service {
         id: release.id.clone(),
         name: release.name.clone(),
         path: release.path.clone(),
+        manifest: None,
+        installed_path: "".to_owned(),
+        download_path: "".to_owned(),
         installed_updates: vec![],
         is_local: false,
       })
       .collect();
 
     Ok(result)
+  }
+
+  async fn get_release_manifest(&self, release_name: String) -> Result<ReleaseManifest> {
+    let api = self.api_client.current_provider()?;
+    let repos = api.get_release_repos_by_name(release_name.clone()).await?;
+
+    let project = repos
+      .iter()
+      .find(|r| r.name.starts_with("main_1") || r.name.ends_with("main_1"))
+      .expect(&format!("Repo main_1 not found for release: {}", &release_name));
+
+    let bytes = api.get_file_raw(&format!("{}", project.id), MANIFEST_NAME).await?;
+    let manifest: ReleaseManifest = serde_json::from_slice(&bytes)?;
+
+    Ok(manifest)
   }
 
   async fn get_main_release_files(&self, release_id: u32) -> Result<Vec<TreeItem>> {
@@ -80,9 +107,9 @@ impl ServiceGetRelease for Service {
   async fn get_local_version(&self) -> Result<Vec<Version>> {
     let install_path = {
       let config_guard = self.config.lock().await;
-      config_guard.install_path.clone()
+      config_guard.default_installed_path.clone()
     };
-    let versions_dir = Path::new(&install_path).join(VERSIONS_DIR);
+    let versions_dir = Path::new(&install_path);
 
     let mut versions: Vec<Version> = vec![];
 
@@ -94,12 +121,12 @@ impl ServiceGetRelease for Service {
         continue;
       }
 
-      let bin_path = path.join("bin");
+      let bin_path = path.join(BIN_DIR);
       if !bin_path.exists() {
         continue;
       }
 
-      let engine_path = bin_path.join("xrEngine.exe");
+      let engine_path = bin_path.join(game_exe());
       if !engine_path.exists() {
         continue;
       }
@@ -119,12 +146,80 @@ impl ServiceGetRelease for Service {
         id: 0,
         name: name,
         path: key_path,
+        manifest: None,
+        installed_path: path.to_string_lossy().to_string(),
+        download_path: path.to_string_lossy().to_string(),
         installed_updates: vec![],
         is_local: true,
       });
     }
 
     Ok(versions)
+  }
+
+  async fn get_main_version(&self) -> Option<Version> {
+    let current_path = {
+      let config_guard = self.config.lock().await;
+      Path::new(&config_guard.install_path).to_owned()
+    };
+
+    let bin_path = current_path.join(BIN_DIR);
+    let exe_path = bin_path.join(game_exe());
+    let gamedata_path = current_path.join(GAMEDATA_DIR);
+    let scripts_path = gamedata_path.join(SCRIPTS_DIR);
+    let g_script_path = scripts_path.join(SCRIPT_G);
+    let mut name = "[UNKNOWN]".to_owned();
+
+    if !bin_path.exists() || !exe_path.exists() {
+      return None;
+    }
+
+    if gamedata_path.exists() && scripts_path.exists() && g_script_path.exists() {
+      let content = match fs::read_to_string(&g_script_path) {
+        Ok(c) => c,
+        Err(e) => {
+          log::warn!("Cannot read _g.script as utf-8 file, error: {}", e);
+          log::warn!("Start to read _g.script as cp1251 file...");
+          match read_cp1251_file(&g_script_path) {
+            Ok(c) => c,
+            Err(e) => {
+              log::error!("Error read _g.script as cp1251 file, error: {}", e);
+              String::from("")
+            }
+          }
+        }
+      };
+
+      let version = content.lines().find_map(|line| {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("VERSION =") || trimmed.starts_with("GAME_VERSION =") {
+          trimmed
+            .split('=')
+            .nth(1)
+            .map(|value| value.trim().trim_matches('"').split("..").next().unwrap_or("").trim().to_string())
+        } else {
+          None
+        }
+      });
+
+      if let Some(line) = version {
+        name = line;
+      } else {
+        log::warn!("Main game version not found in the _g.script file!");
+      }
+    }
+
+    Some(Version {
+      id: 0,
+      name: name.clone(),
+      path: name.replace(" ", "_"),
+      manifest: None,
+      installed_path: current_path.to_string_lossy().to_string(),
+      download_path: current_path.to_string_lossy().to_string(),
+      installed_updates: vec![],
+      is_local: true,
+    })
   }
 
   async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()> {

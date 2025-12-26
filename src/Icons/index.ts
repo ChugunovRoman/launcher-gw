@@ -12,6 +12,11 @@ import Pack from "./Pack.svelte";
 import Unpack from "./Unpack.svelte";
 import Releases from "./Releases.svelte";
 import Tokens from "./Tokens.svelte";
+import Versions from "./Versions.svelte";
+import Play from "./Play.svelte";
+import Pause from "./Pause.svelte";
+import Stop from "./Stop.svelte";
+import Installed from "./Installed.svelte";
 
 export {
   Discord,
@@ -28,4 +33,9 @@ export {
   Unpack,
   Releases,
   Tokens,
+  Versions,
+  Play,
+  Pause,
+  Stop,
+  Installed,
 };

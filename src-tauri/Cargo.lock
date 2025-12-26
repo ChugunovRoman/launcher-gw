@@ -11,12 +11,15 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "encoding_rs",
  "fs2",
+ "fs4",
  "futures-util",
  "git2",
  "log",
  "regex",
  "reqwest",
+ "scopeguard",
  "serde",
  "serde_json",
  "sha2",
@@ -1359,6 +1362,16 @@ checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "fs4"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
+dependencies = [
+ "rustix 1.1.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

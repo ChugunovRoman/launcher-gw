@@ -112,3 +112,15 @@ impl ApiClient {
     Ok(())
   }
 }
+
+impl Clone for ApiClient {
+  fn clone(&self) -> Self {
+    let cloned_providers = self.providers.iter().map(|(id, provider)| (*id, provider.clone_box())).collect();
+
+    Self {
+      providers: cloned_providers,
+      current_provider_id: self.current_provider_id,
+      logger: self.logger.clone(),
+    }
+  }
+}

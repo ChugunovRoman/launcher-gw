@@ -1,14 +1,21 @@
 use std::backtrace::Backtrace;
+use std::collections::HashMap;
 use std::process::Command;
 use std::{env, process};
-use std::{panic, path::Path, sync::Arc};
+use std::{
+  panic,
+  sync::{Arc, Mutex as StdMutex},
+};
 use tokio::sync::Mutex;
 
 use tauri::Manager;
 use tauri::{App, Emitter};
 
-use crate::consts::VERSIONS_DIR;
+use crate::handlers::start_download_version::CancelMap;
+use crate::service::files::ServiceFiles;
+use crate::service::get_release::ServiceGetRelease;
 use crate::service::wake_detector::WakeDetector;
+use crate::utils::errors::log_full_error;
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig, TmpLtx, UserLtx},
   logger::Logger,
@@ -52,7 +59,6 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   log::info!("Start app setup");
 
   let config = AppConfig::load_or_create(app.handle())?;
-  let working_dir = config.install_path.clone();
   let config_arc = Arc::new(Mutex::new(config));
   let config_arc_clone = config_arc.clone();
 
@@ -64,6 +70,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let tmp_ltx_config = TmpLtx(GameConfig::new(""));
 
   let handle = app.handle().clone();
+  let handle2 = app.handle().clone();
   let logger = Arc::new(move |msg: &str| {
     log::info!("{}", &msg);
     let _ = handle.emit("upload-log", msg);
@@ -72,6 +79,9 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   // Создаём сервис
   let service = Service::new(config_arc.clone(), logger);
   let service_arc = Arc::new(Mutex::new(service));
+  let service_files_arc = Arc::new(ServiceFiles::new(move |release_name, bytes, speed| {
+    let _ = handle2.emit("download-speed-status", (release_name, &bytes, &speed));
+  }));
   let service_clone = service_arc.clone();
 
   let user_data_placeholder = Arc::new(Mutex::new(Option::<UserData>::None));
@@ -92,6 +102,8 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(Arc::new(Mutex::new(tmp_ltx_config)));
   app.manage(user_data_placeholder.clone());
   app.manage(service_arc);
+  app.manage(service_files_arc);
+  app.manage(Arc::new(StdMutex::new(HashMap::new())) as CancelMap);
 
   log::info!("init App State Completed");
 
@@ -100,24 +112,26 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   tauri::async_runtime::spawn(async move {
     let result = async {
-      // Создаём директорию версий
-      let versions_dir = Path::new(&working_dir).join(VERSIONS_DIR);
-      std::fs::create_dir_all(&versions_dir)?;
-
       // 1. Регистрация провайдеров
       {
         let mut service = service_clone.lock().await;
         service.register_all_providers().await?;
+        service.load_manifest().await?;
+
+        let releases = service.get_releases().await?;
+
+        {
+          let mut config_guard = config_arc_clone.lock().await;
+          config_guard.versions = releases.clone();
+          config_guard.save()?;
+
+          let _ = app_handle_bg.emit("config-loaded", config_guard.clone());
+        }
+
+        let _ = app_handle_bg.emit("versions-loaded", releases);
       }
 
-      // 2. Загрузка манифеста
-      {
-        let mut service = service_clone.lock().await;
-        service.load_manifest().await?
-      };
-      log::info!("Manifest loaded");
-
-      // 3. Получение данных пользователя
+      // 2. Получение данных пользователя
       let data = {
         let guard = config_arc_clone.lock().await;
         (guard.client_uuid.clone(), guard.tokens.clone())
@@ -127,13 +141,13 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         service_clone_guard.set_tokens(data.1).await?;
         service_clone_guard.get_user(data.0).await?
       };
-      log::info!("User data fetched");
-
       // Обновляем состояние
       {
         let mut user_data_guard = user_data_bg.lock().await;
         *user_data_guard = Some(user_data);
       }
+      log::info!("User data fetched");
+      let _ = app_handle_bg.emit("user-data-loaded", ());
 
       Ok::<(), anyhow::Error>(())
     }
@@ -141,6 +155,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     if let Err(e) = result {
       log::error!("Background initialization failed: {:?}", e);
+      log_full_error(&e);
       // Опционально: отправить событие в фронтенд
       let _ = app_handle_bg.emit("background-init-failed", e.to_string());
     } else {

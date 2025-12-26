@@ -1,68 +1,60 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import { Home, Settings, RunParams, Pack, Unpack, Releases, Tokens } from "../Icons";
-  import { providersWasInited } from "../store/main";
+  import { Home, Settings, RunParams, Pack, Unpack, Releases, Versions, Tokens } from "../Icons";
+  import { allowPackMod } from "../store/main";
+  import { currentView } from "../store/menu";
 
   const { onSelect } = $props<{ onSelect: (view: string) => void }>();
-
-  let activeItem = $state("home");
-  let allowPackMod = $state(false);
-
-  $effect(() => {
-    if ($providersWasInited) {
-      invoke<boolean>("allow_pack_mod").then((value) => (allowPackMod = value));
-    }
-  });
 </script>
 
 <div class="menubar">
-  <div class="baritem" class:active={activeItem === "home"}>
+  <div class="baritem" class:active={$currentView === "home"}>
     <Home
       size={40}
       onclick={() => {
         onSelect("home");
-        activeItem = "home";
       }} />
   </div>
-  <div class="baritem" class:active={activeItem === "runParams"}>
+  <div class="baritem" class:active={$currentView === "runParams"}>
     <RunParams
       size={40}
       onclick={() => {
         onSelect("runParams");
-        activeItem = "runParams";
       }} />
   </div>
-  {#if allowPackMod}
-    <div class="baritem" class:active={activeItem === "pack"}>
+  <div class="baritem" class:active={$currentView === "versions"}>
+    <Versions
+      size={54}
+      onclick={() => {
+        onSelect("versions");
+      }} />
+  </div>
+  {#if $allowPackMod}
+    <div class="baritem" class:active={$currentView === "pack"}>
       <Pack
         size={40}
         onclick={() => {
           onSelect("pack");
-          activeItem = "pack";
         }} />
     </div>
-    <div class="baritem" class:active={activeItem === "unpack"}>
+    <div class="baritem" class:active={$currentView === "unpack"}>
       <Unpack
         size={40}
         onclick={() => {
           onSelect("unpack");
-          activeItem = "unpack";
         }} />
     </div>
-    <div class="baritem" class:active={activeItem === "releases"}>
+    <div class="baritem" class:active={$currentView === "releases"}>
       <Releases
         size={40}
         onclick={() => {
           onSelect("releases");
-          activeItem = "releases";
         }} />
     </div>
-    <div class="baritem" class:active={activeItem === "tokens"}>
+    <div class="baritem" class:active={$currentView === "tokens"}>
       <Tokens
         size={40}
         onclick={() => {
           onSelect("tokens");
-          activeItem = "tokens";
         }} />
     </div>
   {:else}
@@ -72,12 +64,11 @@
     <div></div>
   {/if}
   <div></div>
-  <div class="baritem" class:active={activeItem === "settings"}>
+  <div class="baritem" class:active={$currentView === "settings"}>
     <Settings
       size={40}
       onclick={() => {
         onSelect("settings");
-        activeItem = "settings";
       }} />
   </div>
   <div></div>
@@ -87,7 +78,7 @@
   .menubar {
     margin-top: 20px;
     display: grid;
-    grid-template-rows: 80px 80px 80px 80px 80px 80px 1fr 80px 40px;
+    grid-template-rows: 80px 80px 80px 80px 80px 80px 80px 1fr 80px 40px;
     align-items: center;
     background-color: rgba(0, 0, 0, 0);
     justify-items: anchor-center;

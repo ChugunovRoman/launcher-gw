@@ -2,20 +2,20 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
-  import { open } from "@tauri-apps/plugin-dialog";
   import { onDestroy } from "svelte";
 
   import { progress, isInProcess, finish, completed } from "../store/pack";
   import { providersWasInited } from "../store/main";
+  import { choosePath } from "../utils/path";
 
   let packPath = $state("");
   let targetPath = $state("");
 
-  async function choosePath() {
-    packPath = await selectFolder(packPath);
+  async function chooseSrcPath() {
+    await choosePath((selected) => (packPath = selected));
   }
   async function chooseTargetPath() {
-    targetPath = await selectFolder(targetPath);
+    await choosePath((selected) => (targetPath = selected));
   }
   async function startPack() {
     console.log("startPack");
@@ -74,25 +74,6 @@
     console.log("pack result: ", result);
   }
 
-  async function selectFolder(def: string) {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
-
-      if (selected) {
-        console.log("Выбрана папка:", selected);
-        return selected;
-      }
-
-      return def;
-    } catch (e) {
-      console.error("Ошибка при выборе папки:", e);
-      return def;
-    }
-  }
-
   $effect(() => {
     if ($providersWasInited) {
       invoke<AppConfig>("get_config").then((config) => {
@@ -123,7 +104,7 @@
     <label class="input-label">{$_("app.pack.source.placeholder")}</label>
     <div class="input-row">
       <input type="text" readonly bind:value={packPath} placeholder={$_("app.pack.source.placeholder")} class="uuid-input" />
-      <button type="button" onclick={choosePath} class="choose-btn">
+      <button type="button" onclick={chooseSrcPath} class="choose-btn">
         {$_("app.pack.source.btn")}
       </button>
     </div>

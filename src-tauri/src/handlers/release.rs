@@ -1,15 +1,14 @@
 use crate::{
-  configs::AppConfig::{AppConfig, FileProgress, Version, VersionProgress},
-  consts::{MANIFEST_NAME, VERSIONS_DIR},
-  handlers::dto::DownloadProgress,
-  providers::dto::TreeItem,
-  service::{create_release::ServiceRelease, files::Servicefiles, get_release::ServiceGetRelease, main::Service},
-  utils::{errors::log_full_error, git::grouping::group_files_by_size},
+  configs::AppConfig::{AppConfig, Version},
+  consts::BIN_DIR,
+  handlers::dto::ReleaseManifest,
+  service::{create_release::ServiceRelease, get_release::ServiceGetRelease, main::Service},
+  utils::{errors::log_full_error, git::grouping::group_files_by_size, resources::game_exe},
 };
 use anyhow::Context;
-use std::convert::TryFrom;
-use std::{collections::HashMap, path::Path, sync::Arc};
-use tauri::{Emitter, Manager};
+use std::{convert::TryFrom, fs, path::PathBuf};
+use std::{path::Path, sync::Arc};
+use tauri::Manager;
 use tokio::sync::Mutex;
 
 #[tauri::command]
@@ -24,188 +23,13 @@ pub async fn get_available_versions(app: tauri::AppHandle, app_config: tauri::St
   {
     let mut config_guard = app_config.lock().await;
     config_guard.versions = releases.clone();
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
   }
 
   Ok(releases)
-}
-
-#[tauri::command]
-pub async fn start_download_version(
-  app: tauri::AppHandle,
-  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
-  version_id: u32,
-) -> Result<(), String> {
-  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
-
-  let cfg = app_config.lock().await.clone();
-
-  let selected_version = cfg
-    .versions
-    .iter()
-    .find(|v| v.id == version_id)
-    .ok_or_else(|| anyhow::anyhow!("Version with id {} not found", version_id))
-    .map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
-
-  log::info!("start_download_versions, selected_version: {:?}", selected_version);
-
-  let mut version = VersionProgress {
-    id: selected_version.id,
-    name: selected_version.name.clone(),
-    path: selected_version.path.clone(),
-    is_downloaded: false,
-    files: HashMap::new(),
-    file_count: 0,
-    manifest: None,
-  };
-
-  let _ = app.emit("download_start_get_file_list", 0);
-
-  let download_dir = Path::new(&cfg.install_path).join(VERSIONS_DIR).join(format!("{}_data", version.path));
-  std::fs::create_dir_all(&download_dir)
-    .with_context(|| format!("Failed to create output download directory: {:?}", download_dir))
-    .map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
-
-  let all_files = service_guard
-    .get_main_release_files(version_id)
-    .await
-    .context("Failed to get main release files")
-    .map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
-
-  let mut files = Vec::new();
-  let mut manifest_blob: Option<TreeItem> = None;
-
-  for file in all_files {
-    if file.item_type != "blob" {
-      continue;
-    }
-
-    if file.name == MANIFEST_NAME {
-      manifest_blob = Some(file);
-    } else {
-      files.push(file);
-    }
-  }
-
-  // TODO: подумать как потом прокинуть манифет на фронт
-  if let Some(manifest) = manifest_blob {
-    let data = service_guard
-      .fetch_manifest_from_blob(&manifest.project_id, &manifest.id)
-      .await
-      .context("Failed to fetch manifest from blob")
-      .map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
-    version.manifest = Some(data);
-  }
-
-  version.file_count = files.len() as u16;
-
-  for file in &files {
-    version.files.insert(
-      file.id.clone(),
-      FileProgress {
-        id: file.id.clone(),
-        name: file.name.clone(),
-        path: file.path.clone(),
-        is_downloaded: false,
-      },
-    );
-  }
-
-  {
-    let mut config_guard = app_config.lock().await;
-    config_guard.progress_download.insert(version.id, version.clone());
-    config_guard.save().map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
-  }
-
-  let _ = app.emit("download_finish_get_file_list", 0);
-
-  let mut downloaded_files_cnt: u16 = 0;
-
-  for file in files {
-    log::info!("Get file {:?}", file.name);
-
-    let file_path = download_dir.join(&file.path);
-
-    service_guard
-      .download_blob_to_file(&file.project_id, &file.id, &file_path)
-      .await
-      .with_context(|| format!("Failed to download release file: {:?} for version: {}", file_path, version.name))
-      .map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
-
-    log::info!("Download file complete {:?}", file.name);
-
-    {
-      let mut config_guard = app_config.lock().await;
-
-      if let Some(ver) = config_guard.progress_download.get_mut(&version.id) {
-        if let Some(file_progress) = ver.files.get_mut(&file.id) {
-          file_progress.is_downloaded = true;
-        }
-      }
-      config_guard.save().map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
-    }
-
-    downloaded_files_cnt += 1;
-    let progress = (downloaded_files_cnt as f32 / version.file_count as f32) * 100.0;
-
-    log::info!("download_files_progress: {} ({}/{})", progress, downloaded_files_cnt, version.file_count,);
-
-    let _ = app.emit(
-      "download_files_progress",
-      DownloadProgress {
-        progress,
-        downloaded_files_cnt,
-        total_file_count: version.file_count,
-      },
-    );
-  }
-
-  {
-    let mut config_guard = app_config.lock().await;
-
-    config_guard.installed_versions.insert(
-      version.path.clone(),
-      Version {
-        id: version.id,
-        name: version.name,
-        path: version.path,
-        installed_updates: vec![],
-        is_local: false,
-      },
-    );
-
-    if let Some(ver) = config_guard.progress_download.get_mut(&version.id) {
-      ver.is_downloaded = true;
-    }
-
-    config_guard.save().map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
-  }
-
-  Ok(())
 }
 
 #[tauri::command]
@@ -249,6 +73,64 @@ pub async fn create_release_repos(app: tauri::AppHandle, name: String, path: Str
 }
 
 #[tauri::command]
+pub async fn get_release_manifest(app: tauri::AppHandle, releaseName: String) -> Result<ReleaseManifest, String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let service_guard = state.lock().await;
+  let release = {
+    let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("AppConfig not initialized")?;
+    let config_guard = state.lock().await;
+    config_guard
+      .versions
+      .iter()
+      .find(|r| r.name == releaseName)
+      .ok_or_else(|| "Release not found".to_string())?
+      .clone()
+  };
+  let manifest = {
+    log::info!("manifest in config for release: {:?}", &release);
+
+    let content = r#"{"total_files_count":67362,"total_size":24744098842,"compressed_size":9164158137}"#;
+    let test: Result<ReleaseManifest, _> = serde_json::from_str(&content);
+    match &test {
+      Ok(cfg) => log::info!("Parsed OK: {:?}", cfg),
+      Err(e) => log::error!("Parse FAILED: {}", e),
+    }
+
+    match release.manifest.clone() {
+      Some(data) => data,
+      None => {
+        let file = service_guard.get_release_manifest(release.name.clone()).await.map_err(|e| {
+          log_full_error(&e);
+          e.to_string()
+        })?;
+        log::info!("load manifest from Gitlab");
+
+        {
+          let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("AppConfig not initialized")?;
+          let mut config_guard = state.lock().await;
+          let version = config_guard
+            .versions
+            .iter_mut()
+            .find(|r| r.name == releaseName)
+            .ok_or_else(|| "Release not found".to_string())?;
+
+          version.manifest = Some(file.clone());
+
+          config_guard.save().map_err(|e| {
+            log_full_error(&e);
+            e.to_string()
+          })?;
+        }
+
+        file
+      }
+    }
+  };
+
+  Ok(manifest)
+}
+
+#[tauri::command]
 pub async fn get_local_version(app: tauri::AppHandle) -> Result<Vec<Version>, String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
   let service_guard = state.lock().await;
@@ -258,4 +140,179 @@ pub async fn get_local_version(app: tauri::AppHandle) -> Result<Vec<Version>, St
   })?;
 
   Ok(versions)
+}
+
+#[tauri::command]
+pub async fn get_main_version(app: tauri::AppHandle) -> Result<Option<Version>, String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let service_guard = state.lock().await;
+
+  Ok(service_guard.get_main_version().await)
+}
+
+#[tauri::command]
+pub async fn get_installed_versions(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
+  let versions = {
+    let cfg = app_config.lock().await;
+
+    cfg
+      .installed_versions
+      .iter()
+      .filter_map(|(_, v)| {
+        let path = Path::new(&v.installed_path);
+        let path_bin = path.join(BIN_DIR);
+        let path_exe = path_bin.join(game_exe());
+        log::debug!(
+          "get_installed_versions, filter version: {} installed_path: {} game_exe: {}",
+          &v.name,
+          &v.installed_path,
+          game_exe()
+        );
+        if path.exists() && path_bin.exists() && path_exe.exists() && path.is_dir() {
+          Some(v.clone())
+        } else {
+          None
+        }
+      })
+      .collect()
+  };
+
+  Ok(versions)
+}
+
+#[tauri::command]
+pub async fn delete_installed_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: String) -> Result<(), String> {
+  let version = {
+    let cfg = app_config.lock().await;
+    cfg.installed_versions.get(&versionName).cloned()
+  };
+
+  if let Some(v) = version {
+    fs::remove_dir_all(Path::new(&v.installed_path)).map_err(|e| e.to_string())?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn has_root_version() -> Result<bool, String> {
+  let curr_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+  let bin = curr_dir.join(BIN_DIR);
+  if !bin.exists() {
+    return Ok(false);
+  }
+
+  let xr_engine = bin.join(game_exe());
+  if !xr_engine.exists() {
+    return Ok(false);
+  }
+
+  Ok(true)
+}
+
+#[tauri::command]
+pub async fn add_installed_version_from_config(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: String) -> Result<(), String> {
+  let version = {
+    let cfg = app_config.lock().await;
+    cfg
+      .progress_download
+      .get(&versionName)
+      .expect(&format!("add_installed_version_from_config() version not found: {} !", &versionName))
+      .clone()
+  };
+
+  {
+    let mut config_guard = app_config.lock().await;
+
+    config_guard.installed_versions.insert(
+      version.path.clone(),
+      Version {
+        id: version.id,
+        name: version.name.clone(),
+        path: version.path.clone(),
+        manifest: version.manifest.clone(),
+        installed_path: version.installed_path.clone(),
+        download_path: version.download_path.clone(),
+        installed_updates: vec![],
+        is_local: false,
+      },
+    );
+
+    if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
+      ver.is_downloaded = true;
+    }
+
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn add_installed_version_from_local_path(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, path: String) -> Result<(), String> {
+  let p = Path::new(&path);
+  let base_name = match p.file_name() {
+    Some(name) => name.to_string_lossy().to_string(),
+    None => path.clone(),
+  };
+
+  let version = Version {
+    id: 0,
+    name: base_name.clone(),
+    path: base_name,
+    manifest: None,
+    installed_path: path.clone(),
+    download_path: path.clone(),
+    installed_updates: vec![],
+    is_local: true,
+  };
+
+  {
+    let mut config_guard = app_config.lock().await;
+
+    config_guard.installed_versions.insert(
+      version.path.clone(),
+      Version {
+        id: version.id,
+        name: version.name.clone(),
+        path: version.path.clone(),
+        manifest: version.manifest.clone(),
+        installed_path: version.installed_path.clone(),
+        download_path: version.download_path.clone(),
+        installed_updates: vec![],
+        is_local: false,
+      },
+    );
+
+    if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
+      ver.is_downloaded = true;
+    }
+
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_progress_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: String) -> Result<(), String> {
+  {
+    let mut config_guard = app_config.lock().await;
+
+    let _ = config_guard.progress_download.remove(&versionName);
+
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  }
+
+  Ok(())
 }

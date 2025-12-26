@@ -22,20 +22,47 @@ declare interface VersionProgressUpload {
   total_groups: number;
   uploaded_groups: number;
 }
+declare interface DownloadProgress {
+  version_name: string;
+  status: number;
+  file: string;
+  progress: number;
+  downloaded_files_cnt: number;
+  total_file_count: number;
+}
 declare interface Version {
   id: string;
   name: string;
   path: string;
+  installed_path: string;
+  download_path: string;
   installed_updates: string[];
   is_local: boolean;
+  manifest?: ReleaseManifest;
+  // only js fields
+  inProgress: boolean;
+  isStoped: boolean;
+  downloadCurrentFile: string;
+  downloadProgress: number;
+  downloadedFilesCnt: number;
+  totalFileCount: number;
+  downloadedFileBytes: number;
+  downloadSpeed: number;
+  speedValue: number;
+  sfxValue: string;
+  status: number;
 }
 declare interface VersionProgress {
   id: string;
   name: string;
   path: string;
+  installed_path: string;
+  download_path: string;
   files: Dict<FileProgress>;
   is_downloaded: boolean;
-  file_count: number;
+  downloaded_files_cnt: number;
+  total_file_count: number;
+  manifest?: ReleaseManifest;
 }
 declare interface FileProgress {
   id: string;
@@ -61,6 +88,8 @@ declare interface AppConfig {
   latest_pid: number;
   first_run: boolean;
   install_path: string;
+  default_installed_path: string;
+  default_download_path: string;
   client_uuid: string;
   vid_modes: string[];
   vid_mode_latest: string;
@@ -70,6 +99,7 @@ declare interface AppConfig {
   pack_target_dir: string;
   unpack_source_dir: string;
   unpack_target_dir: string;
+  selected_version?: string;
   installed_versions: Dict<Version>;
   tokens: Dict<string>;
   progress_upload?: VersionProgressUpload;
@@ -78,6 +108,11 @@ declare interface AppConfig {
 
 
 declare interface UploadManifest {
+  total_files_count: number;
+  total_size: number;
+  compressed_size: number;
+}
+declare interface ReleaseManifest {
   total_files_count: number;
   total_size: number;
   compressed_size: number;

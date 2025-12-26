@@ -1,41 +1,8 @@
-import { writable, type Writable } from 'svelte/store';
+import { writable } from 'svelte/store';
+import { createArrayStore, createNumStore } from './helpers';
 
-function createArrayStore<T>(): Writable<T[]> & {
-  clear: () => void;
-  push: (item: T) => void;
-  replaceLast: (item: T) => void;
-} {
-  const { subscribe, set, update } = writable<T[]>([]);
-
-  return {
-    subscribe,
-    set,
-    update,
-    clear: () => set([]),
-    push: (item: T) => update(arr => [...arr, item]),
-    replaceLast: (item: T) =>
-      update(arr => {
-        if (arr.length === 0) return [item]; // или можно оставить как [] — зависит от логики
-        const newArr = [...arr];
-        newArr[newArr.length - 1] = item;
-        return newArr;
-      })
-  };
-}
-
-function createNumStore(init: number): Writable<number> & {
-  add: (value: number) => void;
-} {
-  const { subscribe, set, update } = writable<number>(init);
-
-  return {
-    subscribe,
-    set,
-    update,
-    add: (value: number) => update(current => (current + value)),
-  };
-}
-
+export const selectedVersion = writable<string | undefined>();
+export const hasAnyLocalVersion = writable<boolean>(false);
 export const showUploading = writable(false);
 export const inProcess = writable(false);
 export const releaseName = writable("");
@@ -46,3 +13,29 @@ export const logText = createArrayStore<string>();
 
 export const totalFiles = createNumStore(0);
 export const uploadedFiles = createNumStore(0);
+
+export const mainVersion = writable<Version | undefined>();
+
+export function updateVersion(releaseName: string, cb: (data: Version) => Partial<Version>) {
+  versions.update((data) => {
+    return data.map(version => {
+      if (version.name == releaseName) {
+        return {
+          ...version,
+          ...cb(version),
+        };
+      }
+      return version;
+    });
+  });
+}
+export function updateEachVersion(cb: (data: Version) => Partial<Version>) {
+  versions.update((data) => {
+    return data.map(version => {
+      return {
+        ...version,
+        ...cb(version),
+      }
+    });
+  });
+}

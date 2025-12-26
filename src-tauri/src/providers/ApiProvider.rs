@@ -36,9 +36,13 @@ pub trait ApiProvider: Send + Sync {
 
   async fn get_releases(&self) -> Result<Vec<Release>>;
   async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
+  async fn get_release_repos_by_name(&self, release_name: String) -> Result<Vec<Project>>;
   async fn get_release_repos(&self, release_id: u32) -> Result<Vec<Project>>;
   async fn get_updates_repos(&self, release_id: u32) -> Result<Vec<Project>>;
 
   async fn create_group(&self, name: &str, parent_id: &u32) -> Result<CreategGroupResponse>;
   async fn create_repo(&self, name: &str, parent_id: &u32) -> Result<CreateRepoResponse>;
+
+  //
+  fn clone_box(&self) -> Box<dyn ApiProvider + Send + Sync>;
 }

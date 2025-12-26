@@ -16,22 +16,23 @@
   import UnpackView from "./Views/Unpack.svelte";
   import ReleasesView from "./Views/Releases.svelte";
   import RunParamsView from "./Views/RunParams.svelte";
+  import VersionsView from "./Views/Versions.svelte";
   import TokensView from "./Views/Tokens.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
   import { providersWasInited } from "./store/main";
+  import { currentView, previousView } from "./store/menu";
 
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
-  const VIEW_ORDER: string[] = ["home", "runParams", "pack", "unpack", "releases", "tokens", "settings"];
-  let currentView = "home";
-  let previousView: string | null = null;
+  const VIEW_ORDER: string[] = ["home", "runParams", "versions", "pack", "unpack", "releases", "tokens", "settings"];
 
   // Маппинг view -> компонент
   const views: Record<string, any> = {
     home: MainView,
     runParams: RunParamsView,
+    versions: VersionsView,
     pack: PackView,
     unpack: UnpackView,
     releases: ReleasesView,
@@ -45,16 +46,13 @@
 
   // Обработчик выбора view
   function handleSelect(view: string) {
-    if (view !== currentView) {
-      previousView = currentView;
-      currentView = view;
-    }
+    currentView.select(view);
   }
   function getDirection(): "forward" | "backward" {
-    if (!previousView) return "forward";
+    if (!$previousView) return "forward";
 
-    const currentIndex = VIEW_ORDER.indexOf(currentView);
-    const prevIndex = VIEW_ORDER.indexOf(previousView);
+    const currentIndex = VIEW_ORDER.indexOf($currentView);
+    const prevIndex = VIEW_ORDER.indexOf($previousView);
 
     if (currentIndex > prevIndex) return "forward"; // вперёд → снизу
     if (currentIndex < prevIndex) return "backward"; // назад → сверху
@@ -72,13 +70,7 @@
 
   async function loadBackground() {
     try {
-      const [bytes, versions, localVersions] = await Promise.all([
-        invoke<number[]>("get_launcher_bg"),
-        invoke<Version[]>("get_available_versions"),
-        invoke<Version[]>("get_local_version"),
-      ]);
-      console.log("load versions: ", versions);
-      console.log("load localVersions: ", localVersions);
+      const bytes = await invoke<number[]>("get_launcher_bg");
       const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
       bgUrl = URL.createObjectURL(blob);
     } catch (err) {
@@ -109,7 +101,7 @@
       <MenuBar onSelect={handleSelect} />
     </div>
     <div class="main" data-tauri-drag-region>
-      {#each [currentView] as view (view)}
+      {#each [$currentView] as view (view)}
         <div in:fly={getFlyParams()} style="width: 100%; height: 100%;">
           <svelte:component this={views[view]} />
         </div>
@@ -178,10 +170,29 @@
   .main {
     -webkit-app-region: drag;
     position: relative;
-    height: 100%;
+    /* overflow: auto;
+    height: 95vh; */
+  }
+  .main::-webkit-scrollbar {
+    width: 12px;
+  }
+  .main::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .main::-webkit-scrollbar-thumb {
+    background-color: rgba(61, 93, 236, 0.8);
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .main::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(61, 93, 236, 1);
+  }
+  .main::-webkit-scrollbar-button {
+    display: none;
   }
   .bar {
-    background-color: rgba(0, 0, 0, 0.5);
+    /* background-color: rgba(0, 0, 0, 0.5); */
   }
 
   @media (max-width: 1920px) and (max-height: 1080px) {

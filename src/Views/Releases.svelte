@@ -2,16 +2,15 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-dialog";
   import { providersWasInited } from "../store/main";
   import { showUploading, inProcess, versions, logText, releaseName, releasePath, filesPerCommit, totalFiles, uploadedFiles } from "../store/upload";
+  import { choosePath } from "../utils/path";
 
   let expandedIndex = $state<number | null>(null);
   let container: HTMLDivElement;
 
   async function fetchVersions() {
     const fetched = await invoke<Version[]>("get_available_versions");
-    // TODO: если есть статус загрузки, то убрать из списка версию, которая еще в процессе загрузки
 
     versions.set(fetched.filter((r) => r.name !== $releaseName));
   }
@@ -56,13 +55,7 @@
   async function chooseNewReleasePath(event: Event) {
     event.stopPropagation();
 
-    const selected = await open({
-      directory: true,
-      multiple: false,
-    });
-    if (selected) {
-      releasePath.set(selected);
-    }
+    await choosePath((selected) => releasePath.set(selected));
   }
 
   async function handleContinueUploading() {
@@ -109,7 +102,6 @@
           });
         }
       });
-      fetchVersions();
     }
   });
   $effect(() => {
@@ -373,7 +365,6 @@
     color: #fff;
     font-weight: 500;
   }
-
   .input-row {
     display: flex;
     gap: 0.75rem;
@@ -388,7 +379,6 @@
     background-color: rgba(255, 255, 255, 0.8);
     width: 95%;
   }
-
   .release-input:focus {
     background-color: rgba(255, 255, 255, 1);
     outline: none;
@@ -404,7 +394,6 @@
     cursor: pointer;
     transition: background-color 0.15s ease;
   }
-
   .choose-btn:hover {
     background-color: rgba(61, 93, 236, 1);
   }
@@ -420,7 +409,6 @@
     font-weight: 500;
     transition: background-color 0.15s ease;
   }
-
   .create-btn:hover {
     background-color: rgba(76, 175, 80, 1);
   }

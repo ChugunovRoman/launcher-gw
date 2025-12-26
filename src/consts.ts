@@ -4,6 +4,13 @@ export enum Lang {
 }
 
 export enum ConnectStatus {
+  Connnecting = 'connnecting',
   Connnected = 'connnected',
   ConnnectError = 'connnect_error',
+}
+
+export enum DownloadStatus {
+  Init,
+  DownloadFiles,
+  Unpacking,
 }

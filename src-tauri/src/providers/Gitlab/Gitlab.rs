@@ -23,6 +23,7 @@ use crate::{
   service::main::LogCallback,
 };
 
+#[derive(Clone)]
 pub struct Gitlab {
   pub host: String,
   pub client: Arc<Mutex<Client>>,
@@ -59,6 +60,15 @@ impl Gitlab {
   pub fn get_client(&self) -> Client {
     self.client.lock().unwrap().clone()
   }
+  pub fn get(&self, url: &str) -> reqwest::RequestBuilder {
+    self.get_client().get(url)
+  }
+  pub fn post(&self, url: &str) -> reqwest::RequestBuilder {
+    self.get_client().post(url)
+  }
+  pub fn put(&self, url: &str) -> reqwest::RequestBuilder {
+    self.get_client().put(url)
+  }
 }
 
 #[async_trait]
@@ -86,8 +96,7 @@ impl ApiProvider for Gitlab {
 
     let start = Instant::now();
     let res = self
-      .get_client()
-      .get(format!("{}/projects/{}", &self.host, REPO_LAUNCGER_ID))
+      .get(&format!("{}/projects/{}", &self.host, REPO_LAUNCGER_ID))
       .timeout(Duration::from_secs(10)) // важно: не висеть вечно
       .send()
       .await;
@@ -175,10 +184,17 @@ impl ApiProvider for Gitlab {
   async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()> {
     __set_release_visibility(self, path, visibility).await
   }
+  async fn get_release_repos_by_name(&self, release_name: String) -> Result<Vec<Project>> {
+    __get_release_repos_by_name(self, release_name).await
+  }
   async fn get_release_repos(&self, release_id: u32) -> Result<Vec<Project>> {
     __get_release_repos(self, release_id).await
   }
   async fn get_updates_repos(&self, release_id: u32) -> Result<Vec<Project>> {
     __get_updates_repos(self, release_id).await
+  }
+
+  fn clone_box(&self) -> Box<dyn ApiProvider + Send + Sync> {
+    Box::new(self.clone())
   }
 }

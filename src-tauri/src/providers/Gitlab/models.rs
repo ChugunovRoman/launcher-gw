@@ -33,7 +33,6 @@ pub struct ManifestGitlab {
 #[derive(Deserialize, Debug, Clone)]
 pub struct TreeItemGitlab {
   pub id: String,
-  #[serde(skip)]
   pub name: String,
   pub path: String,
   #[serde(rename = "type")]

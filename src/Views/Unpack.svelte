@@ -3,19 +3,19 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
-  import { open } from "@tauri-apps/plugin-dialog";
 
   import { progress, isInProcess, finish, completed } from "../store/unpack";
   import { providersWasInited } from "../store/main";
+  import { choosePath } from "../utils/path";
 
   let sourcePath = $state("");
   let targetPath = $state("");
 
-  async function choosePath() {
-    sourcePath = await selectFolder(sourcePath);
+  async function chooseSrcPath() {
+    await choosePath((selected) => (sourcePath = selected));
   }
   async function chooseTargetPath() {
-    targetPath = await selectFolder(targetPath);
+    await choosePath((selected) => (targetPath = selected));
   }
   async function startUnpack() {
     console.log("startPack");
@@ -30,6 +30,7 @@
     await invoke<AppConfig>("set_unpack_paths", { source: sourcePath, target: targetPath });
 
     const result = await invoke<string>("extract_archive", {
+      versionName: "",
       archivePath: await join(sourcePath, "game.7z.001"),
       outputDir: targetPath,
     });
@@ -41,25 +42,6 @@
     setTimeout(() => ($finish = true), 500);
     setTimeout(() => ($isInProcess = false), 1000);
     setTimeout(() => ($finish = false), 1500);
-  }
-
-  async function selectFolder(def: string) {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
-
-      if (selected) {
-        console.log("Выбрана папка:", selected);
-        return selected;
-      }
-
-      return def;
-    } catch (e) {
-      console.error("Ошибка при выборе папки:", e);
-      return def;
-    }
   }
 
   $effect(() => {
@@ -92,7 +74,7 @@
     <label class="input-label">{$_("app.unpack.source.placeholder")}</label>
     <div class="input-row">
       <input type="text" readonly bind:value={sourcePath} placeholder={$_("app.unpack.source.placeholder")} class="uuid-input" />
-      <button type="button" onclick={choosePath} class="choose-btn">
+      <button type="button" onclick={chooseSrcPath} class="choose-btn">
         {$_("app.unpack.source.btn")}
       </button>
     </div>

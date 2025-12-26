@@ -8,10 +8,12 @@
     "menu": {
       "main": "Main Page",
       "runparams": "Game Launch Parameters",
+      "versions": "Game version management",
       "settings": "Launcher Settings"
     },
     "launch": {
       "start": "Start Game",
+      "download": "Download a version",
       "inGame": "In Game..."
     },
     "save": {

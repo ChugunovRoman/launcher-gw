@@ -1,3 +1,4 @@
+use crate::consts::VERSIONS_DIR;
 use crate::handlers::dto::ReleaseManifest;
 use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tauri::path::BaseDirectory;
 use uuid::Uuid;
@@ -21,9 +22,15 @@ pub struct Version {
   #[serde(default)]
   pub path: String,
   #[serde(default)]
+  pub installed_path: String,
+  #[serde(default)]
+  pub download_path: String,
+  #[serde(default)]
   pub installed_updates: Vec<String>,
   #[serde(default)]
   pub is_local: bool,
+
+  pub manifest: Option<ReleaseManifest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,11 +42,17 @@ pub struct VersionProgress {
   #[serde(default)]
   pub path: String,
   #[serde(default)]
+  pub installed_path: String,
+  #[serde(default)]
+  pub download_path: String,
+  #[serde(default)]
   pub files: HashMap<String, FileProgress>,
   #[serde(default)]
   pub is_downloaded: bool,
   #[serde(default)]
-  pub file_count: u16,
+  pub downloaded_files_cnt: u16,
+  #[serde(default)]
+  pub total_file_count: u16,
 
   pub manifest: Option<ReleaseManifest>,
 }
@@ -63,6 +76,8 @@ pub struct VersionProgressUpload {
 pub struct FileProgress {
   #[serde(default)]
   pub id: String,
+  #[serde(default)]
+  pub project_id: u32,
   #[serde(default)]
   pub name: String,
   #[serde(default)]
@@ -124,6 +139,10 @@ pub struct AppConfig {
   #[serde(default)]
   pub install_path: String,
   #[serde(default)]
+  pub default_installed_path: String,
+  #[serde(default)]
+  pub default_download_path: String,
+  #[serde(default)]
   pub client_uuid: String,
   #[serde(default)]
   pub vid_modes: Vec<String>,
@@ -137,9 +156,11 @@ pub struct AppConfig {
   pub run_params: RunParams,
 
   #[serde(default)]
+  pub selected_version: Option<String>,
+  #[serde(default)]
   pub installed_versions: HashMap<String, Version>,
   #[serde(default)]
-  pub progress_download: HashMap<u32, VersionProgress>,
+  pub progress_download: HashMap<String, VersionProgress>,
   #[serde(default)]
   pub progress_upload: Option<VersionProgressUpload>,
 
@@ -152,13 +173,18 @@ pub struct AppConfig {
   #[serde(default)]
   pub unpack_target_dir: String,
 
-  #[serde(skip)]
-  pub path: String,
-  #[serde(skip)]
+  #[serde(default)]
   pub versions: Vec<Version>,
 
   #[serde(default)]
+  pub choosed_version_path: Option<String>,
+
+  #[serde(default)]
   pub tokens: HashMap<String, String>,
+
+  // SKIPED PROPS
+  #[serde(skip)]
+  pub path: String,
 }
 
 impl Default for AppConfig {
@@ -173,7 +199,9 @@ impl Default for AppConfig {
     Self {
       latest_pid: -1,
       first_run: true,
-      install_path,
+      install_path: install_path.clone(),
+      default_installed_path: Path::new(&install_path).join(VERSIONS_DIR).to_string_lossy().to_string(),
+      default_download_path: Path::new(&install_path).join(VERSIONS_DIR).to_string_lossy().to_string(),
       client_uuid: Uuid::new_v4().to_string(),
       vid_modes: modes,
       vid_mode_latest: max_mode,
@@ -186,10 +214,12 @@ impl Default for AppConfig {
       unpack_source_dir: "".to_string(),
       unpack_target_dir: "".to_string(),
       installed_versions: HashMap::new(),
+      selected_version: None,
       versions: vec![],
       progress_download: HashMap::new(),
       tokens: HashMap::new(),
       progress_upload: None,
+      choosed_version_path: None,
     }
   }
 }

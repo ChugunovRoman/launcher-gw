@@ -19,7 +19,7 @@ pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &u32) -> Result<Cr
     namespace_id: parent_id.clone(),
   };
 
-  let resp = s.get_client().post(&url).json(&data).send().await.context(format!(
+  let resp = s.post(&url).json(&data).send().await.context(format!(
     "Failed to send request to GitLab (create_repo) name: {}, parent_id: {}",
     name, parent_id
   ))?;
@@ -50,7 +50,6 @@ pub async fn __update_repo(s: &Gitlab, repo_id: &u32, data: UpdateRepoDtoGitlab)
   let url = format!("{}/projects/{}", s.host, &repo_id);
 
   let resp = s
-    .get_client()
     .put(&url)
     .json(&data)
     .send()

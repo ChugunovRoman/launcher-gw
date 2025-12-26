@@ -1,17 +1,23 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { providersWasInited } from "../store/main";
+  import { localVersions, providersWasInited } from "../store/main";
+  import { onMount } from "svelte";
+  import { currentView } from "../store/menu";
+  import { mainVersion, selectedVersion } from "../store/upload";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
   let interval: number | undefined = undefined;
 
   const launchApp = async () => {
+    if (!$mainVersion) {
+      currentView.select("versions");
+    }
     if (pid && pid > 0) return;
 
     try {
-      pid = await invoke<number>("run_game");
+      pid = await invoke<number>("run_game", { version: $mainVersion });
       await checkProcess();
       interval = setInterval(checkProcess, 1000);
     } catch (err) {
@@ -36,6 +42,10 @@
         .then((config) => {
           pid = config.latest_pid;
 
+          if (config.selected_version) {
+            selectedVersion.set(config.selected_version);
+          }
+
           if (pid < 0) return;
 
           return checkProcess();
@@ -45,11 +55,23 @@
         });
     }
   });
+
+  onMount(async () => {
+    mainVersion.set(await invoke<Version | undefined>("get_main_version"));
+    if ($mainVersion) {
+      localVersions.setItem($mainVersion.name, $mainVersion);
+      selectedVersion.set($mainVersion.name);
+    }
+  });
 </script>
 
 <span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={isProcessAlive} onclick={launchApp}>
   {#if !isProcessAlive}
-    {$_("app.launch.start")}
+    {#if $selectedVersion}
+      {$_("app.launch.start")} {$selectedVersion}
+    {:else}
+      {$_("app.launch.download")}
+    {/if}
   {:else}
     {$_("app.launch.inGame")}
   {/if}

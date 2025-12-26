@@ -4,9 +4,12 @@ use std::sync::Arc;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::Mutex;
 
-use crate::configs::AppConfig::AppConfig;
+use crate::configs::AppConfig::{AppConfig, Version};
 use crate::configs::GameConfig::GameConfig;
 use crate::configs::{RunParams, TmpLtx, UserLtx};
+use crate::consts::*;
+use crate::utils::errors::log_full_error;
+use crate::utils::resources::game_exe;
 use crate::utils::split_args::split_args;
 use tauri::Manager;
 
@@ -28,21 +31,27 @@ pub async fn run_game(
   app: tauri::AppHandle,
   user_ltx: tauri::State<'_, Arc<Mutex<UserLtx>>>,
   tmp_ltx: tauri::State<'_, Arc<Mutex<TmpLtx>>>,
+  version: Version,
 ) -> Result<u32, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let mut config_guard = state.lock().await;
 
-  let bin_path = Path::new(&config_guard.install_path).join("bin").join("xrEngine.exe");
+  let target_path = version.installed_path.clone();
+  let bin_path = Path::new(&target_path).join(BIN_DIR).join(game_exe());
 
   log::info!("run_game bin_path: {:?}", &bin_path);
 
   let mut user_config = user_ltx.lock().await;
+  let user_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX);
+  user_config.0.set_file_path(user_ltx_path);
   update_ltx_config(&mut user_config.0, &config_guard.run_params);
 
   let mut tmp_config = tmp_ltx.lock().await;
+  let tmp_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(TMP_LTX);
+  user_config.0.set_file_path(tmp_ltx_path);
   update_ltx_config(&mut tmp_config.0, &config_guard.run_params);
 
-  let fsgame_path = Path::new(&config_guard.install_path).join("fsgame.ltx");
+  let fsgame_path = Path::new(&target_path).join(FSGAME_LTX);
   let mut run_params = vec![
     String::from("-fsltx"),
     fsgame_path.into_os_string().into_string().expect("Path to fsgame.ltx is not valid UTF-8"),
@@ -80,7 +89,10 @@ pub async fn run_game(
     .map_err(|e| e.to_string())?;
 
   config_guard.latest_pid = i64::from(child.id().clone());
-  config_guard.save();
+  config_guard.save().map_err(|e| {
+    log_full_error(&e);
+    e.to_string()
+  })?;
 
   Ok(child.id())
 }

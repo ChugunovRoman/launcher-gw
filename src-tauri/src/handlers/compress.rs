@@ -126,6 +126,7 @@ pub async fn create_archive(
 #[tauri::command]
 pub async fn extract_archive(
   app_handle: tauri::AppHandle,
+  versionName: String,
   archivePath: String, // путь к первому тому (например, "backup.7z" или "backup.7z.001")
   outputDir: String,   // куда распаковывать
 ) -> Result<String, String> {
@@ -136,7 +137,7 @@ pub async fn extract_archive(
 
   log::info!("extract_archive, clear dir: {:?}", &outputDir);
 
-  utils::paths::clear_dir(&outputDir).expect("Не удалось очистить папку");
+  // utils::paths::clear_dir(&outputDir).expect("Не удалось очистить папку");
 
   // Проверим, что архив существует
   if !Path::new(&archivePath).exists() {
@@ -179,7 +180,7 @@ pub async fn extract_archive(
     while let Ok(Some(line)) = lines.next_line().await {
       log::info!("Print line: {}", &line);
       if let Some(percent) = parse_progress(&line) {
-        let _ = app_handle.emit("unpack_archive_progress", percent);
+        let _ = app_handle.emit("unpack_archive_progress", (&versionName, percent));
       }
     }
   });

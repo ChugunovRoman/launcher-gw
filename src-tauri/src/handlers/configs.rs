@@ -88,6 +88,38 @@ pub async fn get_tokens(app: tauri::AppHandle) -> Result<HashMap<String, String>
 }
 
 #[tauri::command]
+pub async fn set_default_install_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().await;
+
+  config_guard.default_installed_path = path;
+  config_guard.save().map_err(|e| e.to_string())?;
+
+  Ok(())
+}
+#[tauri::command]
+pub async fn set_default_download_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().await;
+
+  config_guard.default_download_path = path;
+  config_guard.save().map_err(|e| e.to_string())?;
+
+  Ok(())
+}
+#[tauri::command]
+pub async fn set_current_game_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: Option<String>) -> Result<(), String> {
+  {
+    let mut config_guard = app_config.lock().await;
+
+    config_guard.selected_version = versionName;
+    config_guard.save().map_err(|e| e.to_string())?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
 pub async fn get_upload_manifest(app: tauri::AppHandle) -> Result<Option<RepoSyncState>, String> {
   let progress_opt = {
     let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;

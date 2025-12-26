@@ -14,3 +14,9 @@ pub fn get_sevenz_path(app_handle: &tauri::AppHandle) -> Result<PathBuf> {
 
   Ok(path)
 }
+
+pub fn game_exe() -> String {
+  let binary_name = if cfg!(windows) { "xrEngine.exe".to_owned() } else { "xr_3da".to_owned() };
+
+  binary_name
+}

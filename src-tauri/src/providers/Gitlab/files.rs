@@ -19,12 +19,7 @@ use crate::{
 
 pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
   let url = format!("{}/projects/{}/repository/files/{}/raw?ref=master", s.host, project_id, file_path);
-  let resp = s
-    .get_client()
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to GitLab (get_file_raw)")?;
+  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_file_raw)")?;
 
   if resp.status().is_success() {
     let bytes = resp.bytes().await.context("Failed to read response body")?;
@@ -39,7 +34,7 @@ pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Re
 pub async fn __get_blob_stream(s: &Gitlab, project_id: &u32, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
   let url = format!("{}/projects/{}/repository/blobs/{}/raw", s.host, project_id, blob_sha);
 
-  let response = s.get_client().get(&url).send().await.context("Failed to send blob download request")?;
+  let response = s.get(&url).send().await.context("Failed to send blob download request")?;
 
   if !response.status().is_success() {
     let status = response.status();
@@ -57,11 +52,10 @@ pub async fn __tree(s: &Gitlab, repo_id: u32, search_params: HashMap<String, Str
   let mut url = format!("{}/projects/{}/repository/tree", s.host, repo_id);
 
   if search_params.len() > 0 {
-    url = format!("{}?{}", &url, encode(&params));
+    url = format!("{}?{}", &url, &params);
   }
 
   let resp = s
-    .get_client()
     .get(&url)
     .send()
     .await
@@ -93,7 +87,7 @@ pub async fn __tree(s: &Gitlab, repo_id: u32, search_params: HashMap<String, Str
 }
 
 pub async fn __get_full_tree(s: &Gitlab, repo_id: u32) -> Result<Vec<TreeItem>> {
-  let all_files = Vec::new();
+  let mut all_files = Vec::new();
   let mut page: u16 = 1;
 
   loop {
@@ -106,6 +100,8 @@ pub async fn __get_full_tree(s: &Gitlab, repo_id: u32) -> Result<Vec<TreeItem>> 
     if items.is_empty() {
       break;
     }
+
+    all_files.extend(items);
 
     page += 1;
   }

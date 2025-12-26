@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use std::{fs, path::Path, sync::Arc};
 use tauri::Manager;
 use tokio::sync::Mutex;
 
 use crate::{
   configs::AppConfig::AppConfig,
   providers::dto::ProviderStatus,
-  service::{files::Servicefiles, main::Service},
+  service::{files::ServiceFiles, main::Service},
   utils::encoding::*,
 };
 
@@ -23,6 +23,17 @@ pub async fn ping_all_providers(app: tauri::AppHandle) -> Result<Vec<(String, Pr
     .collect();
   Ok(results)
 }
+#[tauri::command]
+pub async fn ping_current_provider(app: tauri::AppHandle) -> Result<(String, ProviderStatus), String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let service_guard = state.lock().await;
+
+  let api = service_guard.api_client.current_provider().map_err(|e| e.to_string())?;
+
+  let status = api.ping().await;
+
+  Ok((api.id().to_owned(), status))
+}
 
 #[tauri::command]
 pub async fn get_fastest_provider(app: tauri::AppHandle) -> Result<Option<String>, String> {
@@ -33,10 +44,16 @@ pub async fn get_fastest_provider(app: tauri::AppHandle) -> Result<Option<String
 }
 
 #[tauri::command]
-pub async fn get_launcher_bg(app: tauri::AppHandle) -> Result<Vec<u8>, String> {
-  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
-  let bg = match service_guard.get_launcher_bg().await {
+pub async fn get_launcher_bg(
+  service: tauri::State<'_, Arc<Mutex<Service>>>,
+  service_files: tauri::State<'_, Arc<ServiceFiles>>,
+) -> Result<Vec<u8>, String> {
+  let api_client = {
+    let service_guard = service.lock().await;
+    service_guard.api_client.clone()
+  };
+
+  let bg = match service_files.get_launcher_bg(&api_client).await {
     Ok(bytes) => bytes,
     Err(e) => {
       let msg = format!("Cannot get launcher bg, error: {:?}", e);
@@ -90,4 +107,32 @@ pub async fn get_provider_ids(app: tauri::AppHandle) -> Result<Vec<String>, Stri
   let service_guard = state.lock().await;
 
   Ok(service_guard.api_client.get_provider_ids())
+}
+
+#[tauri::command]
+pub async fn check_available_disk_space(path: String, needed: u64) -> Result<bool, String> {
+  let path = Path::new(&path);
+  let bytes = fs4::available_space(path).map_err(|e| e.to_string())?;
+
+  if bytes > needed {
+    return Ok(true);
+  }
+
+  Ok(false)
+}
+
+#[tauri::command]
+pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: String) -> Result<(), String> {
+  let version = {
+    let cfg = app_config.lock().await;
+    cfg
+      .progress_download
+      .get(&versionName)
+      .expect(&format!("remove_download_version() version not found: {} !", &versionName))
+      .clone()
+  };
+
+  let _ = fs::remove_dir_all(Path::new(&version.download_path)).map_err(|e| e.to_string())?;
+
+  Ok(())
 }

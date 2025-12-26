@@ -10,12 +10,7 @@ pub async fn __get_releases(s: &Gitlab) -> Result<Vec<Release>> {
   let root_id = s.get_manifest()?.root_id.context("Cannot get root_id from Gitlab manifest file!")?;
 
   let url = format!("{}/groups/{}/subgroups?sort=desc", &s.host, &root_id);
-  let resp = s
-    .get_client()
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to GitLab (get_releases)")?;
+  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_releases)")?;
 
   if !resp.status().is_success() {
     let status = resp.status();
@@ -38,14 +33,21 @@ pub async fn __get_releases(s: &Gitlab) -> Result<Vec<Release>> {
   Ok(versions)
 }
 
+pub async fn __get_release_repos_by_name(s: &Gitlab, release_name: String) -> Result<Vec<Project>> {
+  let releases = __get_releases(s).await?;
+  let release = releases
+    .iter()
+    .find(|r| r.name == release_name)
+    .expect(&format!("get_release_repos_by_name(), relese with name: {} not found !", &release_name));
+
+  let repos = __get_release_repos(s, release.id).await?;
+
+  Ok(repos)
+}
+
 pub async fn __get_release_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Project>> {
   let url = format!("{}/groups/{}/projects", &s.host, &release_id);
-  let resp = s
-    .get_client()
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to GitLab (get_repos)")?;
+  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_repos)")?;
 
   if !resp.status().is_success() {
     let status = resp.status();
@@ -72,12 +74,7 @@ pub async fn __get_release_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Proj
 
 pub async fn __get_updates_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Project>> {
   let url = format!("{}/groups/{}/projects", &s.host, &release_id);
-  let resp = s
-    .get_client()
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to GitLab (get_repos)")?;
+  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_repos)")?;
 
   if !resp.status().is_success() {
     let status = resp.status();
@@ -113,7 +110,6 @@ pub async fn __set_release_visibility(s: &Gitlab, path: String, visibility: bool
 
   let url = format!("{}/groups/{}/projects", &s.host, &release_id);
   let resp = s
-    .get_client()
     .get(&url)
     .send()
     .await
