@@ -1,10 +1,11 @@
 stages:
   - build
+  - release
 
 variables:
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
-  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  APP_NAME: "Stalker-GW"
 
 cache:
   key: "$CI_COMMIT_REF_SLUG"
@@ -15,11 +16,12 @@ cache:
 
 .tauri-build:
   image: node:20-bookworm
+  rules:
+    - if: $CI_COMMIT_TAG
   before_script:
-    - apt-get update && apt-get install -y --no-install-recommends curl build-essential libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libayatana-appindicator3-dev libwebkit2gtk-4.0-dev libxtst-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxdamage-dev libxss-dev libasound2-dev libssl-dev
+    - apt-get update && apt-get install -y --no-install-recommends curl build-essential libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libayatana-appindicator3-dev libwebkit2gtk-4.0-dev libxtst-dev libx11-dev libxrandr-dev libxinerama-dev libxcomposite-dev libxdamage-dev libxss-dev libasound2-dev libssl-dev jq zip
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source "$CARGO_HOME/env"
-    - rustup target add x86_64-unknown-linux-gnu
     - npm ci
 
 build-linux:
@@ -28,37 +30,86 @@ build-linux:
   script:
     - npm run gen-icons
     - source "$CARGO_HOME/env"
-    - npm run tauri build
-    - cp src-tauri/target/release/Stalker-GW ./Stalker-GW
+    # Собираем только бинарник
+    - npm run tauri build -- --bundles none
+    - mkdir -p ./dist/linux
+    - cp src-tauri/target/release/${APP_NAME} ./dist/linux/${APP_NAME}
+    # Tauri генерирует .sig для апдейтов при наличии ключей в ENV
+    # Но для портативного бинарника нам нужно сжать его вручную, чтобы соответствовать схеме апдейтера
+    - cd dist/linux && tar -czf ${APP_NAME}_linux.tar.gz ${APP_NAME} && cd ../..
   artifacts:
-    name: Stalker-GW
     paths:
-      - Stalker-GW
-    expire_in: 1 week
-  when: manual
-  tags:
-    - saas-linux-medium-amd64
+      - dist/linux/
 
 build-windows:
   stage: build
   image: ivangabriele/tauri:debian-bookworm-20
+  rules:
+    - if: $CI_COMMIT_TAG
   before_script:
-    - apt-get -y install nsis
-    - apt-get -y install clang
-    - apt-get -y install lld llvm
+    - apt-get update && apt-get -y install clang lld llvm jq zip
     - rustup target add x86_64-pc-windows-msvc
     - cargo install --locked cargo-xwin
     - source "$CARGO_HOME/env"
     - npm ci
   script:
     - npm run gen-icons
-    - npm run tauri-build-windows
-    - cp src-tauri/target/x86_64-pc-windows-msvc/release/Stalker-GW.exe Stalker-GW.exe
+    - npm run tauri build -- --target x86_64-pc-windows-msvc --bundles none
+    - mkdir -p ./dist/windows
+    - cp src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe ./dist/windows/${APP_NAME}.exe
+    # Архивируем для апдейтера
+    - cd dist/windows && zip ${APP_NAME}_windows.zip ${APP_NAME}.exe && cd ../..
   artifacts:
-    name: Stalker-GW
     paths:
-      - Stalker-GW.exe
-    expire_in: 1 week
-  when: manual
-  tags:
-    - saas-linux-medium-amd64
+      - dist/windows/
+
+publish-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - build-linux
+    - build-windows
+  script:
+    - apk add git curl jq
+    # 1. Загружаем именно архивы с бинарниками
+    - |
+      for file in dist/linux/*.tar.gz dist/windows/*.zip; do
+        FILENAME=$(basename "$file")
+        curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$file" "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${FILENAME}"
+      done
+
+    # 2. Ссылки на скачивание
+    - LINUX_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_linux.tar.gz"
+    - WIN_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_windows.zip"
+
+    # 3. Извлекаем подписи (Tauri кладет их в папку target/release/bundle/appimage_или_другая/*.sig)
+    # Если вы используете портативный бинарник, убедитесь, что TAURI_SIGNING_PRIVATE_KEY установлен.
+    # Tauri создаст файлы .sig в папке сборки.
+    - SIG_LINUX=$(cat src-tauri/target/release/${APP_NAME}.sig || echo "no-sig")
+    - SIG_WIN=$(cat src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe.sig || echo "no-sig")
+
+    # 4. Генерация updater.json
+    - |
+      printf '{\n  "version": "%s",\n  "notes": "Portable Release %s",\n  "pub_date": "%s",\n  "platforms": {\n    "linux-x86_64": { "signature": "%s", "url": "%s" },\n    "windows-x86_64": { "signature": "%s", "url": "%s" }\n  }\n}' \
+      "$CI_COMMIT_TAG" "$CI_COMMIT_TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIG_LINUX" "$LINUX_URL" "$SIG_WIN" "$WIN_URL" > updater.json
+
+    # 5. Пуш в репозиторий
+    - git config --global user.email "ci@gitlab.com"
+    - git config --global user.name "CI Bot"
+    - git remote set-url origin https://oauth2:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git
+    - git checkout main
+    - git add updater.json
+    - git commit -m "chore: update updater.json to $CI_COMMIT_TAG [skip ci]"
+    - git push origin main
+  release:
+    name: 'Release $CI_COMMIT_TAG'
+    tag_name: '$CI_COMMIT_TAG'
+    description: 'Portable binaries for Stalker-GW'
+    assets:
+      links:
+        - name: 'Linux Binary (tar.gz)'
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_linux.tar.gz"
+        - name: 'Windows Binary (zip)'
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_windows.zip"
