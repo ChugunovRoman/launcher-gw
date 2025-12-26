@@ -62,7 +62,7 @@ build-windows:
   artifacts:
     paths:
       - dist/windows/
-
+jobs:publish-release:script config should be a string or a nested array of strings up to 10 levels deep
 publish-release:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
@@ -73,32 +73,25 @@ publish-release:
     - build-windows
   before_script:
     - apk add --no-cache git curl jq
-  script:
-    # 1. Загрузка файлов по отдельности (убираем цикл для стабильности YAML)
-    - |
+  script: |
       curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/linux/${APP_NAME}_linux.tar.gz "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_linux.tar.gz"
-    - |
       curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/windows/${APP_NAME}_windows.zip "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_windows.zip"
 
-    # 2. Формирование переменных ссылок
-    - LINUX_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_linux.tar.gz"
-    - WIN_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_windows.zip"
+      LINUX_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_linux.tar.gz"
+      WIN_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}_windows.zip"
 
-    # 3. Чтение сигнатур (добавляем проверку на существование файла)
-    - SIG_LINUX=$(cat src-tauri/target/release/${APP_NAME}.sig || echo "")
-    - SIG_WIN=$(cat src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe.sig || echo "")
+      SIG_LINUX=$(cat src-tauri/target/release/${APP_NAME}.sig || echo "")
+      SIG_WIN=$(cat src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe.sig || echo "")
 
-    # 4. Создание updater.json (используем одинарные кавычки для обертки команды printf)
-    - 'printf "{\n  \"version\": \"%s\",\n  \"notes\": \"Release %s\",\n  \"pub_date\": \"%s\",\n  \"platforms\": {\n    \"linux-x86_64\": { \"signature\": \"%s\", \"url\": \"%s\" },\n    \"windows-x86_64\": { \"signature\": \"%s\", \"url\": \"%s\" }\n  }\n}" "$CI_COMMIT_TAG" "$CI_COMMIT_TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIG_LINUX" "$LINUX_URL" "$SIG_WIN" "$WIN_URL" > updater.json'
+      'printf "{\n  \"version\": \"%s\",\n  \"notes\": \"Release %s\",\n  \"pub_date\": \"%s\",\n  \"platforms\": {\n    \"linux-x86_64\": { \"signature\": \"%s\", \"url\": \"%s\" },\n    \"windows-x86_64\": { \"signature\": \"%s\", \"url\": \"%s\" }\n  }\n}" "$CI_COMMIT_TAG" "$CI_COMMIT_TAG" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIG_LINUX" "$LINUX_URL" "$SIG_WIN" "$WIN_URL" > updater.json'
 
-    # 5. Пуш файла updater.json обратно в репозиторий
-    - git config --global user.email "ci@gitlab.com"
-    - git config --global user.name "CI Bot"
-    - git remote set-url origin https://oauth2:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git
-    - git checkout main || git checkout -b main
-    - git add updater.json
-    - git commit -m "chore: update updater.json to $CI_COMMIT_TAG [skip ci]" || echo "No changes to commit"
-    - git push origin main
+      git config --global user.email "ci@gitlab.com"
+      git config --global user.name "CI Bot"
+      git remote set-url origin https://oauth2:${GITLAB_TOKEN}@gitlab.com/${CI_PROJECT_PATH}.git
+      git checkout main || git checkout -b main
+      git add updater.json
+      git commit -m "chore: update updater.json to $CI_COMMIT_TAG [skip ci]" || echo "No changes to commit"
+      git push origin main
   release:
     name: 'Release $CI_COMMIT_TAG'
     tag_name: '$CI_COMMIT_TAG'
