@@ -34,7 +34,7 @@ build-linux:
     - npm run tauri build
     - mkdir -p ./dist/linux
     - cp src-tauri/target/release/${APP_NAME} ./dist/linux/${APP_NAME}
-    - npm run tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" src-tauri/target/release/${APP_NAME}
+    - npx tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" src-tauri/target/release/${APP_NAME}
     - cp src-tauri/target/release/${APP_NAME}.sig ./dist/linux/ || echo "No linux sig found"
     - ls -la src-tauri/target/release
     - ls -la dist/linux
@@ -61,7 +61,7 @@ build-windows:
     - npm run tauri-build-windows
     - mkdir -p ./dist/windows
     - cp src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe ./dist/windows/${APP_NAME}.exe
-    - npm run tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe
+    - npx tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe
     - cp src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe.sig ./dist/windows/ || echo "No windows sig found"
     - ls -la src-tauri/target/x86_64-pc-windows-msvc/release
     - ls -la dist/windows
