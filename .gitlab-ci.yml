@@ -60,7 +60,7 @@ build-windows:
     - apt-get -y install nsis clang lld llvm jq zip
     - rustup target add x86_64-pc-windows-msvc
     - cargo install --locked --quiet cargo-xwin
-    - yarn install --frozen-lockfile
+    - npm ci
   script:
     - npm run gen-icons
     - npm run tauri-build-windows
