@@ -34,9 +34,8 @@ build-linux:
     - npm run tauri build
     - mkdir -p ./dist/linux
     - cp src-tauri/target/release/${APP_NAME} ./dist/linux/${APP_NAME}
-    - echo -n "$TAURI_SIGNING_PRIVATE_KEY" > ./private.key
-    - npx tauri signer sign -k ./private.key -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" src-tauri/target/release/${APP_NAME} > ./dist/linux/${APP_NAME}.sig
-    - rm ./private.key
+    - npx tauri signer sign -k $TAURI_SIGNING_PRIVATE_KEY -p $TAURI_SIGNING_PRIVATE_KEY_PASSWORD src-tauri/target/release/${APP_NAME}
+    - cp src-tauri/target/release/${APP_NAME}.sig ./dist/linux/ || echo "No linux sig found"
     - ls -la src-tauri/target/release
     - ls -la dist/linux
     - cd dist/linux && tar -czf ${APP_NAME}_linux.tar.gz ${APP_NAME} && cd ../..
