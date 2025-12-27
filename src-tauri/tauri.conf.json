@@ -77,6 +77,7 @@
     "homepage": "https://vk.com/wargreat",
     "active": false,
     "targets": [],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/icon.png"
     ],
