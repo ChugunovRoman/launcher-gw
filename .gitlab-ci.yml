@@ -52,8 +52,6 @@ build-linux:
 build-windows:
   stage: build
   image: ivangabriele/tauri:debian-bookworm-20
-  tags:
-    - saas-linux-medium-amd64
   rules:
     - if: $CI_COMMIT_TAG
   before_script:
