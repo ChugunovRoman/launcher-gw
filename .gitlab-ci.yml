@@ -61,7 +61,6 @@ build-windows:
     - rustup default stable
     - rustup target add x86_64-pc-windows-msvc
     - cargo install --locked cargo-xwin
-    - source "$CARGO_HOME/env"
     - npm ci
   script:
     - npm run gen-icons
