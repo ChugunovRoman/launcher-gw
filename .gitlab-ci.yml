@@ -31,7 +31,7 @@ build-linux:
     - npm run gen-icons
     - source "$CARGO_HOME/env"
     # Собираем только бинарник
-    - npm run tauri build -- --bundles none
+    - npm run tauri build
     - mkdir -p ./dist/linux
     - cp src-tauri/target/release/${APP_NAME} ./dist/linux/${APP_NAME}
     # Tauri генерирует .sig для апдейтов при наличии ключей в ENV
@@ -54,7 +54,7 @@ build-windows:
     - npm ci
   script:
     - npm run gen-icons
-    - npm run tauri build -- --target x86_64-pc-windows-msvc --bundles none
+    - npm run tauri build
     - mkdir -p ./dist/windows
     - cp src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe ./dist/windows/${APP_NAME}.exe
     # Архивируем для апдейтера
