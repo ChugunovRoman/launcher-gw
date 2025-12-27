@@ -3,12 +3,10 @@ stages:
   - release
 
 variables:
+  CARGO_INCREMENTAL: "0"
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
   APP_NAME: "Stalker-GW"
-  GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-  TAURI_SIGNING_PRIVATE_KEY: ${secrets.TAURI_SIGNING_PRIVATE_KEY}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: $secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 cache:
   key: "$CI_COMMIT_REF_SLUG"
@@ -37,10 +35,10 @@ build-linux:
     - npm run tauri build
     - mkdir -p ./dist/linux
     - cp src-tauri/target/release/${APP_NAME} ./dist/linux/${APP_NAME}
-    - echo "$GITHUB_TOKEN"
-    - echo "$TAURI_SIGNING_PRIVATE_KEY"
-    - echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
-    - npx tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" src-tauri/target/release/${APP_NAME}
+    - echo "${GITLAB_TOKEN}"
+    - echo "${TAURI_SIGNING_PRIVATE_KEY}"
+    - echo "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}"
+    - npx tauri signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" src-tauri/target/release/${APP_NAME}
     - cp src-tauri/target/release/${APP_NAME}.sig ./dist/linux/ || echo "No linux sig found"
     - ls -la src-tauri/target/release
     - ls -la dist/linux
@@ -66,10 +64,10 @@ build-windows:
     - npm run tauri-build-windows
     - mkdir -p ./dist/windows
     - cp src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe ./dist/windows/${APP_NAME}.exe
-    - echo "$GITHUB_TOKEN"
-    - echo "$TAURI_SIGNING_PRIVATE_KEY"
-    - echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
-    - npx tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe
+    - echo "${GITLAB_TOKEN}"
+    - echo "${TAURI_SIGNING_PRIVATE_KEY}"
+    - echo "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}"
+    - npx tauri signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe
     - cp src-tauri/target/x86_64-pc-windows-msvc/release/${APP_NAME}.exe.sig ./dist/windows/ || echo "No windows sig found"
     - ls -la src-tauri/target/x86_64-pc-windows-msvc/release
     - ls -la dist/windows
