@@ -9,14 +9,6 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../build"
   },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlGMTg0NkEzMkU1OTcxRjkKUldUNWNWa3VvMFlZbjlZTDZqT3Zkb2tuZlVHaS9ETHphTzBMbFJFaWExYWlHRkM3S0pLQXFyQUgK",
-      "endpoints": [
-        "https://gitlab.com/great-war/launcher-new/-/raw/master/updater.json"
-      ]
-    }
-  },
   "app": {
     "windows": [
       {
@@ -63,8 +55,7 @@
             "clipboard-manager:allow-write-image",
             "clipboard-manager:allow-read-image",
             "clipboard-manager:allow-read-text",
-            "clipboard-manager:allow-write-text",
-            "updater:default"
+            "clipboard-manager:allow-write-text"
           ]
         }
       ]
