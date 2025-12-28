@@ -30,6 +30,9 @@
       "versions": "Version Management",
       "settings": "Launcher Settings"
     },
+    "settings": {
+      "clientUuid": "Client ID"
+    },
     "launch": {
       "start": "Launch",
       "download": "Download version",
