@@ -14,10 +14,18 @@ use reqwest::{
 };
 
 use crate::{
-  consts::REPO_LAUNCGER_ID,
+  consts::{GITLAB_PID, REPO_LAUNCGER_ID},
   providers::{
     ApiProvider::ApiProvider,
-    Gitlab::{files::*, group::*, issues::*, models::ManifestGitlab, release::*, repo::*},
+    Gitlab::{
+      files::*,
+      group::*,
+      issues::*,
+      launcher::*,
+      models::{ManifestGitlab, ReleaseGitlab},
+      release::*,
+      repo::*,
+    },
     dto::{Issue, *},
   },
   service::main::LogCallback,
@@ -89,7 +97,7 @@ impl ApiProvider for Gitlab {
   }
 
   fn id(&self) -> &'static str {
-    "gitlab"
+    GITLAB_PID
   }
   async fn ping(&self) -> ProviderStatus {
     log::info!("Start PING provider: {}, url: {}", self.id(), &self.host);
@@ -155,6 +163,9 @@ impl ApiProvider for Gitlab {
   async fn get_blob_stream(&self, project_id: &u32, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
     __get_blob_stream(self, project_id, blob_sha).await
   }
+  async fn get_blob_by_url_stream(&self, link: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+    __get_blob_by_url_stream(self, link).await
+  }
   async fn tree(&self, repo_id: u32, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>> {
     __tree(self, repo_id, search_params).await
   }
@@ -178,6 +189,9 @@ impl ApiProvider for Gitlab {
   }
 
   // Release
+  async fn get_launcher_latest_release(&self, project_id: u32) -> Result<ReleaseGitlab> {
+    __get_launcher_latest_release(self, project_id).await
+  }
   async fn get_releases(&self) -> Result<Vec<Release>> {
     __get_releases(self).await
   }

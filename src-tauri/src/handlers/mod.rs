@@ -11,6 +11,7 @@ pub mod process;
 pub mod release;
 pub mod service;
 pub mod start_download_version;
+pub mod updater;
 pub mod upload;
 pub mod user_ltx;
 pub mod window;

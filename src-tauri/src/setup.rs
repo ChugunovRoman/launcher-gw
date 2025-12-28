@@ -14,6 +14,7 @@ use tauri::{App, Emitter};
 use crate::handlers::start_download_version::CancelMap;
 use crate::service::files::ServiceFiles;
 use crate::service::get_release::ServiceGetRelease;
+use crate::service::updater::ServiceUpdater;
 use crate::service::wake_detector::WakeDetector;
 use crate::utils::errors::log_full_error;
 use crate::{
@@ -82,6 +83,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let service_files_arc = Arc::new(ServiceFiles::new(move |release_name, bytes, speed| {
     let _ = handle2.emit("download-speed-status", (release_name, &bytes, &speed));
   }));
+  let service_updater_arc = Arc::new(ServiceUpdater::new());
   let service_clone = service_arc.clone();
 
   let user_data_placeholder = Arc::new(Mutex::new(Option::<UserData>::None));
@@ -103,6 +105,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(user_data_placeholder.clone());
   app.manage(service_arc);
   app.manage(service_files_arc);
+  app.manage(service_updater_arc);
   app.manage(Arc::new(StdMutex::new(HashMap::new())) as CancelMap);
 
   log::info!("init App State Completed");

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions } from '../store/main';
+import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded } from '../store/main';
 import { ConnectStatus } from "../consts";
 import { versions, updateEachVersion, hasAnyLocalVersion } from '../store/upload';
 import { get } from 'svelte/store';
@@ -55,7 +55,16 @@ export async function initMainListeners() {
     }));
     versionsWillBeLoaded.set(true);
   }));
+  unlisten.set('launcher-new-version', await listen('launcher-new-version', (event: Event<string>) => {
+    console.log('launcher-new-version:', event.payload);
+    newLauncherVersionDownloaded.set(event.payload);
+  }));
+
   unlisten.set('config-loaded', await listen('config-loaded', (event: Event<AppConfig>) => {
+    invoke<boolean>('update').then(value => {
+      console.log('launcher update:', value);
+      showDlgRestartApp.set(value);
+    });
     console.log("config-loaded ! payload: ", event.payload);
     appConfig.set(event.payload);
     const progressDownloads = event.payload.progress_download;

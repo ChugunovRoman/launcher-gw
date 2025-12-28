@@ -59,6 +59,26 @@ pub struct Group {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseAssetLinkGitlab {
+  pub id: u32,
+  pub name: String,
+  pub url: String,
+  pub direct_asset_url: String,
+  pub link_type: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseAssetGitlab {
+  pub count: u32,
+  pub links: Vec<ReleaseAssetLinkGitlab>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseGitlab {
+  pub name: String,
+  pub tag_name: String,
+  pub assets: ReleaseAssetGitlab,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueAuthorGitlab {
   pub id: u32,
   pub username: String,

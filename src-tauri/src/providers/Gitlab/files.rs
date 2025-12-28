@@ -34,7 +34,11 @@ pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Re
 pub async fn __get_blob_stream(s: &Gitlab, project_id: &u32, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
   let url = format!("{}/projects/{}/repository/blobs/{}/raw", s.host, project_id, blob_sha);
 
-  let response = s.get(&url).send().await.context("Failed to send blob download request")?;
+  __get_blob_by_url_stream(s, &url).await
+}
+
+pub async fn __get_blob_by_url_stream(s: &Gitlab, url: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+  let response = s.get(url).send().await.context("Failed to send blob download request")?;
 
   if !response.status().is_success() {
     let status = response.status();

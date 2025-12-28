@@ -57,6 +57,9 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::compress::extract_archive,
     // permissions
     handlers::permissions::allow_pack_mod,
+    // updater
+    handlers::updater::update,
+    handlers::updater::restart_app,
     // logger
     handlers::logger::log_debug,
     handlers::logger::log_info,

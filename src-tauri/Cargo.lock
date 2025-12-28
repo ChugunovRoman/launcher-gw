@@ -21,6 +21,7 @@ dependencies = [
  "reqwest",
  "scopeguard",
  "self-replace",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

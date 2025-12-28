@@ -10,6 +10,8 @@
   import MenuBar from "./Components/MenuBar.svelte";
   import LinksBar from "./Components/LinksBar.svelte";
 
+  import RestartApp from "./Dialogs/RestartApp.svelte";
+
   import MainView from "./Views/Main.svelte";
   import SettingsView from "./Views/Settings.svelte";
   import PackView from "./Views/Pack.svelte";
@@ -111,6 +113,8 @@
       <LinksBar />
     </div>
   </div>
+
+  <RestartApp />
 </main>
 
 <style>

@@ -1,4 +1,4 @@
-use crate::consts::VERSIONS_DIR;
+use crate::consts::{BASE_DIR, CONFIG_NAME, VERSIONS_DIR};
 use crate::handlers::dto::ReleaseManifest;
 use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
@@ -229,7 +229,7 @@ impl AppConfig {
   pub fn load_or_create(app_handle: &tauri::AppHandle) -> Result<Self> {
     let config_dir = app_handle
       .path()
-      .resolve("config.json", BaseDirectory::AppConfig)
+      .resolve(BASE_DIR, BaseDirectory::AppConfig)
       .context("Failed to resolve config directory")?
       .parent()
       .unwrap()
@@ -237,7 +237,7 @@ impl AppConfig {
 
     fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-    let config_path = config_dir.join("config.json");
+    let config_path = config_dir.join(CONFIG_NAME);
     let path = config_path
       .to_str()
       .ok_or_else(|| anyhow::anyhow!("Invalid UTF-8 in config path"))?
@@ -338,13 +338,13 @@ impl AppConfig {
   pub fn reload(&mut self, app_handle: &tauri::AppHandle) -> Result<()> {
     let config_dir = app_handle
       .path()
-      .resolve("config.json", BaseDirectory::AppConfig)
+      .resolve(CONFIG_NAME, BaseDirectory::AppConfig)
       .context("Failed to resolve config path")?
       .parent()
       .unwrap()
       .to_path_buf();
 
-    let config_path = config_dir.join("config.json");
+    let config_path = config_dir.join(CONFIG_NAME);
     if config_path.exists() {
       let content = fs::read_to_string(&config_path).context("Failed to read config.json during reload")?;
       *self = serde_json::from_str(&content).context("Failed to parse config.json during reload")?;

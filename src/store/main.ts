@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { createArrayStore, createMapStore } from './helpers';
+import { createMapStore } from './helpers';
 import { ConnectStatus } from '../consts';
 import { invoke } from '@tauri-apps/api/core';
 import { hasAnyLocalVersion } from './upload';
@@ -17,6 +17,9 @@ export const inDownloading = writable(false);
 export const versionsWillBeLoaded = writable(false);
 
 export const allowPackMod = writable(false);
+
+export const newLauncherVersionDownloaded = writable("");
+export const showDlgRestartApp = writable(false);
 
 export const loadedTokens = writable(false);
 export const tokens = writable<Map<string, string>>(new Map());

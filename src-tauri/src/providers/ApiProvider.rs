@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::Stream;
 
-use crate::providers::dto::*;
+use crate::providers::{Gitlab::models::ReleaseGitlab, dto::*};
 
 #[async_trait]
 pub trait ApiProvider: Send + Sync {
@@ -29,11 +29,13 @@ pub trait ApiProvider: Send + Sync {
 
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>>;
   async fn get_blob_stream(&self, project_id: &u32, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
+  async fn get_blob_by_url_stream(&self, link: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
   async fn tree(&self, repo_id: u32, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>>;
   async fn get_full_tree(&self, repo_id: u32) -> Result<Vec<TreeItem>>;
 
   async fn find_issue(&self, repo_id: &u32, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
 
+  async fn get_launcher_latest_release(&self, project_id: u32) -> Result<ReleaseGitlab>;
   async fn get_releases(&self) -> Result<Vec<Release>>;
   async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
   async fn get_release_repos_by_name(&self, release_name: String) -> Result<Vec<Project>>;

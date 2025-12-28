@@ -20,3 +20,13 @@ pub fn game_exe() -> String {
 
   binary_name
 }
+
+pub fn launcher_exe() -> String {
+  let binary_name = if cfg!(windows) {
+    "Stalker-GW.exe".to_owned()
+  } else {
+    "Stalker-GW".to_owned()
+  };
+
+  binary_name
+}
