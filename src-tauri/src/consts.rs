@@ -3,7 +3,7 @@ pub const REPO_LAUNCGER_ID_2: u32 = 77354883;
 pub const MANIFEST_NAME: &str = "manifest.json";
 pub const VERSIONS_DIR: &str = "versions";
 
-pub const BASE_DIR: &str = "gw_launcher";
+pub const BASE_DIR: &str = "com.ruut.stalker";
 pub const CONFIG_NAME: &str = "config.json";
 
 pub const BIN_DIR: &str = "bin";

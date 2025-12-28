@@ -1,19 +1,38 @@
 {
   "app": {
     "h": {
-      "connnecting": "(Connecting to the server...)",
-      "connnected": "(Successfully connected to the server)",
-      "connnect_error": "(Server connection error. Functionality is limited.)"
+      "connnecting": "(connecting to server...)",
+      "connnected": "(connection to server established)",
+      "connnect_error": "(connection error. Functionality is limited.)",
+      "error": "Server connection error"
+    },
+    "common": {
+      "gbSfx": "GB",
+      "mbSfx": "MB",
+      "kbSfx": "KB",
+      "bSfx": "bytes"
+    },
+    "dlg": {
+      "attention": "Attention!",
+      "restartTxt1": "Global War Launcher has been updated to version",
+      "restartTxt2": "Restart the application?",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "input": {
+      "checks": {
+        "space": "Not enough free space on the selected drive! Required: "
+      }
     },
     "menu": {
-      "main": "Main Page",
-      "runparams": "Game Launch Parameters",
-      "versions": "Game version management",
+      "main": "Main",
+      "runparams": "Mod Launch Parameters",
+      "versions": "Version Management",
       "settings": "Launcher Settings"
     },
     "launch": {
-      "start": "Start Game",
-      "download": "Download a version",
+      "start": "Launch",
+      "download": "Download version",
       "inGame": "In Game..."
     },
     "save": {
@@ -29,33 +48,35 @@
       "runparams": "Mod Launch Parameters",
       "runparams_holder": "Enter additional launch arguments...",
       "settings": "Launcher Settings",
+      "pack": "Packing",
       "tokens": "Tokens",
       "releases": "Releases",
-      "pack": "Pack",
-      "unpack": "Unpack"
+      "installedVersions": "Installed Versions",
+      "allVersions": "Available Versions",
+      "unpack": "Unpacking"
     },
     "unpack": {
       "unpacking": "Unpacking",
       "start": "Unpack",
       "source": {
-        "placeholder": "Path to the folder containing the archive",
-        "btn": "Choose"
+        "placeholder": "Path to archive folder",
+        "btn": "Browse"
       },
       "target": {
-        "placeholder": "Destination folder for extracted files",
-        "btn": "Choose"
+        "placeholder": "Destination folder",
+        "btn": "Browse"
       }
     },
     "pack": {
       "packing": "Packing",
       "start": "Pack",
       "source": {
-        "placeholder": "Path to the game folder",
-        "btn": "Choose"
+        "placeholder": "Path to game folder",
+        "btn": "Browse"
       },
       "target": {
-        "placeholder": "Folder where the archive will be saved",
-        "btn": "Choose"
+        "placeholder": "Archive save folder",
+        "btn": "Browse"
       }
     },
     "tokens": {
@@ -67,30 +88,60 @@
       "save": "Save"
     },
     "releases": {
-      "add": "Add New Release",
-      "name": "Release Name",
-      "filespc": "Number of Files per Commit",
-      "path": "Path to the folder containing files created during packaging",
+      "add": "Add new release",
+      "name": "Release name",
+      "filespc": "Files per commit",
+      "path": "Path to folder with packed files",
       "browse": "Browse",
       "create": "Create",
-      "uploading": "Uploading Release",
+      "uploading": "Uploading release",
       "uploaded": "files uploaded: ",
-      "stoped": "Release Upload Paused",
-      "continue": "Resume Upload",
-      "installed": "Uploaded"
+      "stoped": "Release upload paused",
+      "continue": "Resume upload",
+      "selected": "Selected",
+      "toSelect": "Select",
+      "runVersion": "Launch",
+      "noAnyInstalledVersion": "No versions installed",
+      "delete": "Delete",
+      "installed": "Downloaded"
     },
     "params": {
-      "screen": "Screen Resolution:",
-      "vsync": "Vertical Sync",
-      "windowed": "Windowed Mode",
-      "presskey": "Waiting for Key Press",
-      "nostaging": "Load textures directly into video memory (-no_staging)",
-      "noprefetch": "Disable caching (-noprefetch)",
-      "dbg": "Enable Spawner (-dbg)",
-      "uidbg": "Enable UI Debugging Features (-uidbg)",
-      "checks": "Enable startup checks (-checks)",
+      "screen": "Screen resolution:",
+      "vsync": "V-Sync",
+      "windowed": "Windowed mode",
+      "presskey": "Wait for key press",
+      "nostaging": "Load textures directly to VRAM (-no_staging)",
+      "noprefetch": "Disable prefetch (-noprefetch)",
+      "dbg": "Enable spawner (-dbg)",
+      "uidbg": "Enable UI debug (-uidbg)",
+      "checks": "Enable start-up checks (-checks)",
       "checksnote": "(increases loading time)",
       "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)"
+    },
+    "download": {
+      "loadData": "Loading data...",
+      "inProgress": "Downloading version...",
+      "compressedSize": "Download size: ",
+      "totalSize": "Size after installation: ",
+      "installPath": "Default installation path",
+      "downloadDataPath": "Default download path (files will be deleted after installation)",
+      "continue": "Continue",
+      "addVersionName": "Add version name to path",
+      "cancel": "Cancel",
+      "start": "Download",
+      "wait": "Please wait",
+      "text": {
+        "init": "Preparing...",
+        "files": "Downloading files...",
+        "unpack": "Installing...",
+        "text": ""
+      },
+      "status": {
+        "progress": "Progress:",
+        "file": "File:",
+        "speed": "Download speed:",
+        "files": "files:"
+      }
     }
   },
   "social": {
