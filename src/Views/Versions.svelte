@@ -235,9 +235,11 @@
       console.log("updateEachVersion, v: ", v);
       return v;
     });
+  }
 
-    if (expandedIndex != null) {
-      const releaseName = $versions[expandedIndex]?.name;
+  function fetch(index: number) {
+    if (index != null) {
+      const releaseName = $versions[index]?.name;
       fetchVersionManifest(releaseName);
     }
   }
@@ -338,7 +340,14 @@
       {#each $versions as version, i}
         <div class="release-item">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div class="header" role="button" tabindex="0" onclick={() => toggleExpand(i + $localVersions.size)}>
+          <div
+            class="header"
+            role="button"
+            tabindex="0"
+            onclick={() => {
+              fetch(i);
+              toggleExpand(i + $localVersions.size);
+            }}>
             <span class="plus-icon">
               {#if $inDownloading}
                 <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
