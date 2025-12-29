@@ -5,7 +5,7 @@ stages:
 variables:
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
-  APP_NAME: "Stalker-GW"
+  APP_NAME: "Launcher"
 
 cache:
   key: "$CI_COMMIT_REF_SLUG"
@@ -72,7 +72,7 @@ publish-release:
   release:
     name: 'Release $CI_COMMIT_TAG'
     tag_name: '$CI_COMMIT_TAG'
-    description: 'Portable binaries for Stalker-GW'
+    description: 'Portable binaries for GW Launcher'
     assets:
       links:
         - name: 'Linux'

@@ -1,5 +1,5 @@
 [package]
-name = "Stalker-GW"
+name = "Launcher"
 version = "0.1.2"
 description = "A Tauri App"
 authors = ["Chugunov Roman"]
