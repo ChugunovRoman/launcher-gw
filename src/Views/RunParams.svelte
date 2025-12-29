@@ -2,14 +2,35 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { providersWasInited } from "../store/main";
+  import { LangType, RenderType } from "../consts";
+  import { BiMap } from "../utils/BiMap";
+
+  import Scroll from "../Components/Scroll.svelte";
+  import TrackBar from "../Components/TrackBar.svelte";
+
+  const langMap = new BiMap<LangType, string>([
+    [LangType.Rus, "Русский"],
+    [LangType.Eng, "English"],
+  ]);
+  const renderersMap = new BiMap<RenderType, string>([
+    [RenderType.RendererR2, "renderer_r2"],
+    [RenderType.RendererR25, "renderer_r2_5"],
+    [RenderType.RendererR3, "renderer_r3"],
+    [RenderType.RendererR4, "renderer_r4"],
+    [RenderType.RendererRgl, "renderer_rgl"],
+  ]);
 
   let saving = $state(false);
   let saving2 = $state(false);
 
   // Состояния формы
+  let fov = $state(50);
+  let hudFov = $state(60);
   let launchArgs = $state("");
   let selectedResolution = $state("");
   let vsyncEnabled = $state(true);
+  let selectedLang = $state(langMap.getValue(LangType.Rus) || "");
+  let selectedRenderer = $state(renderersMap.getValue(RenderType.RendererR4) || "");
 
   // Флаги
   let uiDebug = $state(false);
@@ -42,6 +63,10 @@
       checks,
       debug_spawn: debugSpawn,
       vid_mode: selectedResolution,
+      lang: langMap.getKey(selectedLang) || LangType.Rus,
+      render: renderersMap.getKey(selectedRenderer) || RenderType.RendererR4,
+      fov,
+      hud_fov: Number(Number(hudFov / 100).toFixed(2)),
     };
     await invoke<void>("update_run_params", { runParams });
     saving = true;
@@ -66,6 +91,10 @@
         checks = config.run_params.checks;
         debugSpawn = config.run_params.debug_spawn;
         selectedResolution = config.run_params.vid_mode;
+        selectedLang = langMap.getValue(config.run_params.lang as LangType)!;
+        selectedRenderer = renderersMap.getValue(config.run_params.render as RenderType)!;
+        fov = config.run_params.fov;
+        hudFov = Math.floor(config.run_params.hud_fov * 100);
       });
     }
   });
@@ -73,63 +102,103 @@
 
 <div class="launch-params-view">
   <h2>{$_("app.labels.runparams")}</h2>
-  <!-- Поле для ключей запуска -->
-  <div class="input-row">
-    <input type="text" bind:value={launchArgs} placeholder={$_("app.labels.runparams_holder")} class="launch-args-input" />
-    <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.clear")} </button>
-  </div>
 
-  <div class="options-row">
-    <label>
-      {$_("app.params.screen")}
-      <select bind:value={selectedResolution}>
-        {#each resolutions as res}
-          <option value={res}>{res}</option>
-        {/each}
-      </select>
-    </label>
+  <Scroll value={240}>
+    <!-- Поле для ключей запуска -->
+    <div class="input-row">
+      <input type="text" bind:value={launchArgs} placeholder={$_("app.labels.runparams_holder")} class="launch-args-input" />
+      <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.clear")} </button>
+    </div>
 
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={vsyncEnabled} />
-      {$_("app.params.vsync")}
-    </label>
-  </div>
+    <div class="options-row">
+      <label class="checkbox-label">
+        {$_("app.params.screen")}
+        <select bind:value={selectedResolution}>
+          {#each resolutions as res}
+            <option value={res}>{res}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
+    <div class="options-row">
+      <label class="checkbox-label">
+        {$_("app.params.gameLang")}
+        <select bind:value={selectedLang}>
+          {#each langMap as [type, name]}
+            <option value={name}>{name}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
+    <div class="options-row">
+      <label class="checkbox-label">
+        {$_("app.params.renderer")}
+        <select bind:value={selectedRenderer}>
+          {#each renderersMap as [type, name]}
+            <option value={name}>{$_(`app.renderer.${name}`)}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
 
-  <!-- Дополнительные флаги -->
-  <div class="flags-section">
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={windowedMode} />
-      {$_("app.params.windowed")}
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={waitForKeypress} />
-      {$_("app.params.presskey")}
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={noStaging} />
-      {$_("app.params.nostaging")}
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={noPrefetch} />
-      {$_("app.params.noprefetch")}
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={useSpawner} />
-      {$_("app.params.dbg")}
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={uiDebug} />
-      {$_("app.params.uidbg")}
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={checks} />
-      {$_("app.params.checks")} <span class="warntext">{$_("app.params.checksnote")}</span>
-    </label>
-    <label class="checkbox-label">
-      <input type="checkbox" bind:checked={debugSpawn} />
-      {$_("app.params.dbgsspwn")}
-    </label>
-  </div>
+    <div class="tracks-row">
+      <label class="checkbox-label">
+        {$_("app.params.fov")}: {fov}
+        <div style="width: 400px">
+          <TrackBar bind:value={fov} min={50} max={200} step={1} />
+        </div>
+      </label>
+    </div>
+
+    <div class="tracks-row">
+      <label class="checkbox-label">
+        {$_("app.params.hudFov")}: {hudFov}
+        <div style="width: 400px">
+          <TrackBar bind:value={hudFov} min={10} max={100} step={1} />
+        </div>
+      </label>
+    </div>
+
+    <!-- Дополнительные флаги -->
+    <div class="flags-section">
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={windowedMode} />
+        {$_("app.params.windowed")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={vsyncEnabled} />
+        {$_("app.params.vsync")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={waitForKeypress} />
+        {$_("app.params.presskey")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={noStaging} />
+        {$_("app.params.nostaging")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={noPrefetch} />
+        {$_("app.params.noprefetch")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={useSpawner} />
+        {$_("app.params.dbg")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={uiDebug} />
+        {$_("app.params.uidbg")}
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={checks} />
+        {$_("app.params.checks")} <span class="warntext">{$_("app.params.checksnote")}</span>
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" bind:checked={debugSpawn} />
+        {$_("app.params.dbgsspwn")}
+      </label>
+    </div>
+  </Scroll>
 
   <!-- Кнопка сохранения -->
   <span role="button" tabindex="0" onclick={handleSave} class="save-btn" class:save-btn__saving={saving} class:long_t={saving2}>
@@ -219,6 +288,12 @@
     background-color: rgba(255, 255, 255, 1);
   }
 
+  .tracks-row {
+    -webkit-app-region: no-drag;
+    display: flex;
+    flex-wrap: nowrap;
+  }
+
   .checkbox-label {
     -webkit-app-region: no-drag;
     display: flex;
@@ -226,6 +301,9 @@
     gap: 0.5rem;
     margin-bottom: 0.75rem;
     width: 60%;
+    backdrop-filter: blur(2px);
+    padding: 2px 8px;
+    background: rgb(0 0 0 / 42%);
   }
   .checkbox-label:hover {
     cursor: pointer;

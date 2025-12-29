@@ -4,7 +4,7 @@ use std::sync::Arc;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::Mutex;
 
-use crate::configs::AppConfig::{AppConfig, Version};
+use crate::configs::AppConfig::{AppConfig, LangType, RenderType, Version};
 use crate::configs::GameConfig::GameConfig;
 use crate::configs::{RunParams, TmpLtx, UserLtx};
 use crate::consts::*;
@@ -117,6 +117,16 @@ fn update_ltx_config(ltx: &mut GameConfig, run_params: &RunParams) {
 
   ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
 
+  let renderer = get_renderer(run_params.render.clone());
+  ltx.set("renderer".to_string(), renderer.clone());
+
+  let lang = get_lang(run_params.lang.clone());
+  ltx.set("g_language".to_string(), lang.clone());
+  ltx.set("g_language_ltx".to_string(), lang.clone());
+
+  ltx.set("fov".to_string(), run_params.fov.clone().to_string());
+  ltx.set("hud_fov".to_string(), run_params.hud_fov.clone().to_string());
+
   ltx.set(
     "keypress_on_start".to_string(),
     if run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
@@ -127,4 +137,20 @@ fn update_ltx_config(ltx: &mut GameConfig, run_params: &RunParams) {
   ltx.set("rs_fullscreen".to_string(), if run_params.windowed_mode { "0" } else { "1" }.to_string());
 
   ltx.save().ok();
+}
+
+fn get_lang(lng: LangType) -> String {
+  match lng {
+    LangType::Rus => "rus".to_string(),
+    LangType::Eng => "eng".to_string(),
+  }
+}
+fn get_renderer(renderer: RenderType) -> String {
+  match renderer {
+    RenderType::RendererR2 => "renderer_r2".to_string(),
+    RenderType::RendererR25 => "renderer_r2.5".to_string(),
+    RenderType::RendererR3 => "renderer_r3".to_string(),
+    RenderType::RendererR4 => "renderer_r4".to_string(),
+    RenderType::RendererRgl => "renderer_rgl".to_string(),
+  }
 }

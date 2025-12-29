@@ -6,6 +6,13 @@
       "connnect_error": "(ошибка подключения к серверу. Функциональность ограничена.)",
       "error": "Ошибка подключения к серверу"
     },
+    "renderer": {
+      "renderer_r2": "DirectX 9 (Базовый)",
+      "renderer_r2_5": "DirectX 9 (Нормальный)",
+      "renderer_r3": "DirectX 10 (Улучшенный)",
+      "renderer_r4": "DirectX 11 (Улучшенный)",
+      "renderer_rgl": "OpenGL"
+    },
     "common": {
       "gbSfx": "Гб",
       "mbSfx": "Mб",
@@ -119,7 +126,11 @@
       "uidbg": "Включить отладку интерфейса (-uidbg)",
       "checks": "Включить проверки при запуске игры (-checks)",
       "checksnote": "(увеличивает время загрузки)",
-      "dbgsspwn": "Включить debug_start_spawn (-dbgsspwn)"
+      "dbgsspwn": "Включить debug_start_spawn (-dbgsspwn)",
+      "gameLang": "Язык",
+      "renderer": "Тип рендера",
+      "fov": "FOV",
+      "hudFov": "FOV Худа"
     },
     "download": {
       "loadData": "Загрузка данных...",

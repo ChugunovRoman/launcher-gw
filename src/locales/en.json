@@ -6,6 +6,13 @@
       "connnect_error": "(connection error. Functionality is limited.)",
       "error": "Server connection error"
     },
+    "renderer": {
+      "renderer_r2": "DirectX 9 (Basic)",
+      "renderer_r2_5": "DirectX 9 (Normal)",
+      "renderer_r3": "DirectX 10 (Enhanced)",
+      "renderer_r4": "DirectX 11 (Enhanced)",
+      "renderer_rgl": "OpenGL"
+    },
     "common": {
       "gbSfx": "GB",
       "mbSfx": "MB",
@@ -119,7 +126,11 @@
       "uidbg": "Enable UI debug (-uidbg)",
       "checks": "Enable start-up checks (-checks)",
       "checksnote": "(increases loading time)",
-      "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)"
+      "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)",
+      "gameLang": "Game language",
+      "renderer": "Renderer type",
+      "fov": "FOV",
+      "hudFov": "HUD FOV"
     },
     "download": {
       "loadData": "Loading data...",

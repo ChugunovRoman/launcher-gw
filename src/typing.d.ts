@@ -82,6 +82,10 @@ declare interface RunParams {
   checks: boolean;
   debug_spawn: boolean;
   vid_mode: string;
+  render: string;
+  lang: string;
+  fov: number;
+  hud_fov: number;
   [index: string]: unknown;
 }
 declare interface AppConfig {

@@ -1,9 +1,9 @@
 <script lang="ts">
-  let { isDisabled = $bindable(false), isRed = $bindable(false), onclick } = $props();
+  let { children, isDisabled = $bindable(false), isRed = $bindable(false), onclick } = $props();
 </script>
 
 <span role="button" tabindex="0" class="btn" class:btn_inactive={isDisabled} class:btn_red={isRed} {onclick}>
-  <slot />
+  {@render children?.()}
 </span>
 
 <style>

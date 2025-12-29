@@ -86,6 +86,20 @@ pub struct FileProgress {
   pub is_downloaded: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum LangType {
+  Rus = 0,
+  Eng,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum RenderType {
+  RendererR2 = 0,
+  RendererR25,
+  RendererR3,
+  RendererR4,
+  RendererRgl,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunParams {
   #[serde(default)]
@@ -110,6 +124,12 @@ pub struct RunParams {
   pub debug_spawn: bool,
   #[serde(default)]
   pub vid_mode: String,
+  pub render: RenderType,
+  pub lang: LangType,
+  #[serde(default)]
+  pub fov: f64,
+  #[serde(default)]
+  pub hud_fov: f64,
 }
 
 impl Default for RunParams {
@@ -126,6 +146,10 @@ impl Default for RunParams {
       checks: false,
       debug_spawn: false,
       vid_mode: "800x600 (60Hz)".to_string(),
+      render: RenderType::RendererR4,
+      lang: LangType::Rus,
+      fov: 82.0,
+      hud_fov: 0.6,
     }
   }
 }
