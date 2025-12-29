@@ -4,7 +4,7 @@
   import { localVersions, providersWasInited } from "../store/main";
   import { onMount } from "svelte";
   import { currentView } from "../store/menu";
-  import { mainVersion, selectedVersion } from "../store/upload";
+  import { hasAnyLocalVersion, mainVersion, selectedVersion } from "../store/upload";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
@@ -61,6 +61,7 @@
     if ($mainVersion) {
       localVersions.setItem($mainVersion.name, $mainVersion);
       selectedVersion.set($mainVersion.name);
+      hasAnyLocalVersion.set(true);
     }
   });
 </script>
