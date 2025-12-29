@@ -8,6 +8,8 @@
   import { providersWasInited } from "../store/main";
   import { choosePath } from "../utils/path";
 
+  import Progress from "../Components/Progress.svelte";
+
   let packPath = $state("");
   let targetPath = $state("");
 
@@ -120,10 +122,7 @@
     </div>
   </div>
 
-  <div class="progress-container">
-    <div class="progress-bar" style="width: {Math.min(100, Math.max(0, $progress))}%;"></div>
-    <span class="progress-text">{Math.round($progress)}%</span>
-  </div>
+  <Progress progress={$progress} />
 
   <span
     role="button"
@@ -196,33 +195,6 @@
   }
   .choose-btn:hover {
     background-color: rgba(61, 93, 236, 1);
-  }
-
-  .progress-container {
-    width: 100%;
-    height: 24px;
-    background-color: #e0e0e0;
-    border-radius: 4px;
-    overflow: hidden;
-    position: relative;
-    margin: 8px 0;
-  }
-  .progress-bar {
-    height: 100%;
-    background: linear-gradient(to right, #2196f3, #4caf50);
-    transition: width 0.2s ease;
-  }
-  .progress-text {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 14px;
-    font-weight: 500;
-    color: #333;
-    text-shadow:
-      0 0 2px #fff,
-      0 0 2px #fff;
   }
 
   .packbtn {

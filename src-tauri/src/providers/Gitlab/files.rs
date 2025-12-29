@@ -1,9 +1,7 @@
-use bytes::Bytes;
-use std::collections::HashMap;
-use urlencoding::encode;
-
 use anyhow::{Context, Result, bail};
+use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
+use std::collections::HashMap;
 
 use crate::{
   consts::REPO_LAUNCGER_ID,

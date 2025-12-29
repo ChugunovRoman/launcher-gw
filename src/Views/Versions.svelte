@@ -21,6 +21,8 @@
   import { choosePath } from "../utils/path";
   import { getInGb, getInMb, parseBytes } from "../utils/dwn";
 
+  import Progress from "../Components/Progress.svelte";
+
   let expandedIndex = $state<number | null>(null);
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
@@ -468,10 +470,7 @@
               {/if}
               <div class="content-row input-group">
                 {#if version.inProgress}
-                  <div class="progress-container">
-                    <div class="progress-bar" style="width: {Math.min(0, Math.max(0, Number(version.downloadProgress.toFixed(2))))}%;"></div>
-                    <span class="progress-text">{Number(version.downloadProgress.toFixed(2))}%</span>
-                  </div>
+                  <Progress progress={version.downloadProgress} />
                 {/if}
                 {#if version.manifest}
                   {#if version.isStoped}
@@ -594,33 +593,6 @@
     100% {
       transform: rotate(360deg);
     }
-  }
-
-  .progress-container {
-    width: 100%;
-    height: 24px;
-    background-color: #e0e0e0;
-    border-radius: 4px;
-    overflow: hidden;
-    position: relative;
-    margin: 8px 0;
-  }
-  .progress-bar {
-    height: 100%;
-    background: linear-gradient(to right, #2196f3, #4caf50);
-    transition: width 0.2s ease;
-  }
-  .progress-text {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 14px;
-    font-weight: 500;
-    color: #333;
-    text-shadow:
-      0 0 2px #fff,
-      0 0 2px #fff;
   }
 
   .header {
