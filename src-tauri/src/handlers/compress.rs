@@ -19,10 +19,7 @@ pub async fn create_archive(
   targetPath: String,
   excludePatterns: Vec<String>,
 ) -> Result<String, String> {
-  let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| {
-    log_full_error(&e);
-    e.to_string()
-  })?;
+  let sevenz = resources::get_7zip_path();
 
   let archive_path = Path::new(&targetPath).join("game");
   let manifest_path = Path::new(&targetPath).join(MANIFEST_NAME).to_string_lossy().into_owned();
@@ -130,7 +127,7 @@ pub async fn extract_archive(
   archivePath: String, // путь к первому тому (например, "backup.7z" или "backup.7z.001")
   outputDir: String,   // куда распаковывать
 ) -> Result<String, String> {
-  let sevenz = resources::get_sevenz_path(&app_handle).map_err(|e| e.to_string())?;
+  let sevenz = resources::get_7zip_path();
 
   // Убедимся, что выходная директория существует
   std::fs::create_dir_all(&outputDir).map_err(|e| format!("Failed to create output directory: {}", e))?;

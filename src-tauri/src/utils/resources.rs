@@ -1,18 +1,49 @@
-use anyhow::{Result, bail};
-use std::path::PathBuf;
-use tauri::{Manager, path::BaseDirectory};
+use std::{env, fs, path::PathBuf};
 
-pub fn get_sevenz_path(app_handle: &tauri::AppHandle) -> Result<PathBuf> {
-  let binary_name = if cfg!(windows) { "7za.exe" } else { "7zzs" };
+#[cfg(windows)]
+const SEVEN_ZIP_BIN: &[u8] = include_bytes!("../../../bin/win/7za.exe");
+#[cfg(windows)]
+const SEVEN_ZZA_DLL: &[u8] = include_bytes!("../../../bin/win/7za.dll");
+#[cfg(windows)]
+const SEVEN_ZZXA_DLL: &[u8] = include_bytes!("../../../bin/win/7zxa.dll");
+#[cfg(unix)]
+const SEVEN_ZIP_BIN: &[u8] = include_bytes!("../../../bin/linux/7zzs");
 
-  let path = app_handle.path().resolve(binary_name, BaseDirectory::Resource)?;
+pub fn get_7zip_path() -> PathBuf {
+  // Используем временную директорию ОС
+  let mut temp_path = env::temp_dir();
+  let mut temp_path_dll_1 = env::temp_dir();
+  let mut temp_path_dll_2 = env::temp_dir();
 
-  // Проверка существования (полезно при отладке)
-  if !path.exists() {
-    bail!(format!("7zz not found at: {:?}", path))
+  #[cfg(windows)]
+  temp_path.push("7za.exe");
+  #[cfg(windows)]
+  temp_path_dll_1.push("7za.dll");
+  #[cfg(windows)]
+  temp_path_dll_2.push("7zxa.dll");
+  #[cfg(unix)]
+  temp_path.push("7zzs");
+
+  // Если файла еще нет в темпе, записываем его туда
+  if !temp_path.exists() {
+    fs::write(&temp_path, SEVEN_ZIP_BIN).expect("Failed to write 7zip binary to temp");
+
+    #[cfg(windows)]
+    fs::write(&temp_path_dll_1, SEVEN_ZZA_DLL).expect("Failed to write 7zip binary to temp");
+    #[cfg(windows)]
+    fs::write(&temp_path_dll_2, SEVEN_ZZXA_DLL).expect("Failed to write 7zip binary to temp");
+
+    // На Linux/macOS нужно дать права на выполнение
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let mut perms = fs::metadata(&temp_path).unwrap().permissions();
+      perms.set_mode(0o755);
+      fs::set_permissions(&temp_path, perms).unwrap();
+    }
   }
 
-  Ok(path)
+  temp_path
 }
 
 pub fn game_exe() -> String {
