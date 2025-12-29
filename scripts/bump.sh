@@ -17,6 +17,9 @@ fi
 
 if [ -f "src-tauri/Cargo.toml" ]; then
   sed -i "0,/version = \".*\"/s//version = \"$NEW_VERSION\"/" src-tauri/Cargo.toml
+
+  cd src-tauri && cargo check
+  cd ..
 fi
 
 git add .
