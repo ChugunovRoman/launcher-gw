@@ -73,7 +73,7 @@
 
   <div class="input-group">
     <!-- svelte-ignore a11y_label_has_associated_control -->
-    <label class="input-label">{$_("app.download.installPath")}</label>
+    <label class="input-label">{$_("app.download.defaultInstallPath")}</label>
     <div class="input-row">
       <input type="text" readonly bind:value={$appConfig.default_installed_path} placeholder={$_("app.download.installPath")} class="uuid-input" />
       <button type="button" onclick={selectInstallPath} class="copy-btn">
@@ -83,7 +83,7 @@
   </div>
   <div class="input-group">
     <!-- svelte-ignore a11y_label_has_associated_control -->
-    <label class="input-label">{$_("app.download.downloadDataPath")}</label>
+    <label class="input-label">{$_("app.download.defaultDownloadDataPath")}</label>
     <div class="input-row">
       <input
         type="text"

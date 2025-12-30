@@ -32,23 +32,40 @@ export async function initMainListeners() {
   unlisten.set('versions-loaded', await listen('versions-loaded', async (event: Event<Version[]>) => {
     console.log("versions-loaded ! payload: ", event.payload);
 
-    const { default_download_path, default_installed_path } = get(appConfig);
+    const { default_download_path, default_installed_path, progress_download } = get(appConfig);
     const separ = await sep();
 
     versions.set(event.payload.map(version => {
+      const progress = progress_download[version.name];
+      let installed_path = version.installed_path === "" ? `${default_installed_path}${separ}${version.path}` : version.installed_path;
+      let download_path = version.download_path === "" ? `${default_download_path}${separ}${version.path}_data` : version.download_path;
+      let downloadProgress = 0.0;
+      let downloadedFilesCnt = 0;
+      let totalFileCount = 0;
+      let isStoped = false;
+
+      if (progress) {
+        installed_path = progress.installed_path;
+        download_path = progress.download_path;
+        downloadedFilesCnt = progress.downloaded_files_cnt;
+        totalFileCount = progress.total_file_count;
+        isStoped = true;
+        downloadProgress = (downloadedFilesCnt / totalFileCount) * 100.0;
+      }
+
       return {
         ...version,
-        installed_path: version.installed_path === "" ? `${default_installed_path}${separ}${version.path}` : version.installed_path,
-        download_path: version.download_path === "" ? `${default_download_path}${separ}${version.path}_data` : version.download_path,
+        installed_path,
+        download_path,
         is_local: false,
         inProgress: false,
-        isStoped: false,
+        isStoped,
         downloadedFileBytes: 0,
         downloadSpeed: 0.0,
         downloadCurrentFile: "",
-        downloadProgress: 0.0,
-        downloadedFilesCnt: 0,
-        totalFileCount: 0,
+        downloadProgress,
+        downloadedFilesCnt,
+        totalFileCount,
         speedValue: 0,
         sfxValue: "",
       }
@@ -67,31 +84,7 @@ export async function initMainListeners() {
     });
     console.log("config-loaded ! payload: ", event.payload);
     appConfig.set(event.payload);
-    const progressDownloads = event.payload.progress_download;
 
     fetchLocalVersions();
-
-    updateEachVersion((version => {
-      const progress = progressDownloads[version.name];
-      if (progress) {
-        return {
-          ...version,
-          installed_path: progress.installed_path,
-          download_path: progress.download_path,
-          inProgress: false,
-          isStoped: true,
-          downloadedFileBytes: 0,
-          downloadSpeed: 0.0,
-          downloadCurrentFile: "",
-          downloadProgress: 0.0,
-          downloadedFilesCnt: progress.downloaded_files_cnt,
-          totalFileCount: progress.total_file_count,
-          speedValue: 0,
-          sfxValue: "",
-        }
-      }
-
-      return version;
-    }));
   }));
 }

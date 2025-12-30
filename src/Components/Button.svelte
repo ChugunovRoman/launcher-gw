@@ -1,8 +1,8 @@
 <script lang="ts">
-  let { children, isDisabled = $bindable(false), isRed = $bindable(false), onclick } = $props();
+  let { children, isDisabled = $bindable(false), isRed = $bindable(false), isYellow = $bindable(false), onclick, style } = $props();
 </script>
 
-<span role="button" tabindex="0" class="btn" class:btn_inactive={isDisabled} class:btn_red={isRed} {onclick}>
+<span role="button" {style} tabindex="0" class="btn" class:btn_inactive={isDisabled} class:btn_red={isRed} class:btn_yellow={isYellow} {onclick}>
   {@render children?.()}
 </span>
 
@@ -33,5 +33,12 @@
   }
   .btn_red:hover {
     background-color: rgba(251, 50, 0, 1);
+  }
+
+  .btn_yellow {
+    background-color: rgba(236, 180, 61, 0.9);
+  }
+  .btn_yellow:hover {
+    background-color: rgba(236, 180, 61, 1);
   }
 </style>

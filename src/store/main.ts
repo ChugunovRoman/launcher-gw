@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 import { createMapStore } from './helpers';
 import { ConnectStatus } from '../consts';
 import { invoke } from '@tauri-apps/api/core';
-import { hasAnyLocalVersion } from './upload';
+import { hasAnyLocalVersion, removeVersion } from './upload';
 
 export const appConfig = writable<AppConfig>({
   default_installed_path: "",
@@ -43,6 +43,7 @@ export async function fetchLocalVersions() {
   const common = versions_1.concat(versions_2);
   for (const version of common) {
     localVersions.setItem(version.name, version);
+    removeVersion(version.name);
   }
 
   if (common.length) {

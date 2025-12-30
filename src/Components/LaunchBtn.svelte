@@ -4,20 +4,21 @@
   import { localVersions, providersWasInited } from "../store/main";
   import { onMount } from "svelte";
   import { currentView } from "../store/menu";
-  import { hasAnyLocalVersion, mainVersion, selectedVersion } from "../store/upload";
+  import { hasAnyLocalVersion, mainVersion, selectedVersion, versions } from "../store/upload";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
   let interval: number | undefined = undefined;
 
   const launchApp = async () => {
-    if (!$mainVersion) {
+    if (!$mainVersion && !$selectedVersion) {
       currentView.select("versions");
     }
     if (pid && pid > 0) return;
 
     try {
-      pid = await invoke<number>("run_game", { version: $mainVersion });
+      const version = $localVersions.get($selectedVersion!);
+      pid = await invoke<number>("run_game", { version: $mainVersion || version });
       await checkProcess();
       interval = setInterval(checkProcess, 1000);
     } catch (err) {

@@ -22,6 +22,7 @@
   import { getInGb, getInMb, parseBytes } from "../utils/dwn";
 
   import Progress from "../Components/Progress.svelte";
+  import Button from "../Components/Button.svelte";
 
   let expandedIndex = $state<number | null>(null);
   let input1Checks = $state<string | null>(null);
@@ -40,7 +41,7 @@
     }));
   }
 
-  async function handleContinueDownload(event: Event, releaseName: string) {
+  async function handleContinueDownload(releaseName: string) {
     console.log("Start handleContinueDownload");
 
     updateVersion(releaseName, () => ({
@@ -79,9 +80,10 @@
     await invoke<void>("remove_download_version", {
       versionName: releaseName,
     });
+    await invoke<void>("clear_progress_version", { versionName: releaseName });
   }
   async function handlePauseDownload(event: Event, releaseName: string) {
-    await handleCancelDownload(event, releaseName);
+    await cancelDownload(event, releaseName);
     updateVersion(releaseName, () => ({
       inProgress: false,
       isStoped: true,
@@ -377,6 +379,10 @@
                 {version.name}
               {/if}
             </span>
+            {#if version.isStoped}
+              <Button style="padding: 6px 20px; margin-left: auto" isYellow onclick={() => handleContinueDownload(version.name)}
+                >{$_("app.download.continue")}</Button>
+            {/if}
           </div>
           {#if expandedIndex === i + $localVersions.size}
             <div class="expanded-content">
@@ -411,7 +417,7 @@
                   {/if}
                 </span>
               </div>
-              {#if !version.inProgress}
+              {#if !version.inProgress && !version.isStoped}
                 <div class="input-group">
                   <label class="checkbox-label">
                     <input type="checkbox" bind:checked={addVersionName} onchange={(e) => onChangeAddNamePath(version)} />
@@ -450,12 +456,12 @@
                   {/if}
                 </div>
               {/if}
-              {#if !version.inProgress}
+              {#if !version.inProgress && !version.isStoped}
                 <div style="margin-bottom: 50px;"></div>
               {:else}
                 <div class="content-row input-group">
                   <span>
-                    {getStatusText(version.status)}
+                    {getStatusText(version.status as DownloadStatus)}
                     {$_("app.download.status.progress")}
                     {version.downloadProgress.toFixed(2)}% {$_("app.download.status.files")}
                     {version.downloadedFilesCnt}/{version.totalFileCount}
@@ -469,35 +475,36 @@
                 </div>
               {/if}
               <div class="content-row input-group">
-                {#if version.inProgress}
+                {#if version.inProgress || version.isStoped}
                   <Progress progress={version.downloadProgress} />
                 {/if}
-                {#if version.manifest}
-                  {#if version.isStoped}
-                    <button type="button" onclick={(e) => handleContinueDownload(e, version.name)} class="download-btn icon-btn continue-btn">
-                      <Play size={12} />
-                    </button>
-                  {:else if version.inProgress}
-                    <button type="button" onclick={(e) => handlePauseDownload(e, version.name)} class="download-btn icon-btn continue-btn">
-                      <Pause size={12} />
-                    </button>
-                    <button type="button" onclick={(e) => handleCancelDownload(e, version.name)} class="download-btn icon-btn cancel-btn">
-                      <Stop size={12} />
-                    </button>
-                  {:else}
+                {#if version.isStoped}
+                  <button type="button" onclick={(e) => handleContinueDownload(version.name)} class="download-btn icon-btn continue-btn">
+                    <Play size={12} />
+                  </button>
+                {:else if version.inProgress}
+                  <button type="button" onclick={(e) => handlePauseDownload(e, version.name)} class="download-btn icon-btn continue-btn">
+                    <Pause size={12} />
+                  </button>
+                  <button type="button" onclick={(e) => handleCancelDownload(e, version.name)} class="download-btn icon-btn cancel-btn">
+                    <Stop size={12} />
+                  </button>
+                {/if}
+                {#if !version.isStoped && !version.inProgress}
+                  {#if version.manifest}
                     <button type="button" onclick={(e) => handleStartDownload(e, version.name)} class="download-btn">
                       {$_("app.download.start")}
                     </button>
+                  {:else}
+                    <button type="button" class="download-btn in-process">
+                      {$_("app.download.wait")}
+                      <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
+                        ><path
+                          class="fil0"
+                          d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
+                      </svg>
+                    </button>
                   {/if}
-                {:else}
-                  <button type="button" class="download-btn in-process">
-                    {$_("app.download.wait")}
-                    <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
-                      ><path
-                        class="fil0"
-                        d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
-                    </svg>
-                  </button>
                 {/if}
               </div>
             </div>
@@ -735,10 +742,10 @@
   }
 
   .continue-btn {
-    background-color: rgba(233, 236, 61, 0.8);
+    background-color: rgba(236, 180, 61, 0.8);
   }
   .continue-btn:hover {
-    background-color: rgba(233, 236, 61, 1);
+    background-color: rgba(236, 180, 61, 1);
   }
 
   .checkbox-label {

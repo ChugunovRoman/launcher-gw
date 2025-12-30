@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import { createArrayStore, createNumStore } from './helpers';
 
 export const selectedVersion = writable<string | undefined>();
@@ -27,6 +27,11 @@ export function updateVersion(releaseName: string, cb: (data: Version) => Partia
       }
       return version;
     });
+  });
+}
+export function removeVersion(releaseName: string) {
+  versions.update((data) => {
+    return data.filter(v => v.name !== releaseName);
   });
 }
 export function updateEachVersion(cb: (data: Version) => Partial<Version>) {

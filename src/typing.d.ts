@@ -24,7 +24,7 @@ declare interface VersionProgressUpload {
 }
 declare interface DownloadProgress {
   version_name: string;
-  status: number;
+  status: string;
   file: string;
   progress: number;
   downloaded_files_cnt: number;
@@ -50,7 +50,7 @@ declare interface Version {
   downloadSpeed: number;
   speedValue: number;
   sfxValue: string;
-  status: number;
+  status: string;
 }
 declare interface VersionProgress {
   id: string;

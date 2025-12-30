@@ -10,9 +10,9 @@ export enum ConnectStatus {
 }
 
 export enum DownloadStatus {
-  Init,
-  DownloadFiles,
-  Unpacking,
+  Init = "Init",
+  DownloadFiles = "DownloadFiles",
+  Unpacking = "Unpacking",
 }
 
 export enum LangType {

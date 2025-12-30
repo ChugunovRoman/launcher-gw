@@ -113,6 +113,10 @@ impl ServiceGetRelease for Service {
 
     let mut versions: Vec<Version> = vec![];
 
+    if !versions_dir.exists() {
+      return Ok(versions);
+    }
+
     for entry in std::fs::read_dir(&versions_dir)? {
       let entry = entry?;
       let path = entry.path();
