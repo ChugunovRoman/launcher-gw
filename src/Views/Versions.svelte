@@ -3,7 +3,15 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
-  import { connectStatus, inDownloading, localVersions, providersWasInited, removeLocalVersion, versionsWillBeLoaded } from "../store/main";
+  import {
+    connectStatus,
+    inDownloading,
+    localVersions,
+    providersWasInited,
+    removeLocalVersion,
+    versionsWillBeLoaded,
+    expandedIndex,
+  } from "../store/main";
   import {
     showUploading,
     versions,
@@ -24,7 +32,6 @@
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
 
-  let expandedIndex = $state<number | null>(null);
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
   let input1Needed = $state<number>(0);
@@ -44,11 +51,16 @@
       currentTarget: EventTarget & HTMLButtonElement;
     },
     releaseName: string,
+    index: number,
   ) {
     event.preventDefault();
     event.stopPropagation();
 
     console.log("Start handleContinueDownload");
+
+    if ($expandedIndex !== index) {
+      $expandedIndex = index;
+    }
 
     updateVersion(releaseName, () => ({
       inProgress: true,
@@ -250,7 +262,7 @@
   }
 
   function toggleExpand(index: number) {
-    expandedIndex = expandedIndex === index ? null : index;
+    $expandedIndex = $expandedIndex === index ? null : index;
 
     updateEachVersion((v) => {
       console.log("updateEachVersion, v: ", v);
@@ -317,7 +329,7 @@
             {$_("app.releases.runVersion")}
           </button>
         </div>
-        {#if expandedIndex === i}
+        {#if $expandedIndex === i}
           <div class="expanded-content">
             <div class="content-row input-group">
               <button
@@ -398,43 +410,47 @@
                 {/if}
               </span>
               {#if version.isStoped}
-                <Button style="padding: 6px 20px; margin-left: auto" isYellow onclick={(e: any) => handleContinueDownload(e, version.name)}
-                  >{$_("app.download.continue")}</Button>
+                <Button
+                  style="padding: 6px 20px; margin-left: auto"
+                  isYellow
+                  onclick={(e: any) => handleContinueDownload(e, version.name, i + $localVersions.size)}>{$_("app.download.continue")}</Button>
               {/if}
             </div>
-            {#if expandedIndex === i + $localVersions.size}
+            {#if $expandedIndex === i + $localVersions.size}
               <div class="expanded-content">
-                <div class="content-row input-group">
-                  <span class="version-name">
-                    {$_("app.download.compressedSize")}
-                  </span>
-                  <span class="version-name version-size">
-                    {#if version.manifest?.compressed_size && version.manifest?.compressed_size > 0}
-                      {parseBytes(version.manifest?.compressed_size)[0]}{$_(`app.common.${parseBytes(version.manifest?.compressed_size)[1]}`)}
-                    {:else}
-                      <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
-                        ><path
-                          class="fil0"
-                          d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
-                      </svg>
-                    {/if}
-                  </span>
-                  <span style="margin-left: 20px"> </span>
-                  <span class="version-name">
-                    {$_("app.download.totalSize")}
-                  </span>
-                  <span class="version-name version-size">
-                    {#if version.manifest?.total_size}
-                      {parseBytes(version.manifest?.total_size)[0]}{$_(`app.common.${parseBytes(version.manifest?.total_size)[1]}`)}
-                    {:else}
-                      <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
-                        ><path
-                          class="fil0"
-                          d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
-                      </svg>
-                    {/if}
-                  </span>
-                </div>
+                {#if version.status !== DownloadStatus.Unpacking}
+                  <div class="content-row input-group">
+                    <span class="version-name">
+                      {$_("app.download.compressedSize")}
+                    </span>
+                    <span class="version-name version-size">
+                      {#if version.manifest?.compressed_size && version.manifest?.compressed_size > 0}
+                        {parseBytes(version.manifest?.compressed_size)[0]}{$_(`app.common.${parseBytes(version.manifest?.compressed_size)[1]}`)}
+                      {:else}
+                        <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
+                          ><path
+                            class="fil0"
+                            d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
+                        </svg>
+                      {/if}
+                    </span>
+                    <span style="margin-left: 20px"> </span>
+                    <span class="version-name">
+                      {$_("app.download.totalSize")}
+                    </span>
+                    <span class="version-name version-size">
+                      {#if version.manifest?.total_size}
+                        {parseBytes(version.manifest?.total_size)[0]}{$_(`app.common.${parseBytes(version.manifest?.total_size)[1]}`)}
+                      {:else}
+                        <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
+                          ><path
+                            class="fil0"
+                            d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
+                        </svg>
+                      {/if}
+                    </span>
+                  </div>
+                {/if}
                 {#if !version.inProgress && !version.isStoped}
                   <div class="input-group">
                     <label class="checkbox-label">
@@ -485,15 +501,19 @@
                   <div class="content-row input-group">
                     <span>
                       {getStatusText(version.status as DownloadStatus)}
-                      {$_("app.download.status.progress")}
-                      {version.downloadProgress.toFixed(2)}% {$_("app.download.status.files")}
-                      {version.downloadedFilesCnt}/{version.totalFileCount}
-                      {$_("app.download.status.file")}
-                      {version.downloadCurrentFile}
-                      {getInMb(version.downloadedFileBytes)}Mb
+                      {#if version.status === DownloadStatus.Unpacking}
+                        {version.downloadProgress.toFixed(2)}%
+                      {:else}
+                        {$_("app.download.status.progress")}
+                        {version.downloadProgress.toFixed(2)}% {$_("app.download.status.files")}
+                        {version.downloadedFilesCnt}/{version.totalFileCount}
+                        {$_("app.download.status.file")}
+                        {version.downloadCurrentFile}
+                        {getInMb(version.downloadedFileBytes)}Mb
 
-                      {$_("app.download.status.speed")}
-                      {version.speedValue}{version.sfxValue}
+                        {$_("app.download.status.speed")}
+                        {version.speedValue}{version.sfxValue}
+                      {/if}
                     </span>
                   </div>
                 {/if}
@@ -502,10 +522,13 @@
                     <Progress progress={version.downloadProgress} />
                   {/if}
                   {#if version.isStoped}
-                    <button type="button" onclick={(e) => handleContinueDownload(e, version.name)} class="download-btn icon-btn continue-btn">
+                    <button
+                      type="button"
+                      onclick={(e) => handleContinueDownload(e, version.name, i + $localVersions.size)}
+                      class="download-btn icon-btn continue-btn">
                       <Play size={12} />
                     </button>
-                  {:else if version.inProgress}
+                  {:else if version.inProgress && version.status === DownloadStatus.DownloadFiles}
                     <button type="button" onclick={(e) => handlePauseDownload(e, version.name)} class="download-btn icon-btn continue-btn">
                       <Pause size={12} />
                     </button>

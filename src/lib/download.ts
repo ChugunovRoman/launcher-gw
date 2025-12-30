@@ -5,7 +5,7 @@ import { formatSpeedBytesPerSec } from '../utils/dwn';
 import { invoke } from '@tauri-apps/api/core';
 import { join } from '@tauri-apps/api/path';
 import { get } from 'svelte/store';
-import { fetchLocalVersions } from '../store/main';
+import { expandedIndex, fetchLocalVersions } from '../store/main';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -62,5 +62,7 @@ export async function initDownloadListeners() {
     await invoke<void>("clear_progress_version", { versionName });
 
     await fetchLocalVersions();
+
+    expandedIndex.set(null);
   }));
 }
