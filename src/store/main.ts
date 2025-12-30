@@ -43,7 +43,7 @@ export async function fetchLocalVersions() {
   const common = versions_1.concat(versions_2);
   for (const version of common) {
     localVersions.setItem(version.name, version);
-    removeVersion(version.name);
+
   }
 
   if (common.length) {

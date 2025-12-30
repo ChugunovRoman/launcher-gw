@@ -82,6 +82,7 @@ pub async fn run_game(
 
   let child = Command::new(&bin_path)
     .args(run_params)
+    .current_dir(target_path)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
