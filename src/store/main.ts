@@ -34,6 +34,14 @@ export function updateConfig<F extends keyof AppConfig>(field: F, value: any) {
   });
 }
 
+export function removeLocalVersion(name: string) {
+  localVersions.update((data) => {
+    data.delete(name);
+
+    return data;
+  });
+}
+
 export async function fetchLocalVersions() {
   const [versions_1, versions_2] = await Promise.all([
     invoke<Version[]>("get_local_version"),
@@ -43,7 +51,6 @@ export async function fetchLocalVersions() {
   const common = versions_1.concat(versions_2);
   for (const version of common) {
     localVersions.setItem(version.name, version);
-
   }
 
   if (common.length) {

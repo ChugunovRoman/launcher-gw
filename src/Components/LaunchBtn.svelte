@@ -4,7 +4,7 @@
   import { localVersions, providersWasInited } from "../store/main";
   import { onMount } from "svelte";
   import { currentView } from "../store/menu";
-  import { hasAnyLocalVersion, mainVersion, selectedVersion, versions } from "../store/upload";
+  import { hasAnyLocalVersion, mainVersion, selectedVersion } from "../store/upload";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);

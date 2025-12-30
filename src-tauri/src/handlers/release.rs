@@ -189,6 +189,17 @@ pub async fn delete_installed_version(app_config: tauri::State<'_, Arc<Mutex<App
 
   if let Some(v) = version {
     fs::remove_dir_all(Path::new(&v.installed_path)).map_err(|e| e.to_string())?;
+
+    {
+      let mut config_guard = app_config.lock().await;
+
+      let _ = config_guard.installed_versions.remove(&versionName);
+
+      config_guard.save().map_err(|e| {
+        log_full_error(&e);
+        e.to_string()
+      })?;
+    }
   }
 
   Ok(())

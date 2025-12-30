@@ -3,7 +3,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
-  import { connectStatus, inDownloading, localVersions, providersWasInited, versionsWillBeLoaded } from "../store/main";
+  import { connectStatus, inDownloading, localVersions, providersWasInited, removeLocalVersion, versionsWillBeLoaded } from "../store/main";
   import {
     showUploading,
     versions,
@@ -32,16 +32,22 @@
   let addVersionName = $state<boolean>(true);
 
   async function fetchVersionManifest(releaseName: string) {
-    console.log("Start fetchVersionManifest, releaseName: ", releaseName);
     const manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
-    console.log("fetchVersionManifest, manifest: ", manifest);
 
     updateVersion(releaseName, () => ({
       manifest,
     }));
   }
 
-  async function handleContinueDownload(releaseName: string) {
+  async function handleContinueDownload(
+    event: MouseEvent & {
+      currentTarget: EventTarget & HTMLButtonElement;
+    },
+    releaseName: string,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+
     console.log("Start handleContinueDownload");
 
     updateVersion(releaseName, () => ({
@@ -55,10 +61,9 @@
       });
     } catch (error) {
       console.log("Error continue download release: ", releaseName, error);
-      // if (error.message === "USER_CANCELLED")
     } finally {
       updateVersion(releaseName, () => ({
-        inProgress: false,
+        inProgress: true,
         isStoped: false,
       }));
     }
@@ -151,7 +156,7 @@
       // if (error.message === "USER_CANCELLED")
     } finally {
       updateVersion(releaseName, () => ({
-        inProgress: false,
+        inProgress: true,
         isStoped: false,
       }));
     }
@@ -211,12 +216,24 @@
 
     await invoke<number>("run_game", { version });
   }
-  async function deleteVersion(event: Event, versionName: string) {
+  async function deleteVersion(event: Event, version: Version) {
     event.stopPropagation();
 
-    console.log("deleteVersion, versionName: ", versionName);
+    await invoke<void>("delete_installed_version", { versionName: version.path });
 
-    await invoke<void>("delete_installed_version", { versionName });
+    removeLocalVersion(version.name);
+
+    if ($localVersions.size) {
+      const name = [...$localVersions.keys()][0];
+      await invoke<void>("set_current_game_version", { versionName: name });
+      selectedVersion.set(name);
+    } else if ($mainVersion) {
+      await invoke<void>("set_current_game_version", { versionName: $mainVersion.name });
+      selectedVersion.set($mainVersion.name);
+    } else {
+      await invoke<void>("set_current_game_version");
+      selectedVersion.set(undefined);
+    }
   }
 
   function getStatusText(status: DownloadStatus) {
@@ -305,7 +322,7 @@
             <div class="content-row input-group">
               <button
                 type="button"
-                onclick={(e) => deleteVersion(e, name)}
+                onclick={(e) => deleteVersion(e, version)}
                 class="choose-btn cancel-btn"
                 style="margin-left: auto; margin-right: 10px">
                 {$_("app.releases.delete")}
@@ -381,7 +398,7 @@
                 {/if}
               </span>
               {#if version.isStoped}
-                <Button style="padding: 6px 20px; margin-left: auto" isYellow onclick={() => handleContinueDownload(version.name)}
+                <Button style="padding: 6px 20px; margin-left: auto" isYellow onclick={(e: any) => handleContinueDownload(e, version.name)}
                   >{$_("app.download.continue")}</Button>
               {/if}
             </div>
@@ -485,7 +502,7 @@
                     <Progress progress={version.downloadProgress} />
                   {/if}
                   {#if version.isStoped}
-                    <button type="button" onclick={(e) => handleContinueDownload(version.name)} class="download-btn icon-btn continue-btn">
+                    <button type="button" onclick={(e) => handleContinueDownload(e, version.name)} class="download-btn icon-btn continue-btn">
                       <Play size={12} />
                     </button>
                   {:else if version.inProgress}
