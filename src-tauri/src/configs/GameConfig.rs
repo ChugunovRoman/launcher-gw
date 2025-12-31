@@ -1,11 +1,12 @@
 use anyhow::{Context, Result, bail};
+use serde_json::Map;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct GameConfig {
-  data: HashMap<String, String>,
+  data: HashMap<String, HashMap<String, String>>,
   file_path: String,
 }
 
@@ -40,13 +41,35 @@ impl GameConfig {
         continue; // пропускаем пустые строки и комментарии
       }
 
+      let spaces_count = line.matches(" ").count();
+
       if let Some(pos) = line.find(' ') {
         let key = &line[..pos];
         let value = line[pos + 1..].trim_start();
-        self.data.insert(key.to_string(), value.to_string());
+        let mut map: HashMap<String, String> = HashMap::new();
+
+        if spaces_count == 2 {
+          if let Some(pos2) = value.find(' ') {
+            let key2 = &value[..pos2];
+            let value2 = value[pos2 + 1..].trim_start();
+            match self.data.get_mut(key) {
+              Some(found) => {
+                found.insert(key2.to_string(), value2.to_string());
+                continue;
+              }
+              None => {
+                map.insert(key2.to_string(), value2.to_string());
+              }
+            }
+          }
+        } else {
+          map.insert(key.to_string(), value.to_string());
+        }
+
+        self.data.insert(key.to_string(), map);
       } else {
         // Строка без значения — сохраняем как ключ = ""
-        self.data.insert(line.to_string(), String::new());
+        self.data.insert(line.to_string(), HashMap::new());
       }
     }
 
@@ -59,7 +82,20 @@ impl GameConfig {
       bail!("save() user.ltx read error ! file_path is not set ! Empty string !")
     }
 
-    let mut lines: Vec<String> = self.data.iter().map(|(k, v)| format!("{} {}", k, v)).collect();
+    let mut lines: Vec<String> = vec![];
+
+    for map1 in self.data.iter() {
+      let key1 = map1.0;
+      for map2 in map1.1.iter() {
+        let key2 = map2.0;
+        let value = map2.1;
+        if key1 == key2 {
+          lines.push(format!("{} {}", key1, value));
+        } else {
+          lines.push(format!("{} {} {}", key1, key2, value));
+        }
+      }
+    }
 
     lines.sort(); // опционально: для стабильного вывода
 
@@ -69,13 +105,27 @@ impl GameConfig {
   }
 
   /// Получить значение по ключу
-  pub fn get(&self, key: &str) -> Option<&String> {
+  pub fn get(&self, key: &str) -> Option<&HashMap<String, String>> {
     self.data.get(key)
   }
 
   /// Установить или обновить значение
   pub fn set(&mut self, key: String, value: String) {
-    self.data.insert(key, value);
+    let mut map = HashMap::new();
+    map.insert(key.to_string(), value);
+    self.data.insert(key, map);
+  }
+  pub fn set2(&mut self, key: String, key2: String, value: String) {
+    match self.data.get_mut(&key) {
+      Some(found) => {
+        found.insert(key2, value);
+      }
+      None => {
+        let mut map = HashMap::new();
+        map.insert(key2.to_string(), value);
+        self.data.insert(key, map);
+      }
+    };
   }
 
   /// Получить путь к файлу

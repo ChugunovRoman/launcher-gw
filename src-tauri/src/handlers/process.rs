@@ -43,12 +43,12 @@ pub async fn run_game(
 
   let mut user_config = user_ltx.lock().await;
   let user_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX);
-  user_config.0.set_file_path(user_ltx_path);
+  user_config.0.set_file_path(&user_ltx_path);
   update_ltx_config(&mut user_config.0, &config_guard.run_params);
 
   let mut tmp_config = tmp_ltx.lock().await;
   let tmp_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(TMP_LTX);
-  user_config.0.set_file_path(tmp_ltx_path);
+  tmp_config.0.set_file_path(&tmp_ltx_path);
   update_ltx_config(&mut tmp_config.0, &config_guard.run_params);
 
   let fsgame_path = Path::new(&target_path).join(FSGAME_LTX);
@@ -78,7 +78,12 @@ pub async fn run_game(
   let users_args = split_args(&config_guard.run_params.cmd_params);
   run_params.extend(users_args);
 
-  log::info!("Start game bin_path: {:?} with params: {:?}", &bin_path, run_params);
+  log::info!(
+    "Start game bin_path: {:?} with params: {:?} target_path: {:?}",
+    &bin_path,
+    run_params,
+    target_path
+  );
 
   let child = Command::new(&bin_path)
     .args(run_params)
