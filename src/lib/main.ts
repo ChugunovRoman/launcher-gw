@@ -59,6 +59,7 @@ export async function initMainListeners() {
         download_path,
         is_local: false,
         inProgress: false,
+        wasCanceled: false,
         isStoped,
         downloadedFileBytes: 0,
         downloadSpeed: 0.0,

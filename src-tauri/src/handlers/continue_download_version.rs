@@ -8,7 +8,7 @@ use crate::{
   utils::errors::log_full_error,
 };
 use anyhow::Context;
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 use tauri::Emitter;
 use tokio::sync::{Mutex, broadcast};
 
@@ -32,33 +32,57 @@ pub async fn continue_download_version(
     channel_map.lock().unwrap().remove(&versionName);
   };
 
-  let cfg = app_config.lock().await.clone();
+  let version = {
+    let mut cfg_guard = app_config.lock().await;
 
-  let version = cfg
-    .progress_download
-    .iter()
-    .find(|v| v.0 == &versionName)
-    .ok_or_else(|| anyhow::anyhow!("Version not found in progress_download by name: {:?}", &versionName))
-    .map_err(|e| {
+    {
+      let version_data = cfg_guard
+        .progress_download
+        .iter_mut()
+        .find(|v| v.0 == &versionName)
+        .ok_or_else(|| {
+          let e = anyhow::anyhow!("Version not found: {:?}", &versionName);
+          log_full_error(&e);
+          e
+        })
+        .map_err(|e| e.to_string())?;
+
+      for file in version_data.1.files.iter_mut() {
+        let file_path = Path::new(&version_data.1.download_path).join(&file.1.path);
+        if !file_path.exists() {
+          file.1.is_downloaded = false;
+        }
+      }
+    }
+
+    cfg_guard.save().map_err(|e| {
       log_full_error(&e);
       e.to_string()
     })?;
 
-  let progress = (version.1.downloaded_files_cnt as f32 / version.1.total_file_count as f32) * 100.0;
+    cfg_guard
+      .progress_download
+      .iter()
+      .find(|v| v.0 == &versionName)
+      .map(|v| v.1.clone())
+      .ok_or_else(|| "Version lost after save".to_string())?
+  };
+
+  let progress = (version.downloaded_files_cnt as f32 / version.total_file_count as f32) * 100.0;
 
   let _ = app.emit(
     "download-version",
     DownloadProgress {
-      version_name: version.1.name.clone(),
+      version_name: version.name.clone(),
       status: DownloadStatus::Init,
       file: "".to_owned(),
       progress,
-      downloaded_files_cnt: version.1.downloaded_files_cnt,
-      total_file_count: version.1.total_file_count,
+      downloaded_files_cnt: version.downloaded_files_cnt,
+      total_file_count: version.total_file_count,
     },
   );
 
-  let download_dir = Path::new(&version.1.download_path);
+  let download_dir = Path::new(&version.download_path);
   std::fs::create_dir_all(&download_dir)
     .with_context(|| format!("Failed to create output download directory: {:?}", download_dir))
     .map_err(|e| {
@@ -67,24 +91,23 @@ pub async fn continue_download_version(
     })?;
 
   let files: HashMap<String, FileProgress> = version
-    .1
     .files
     .iter()
     .filter(|(_, f)| !f.is_downloaded)
     .map(|(k, v)| (k.clone(), v.clone()))
     .collect();
 
-  let mut downloaded_files_cnt: u16 = version.1.total_file_count - files.len() as u16;
+  let mut downloaded_files_cnt: u16 = version.total_file_count - files.len() as u16;
 
   let _ = app.emit(
     "download-version",
     DownloadProgress {
-      version_name: version.1.name.clone(),
+      version_name: version.name.clone(),
       status: DownloadStatus::Init,
       file: "".to_owned(),
       progress: 0.0,
       downloaded_files_cnt,
-      total_file_count: version.1.total_file_count,
+      total_file_count: version.total_file_count,
     },
   );
 
@@ -96,16 +119,16 @@ pub async fn continue_download_version(
       return Err("USER_CANCELLED".to_string());
     }
 
-    let mut progress = (downloaded_files_cnt as f32 / version.1.total_file_count as f32) * 100.0;
+    let mut progress = (downloaded_files_cnt as f32 / version.total_file_count as f32) * 100.0;
     let _ = app.emit(
       "download-version",
       DownloadProgress {
-        version_name: version.1.name.clone(),
+        version_name: version.name.clone(),
         status: DownloadStatus::DownloadFiles,
         file: file.name.clone(),
         progress,
         downloaded_files_cnt,
-        total_file_count: version.1.total_file_count,
+        total_file_count: version.total_file_count,
       },
     );
 
@@ -116,9 +139,9 @@ pub async fn continue_download_version(
       service_guard.api_client.clone()
     };
     service_files
-      .download_blob_to_file(&api_client, &version.1.name, &file.project_id, &file.id, &file_path)
+      .download_blob_to_file(&api_client, &version.name, &file.project_id, &file.id, &file_path)
       .await
-      .with_context(|| format!("Failed to download release file: {:?} for version: {}", file_path, version.1.name))
+      .with_context(|| format!("Failed to download release file: {:?} for version: {}", file_path, version.name))
       .map_err(|e| {
         log_full_error(&e);
         e.to_string()
@@ -129,7 +152,7 @@ pub async fn continue_download_version(
     {
       let mut config_guard = app_config.lock().await;
 
-      if let Some(ver) = config_guard.progress_download.get_mut(&version.1.name) {
+      if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
         if let Some(file_progress) = ver.files.get_mut(&file.id) {
           file_progress.is_downloaded = true;
         }
@@ -141,29 +164,17 @@ pub async fn continue_download_version(
     }
 
     downloaded_files_cnt += 1;
-    progress = (downloaded_files_cnt as f32 / version.1.total_file_count as f32) * 100.0;
+    progress = (downloaded_files_cnt as f32 / version.total_file_count as f32) * 100.0;
 
     log::info!(
       "download_files_progress: {} ({}/{})",
       progress,
       downloaded_files_cnt,
-      version.1.total_file_count,
-    );
-
-    let _ = app.emit(
-      "download-version",
-      DownloadProgress {
-        version_name: version.1.name.clone(),
-        status: DownloadStatus::DownloadFiles,
-        file: file.name,
-        progress,
-        downloaded_files_cnt,
-        total_file_count: version.1.total_file_count,
-      },
+      version.total_file_count,
     );
   }
 
-  let _ = app.emit("download-unpack-version", &version.1.name);
+  let _ = app.emit("download-unpack-version", &version.name);
 
   Ok(())
 }

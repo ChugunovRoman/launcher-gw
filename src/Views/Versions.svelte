@@ -50,7 +50,7 @@
     event: MouseEvent & {
       currentTarget: EventTarget & HTMLButtonElement;
     },
-    releaseName: string,
+    version: Version,
     index: number,
   ) {
     event.preventDefault();
@@ -62,22 +62,27 @@
       $expandedIndex = index;
     }
 
-    updateVersion(releaseName, () => ({
+    updateVersion(version.name, () => ({
       inProgress: true,
       isStoped: false,
     }));
 
     try {
       await invoke<void>("continue_download_version", {
-        versionName: releaseName,
+        versionName: version.name,
       });
-    } catch (error) {
-      console.log("Error continue download release: ", releaseName, error);
-    } finally {
-      updateVersion(releaseName, () => ({
-        inProgress: true,
-        isStoped: false,
-      }));
+    } catch (error: any) {
+      if (error === "USER_CANCELLED" && !version.wasCanceled) {
+        updateVersion(version.name, () => ({
+          inProgress: false,
+          isStoped: true,
+        }));
+      } else {
+        updateVersion(version.name, () => ({
+          inProgress: false,
+          isStoped: false,
+        }));
+      }
     }
   }
 
@@ -93,6 +98,7 @@
     updateVersion(releaseName, () => ({
       inProgress: false,
       isStoped: false,
+      wasCanceled: true,
     }));
     await invoke<void>("remove_download_version", {
       versionName: releaseName,
@@ -163,14 +169,19 @@
         installPath: version.installed_path,
         versionName: version.name,
       });
-    } catch (error) {
-      console.log("Error download release: ", releaseName, error);
-      // if (error.message === "USER_CANCELLED")
-    } finally {
-      updateVersion(releaseName, () => ({
-        inProgress: true,
-        isStoped: false,
-      }));
+    } catch (error: any) {
+      const updatedVersion = $versions.find((v) => v.name === releaseName);
+      if (error === "USER_CANCELLED" && !updatedVersion!.wasCanceled) {
+        updateVersion(releaseName, () => ({
+          inProgress: false,
+          isStoped: true,
+        }));
+      } else {
+        updateVersion(releaseName, () => ({
+          inProgress: false,
+          isStoped: false,
+        }));
+      }
     }
   }
 
@@ -413,7 +424,7 @@
                 <Button
                   style="padding: 6px 20px; margin-left: auto"
                   isYellow
-                  onclick={(e: any) => handleContinueDownload(e, version.name, i + $localVersions.size)}>{$_("app.download.continue")}</Button>
+                  onclick={(e: any) => handleContinueDownload(e, version, i + $localVersions.size)}>{$_("app.download.continue")}</Button>
               {/if}
             </div>
             {#if $expandedIndex === i + $localVersions.size}
@@ -524,7 +535,7 @@
                   {#if version.isStoped}
                     <button
                       type="button"
-                      onclick={(e) => handleContinueDownload(e, version.name, i + $localVersions.size)}
+                      onclick={(e) => handleContinueDownload(e, version, i + $localVersions.size)}
                       class="download-btn icon-btn continue-btn">
                       <Play size={12} />
                     </button>

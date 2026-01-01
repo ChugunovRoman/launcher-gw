@@ -42,6 +42,7 @@ declare interface Version {
   // only js fields
   inProgress: boolean;
   isStoped: boolean;
+  wasCanceled: boolean;
   downloadCurrentFile: string;
   downloadProgress: number;
   downloadedFilesCnt: number;
