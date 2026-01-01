@@ -5,7 +5,7 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+*'
 
-env:
+env.
   APP_NAME: "Launcher"
 
 jobs:
@@ -33,13 +33,13 @@ jobs:
           npm run gen-icons
           npm run tauri build
           mkdir -p ./upload
-          cp src-tauri/target/release/${{ APP_NAME }} ./upload/${{ APP_NAME }}-linux
+          cp src-tauri/target/release/${{ env.APP_NAME }} ./upload/${{ env.APP_NAME }}-linux
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-binary
-          path: ./upload/${{ APP_NAME }}-linux
+          path: ./upload/${{ env.APP_NAME }}-linux
 
   # --- ЭТАП 2: Сборка под Windows (параллельно) ---
   build-windows:
@@ -60,13 +60,13 @@ jobs:
           npm run gen-icons
           npm run tauri build
           mkdir upload
-          copy src-tauri\target\release\${{ APP_NAME }}.exe upload\${{ APP_NAME }}.exe
+          copy src-tauri\target\release\${{ env.APP_NAME }}.exe upload\${{ env.APP_NAME }}.exe
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-binary
-          path: upload/${{ APP_NAME }}.exe
+          path: upload/${{ env.APP_NAME }}.exe
 
   # --- ЭТАП 3: Создание релиза ---
   publish-release:
@@ -87,8 +87,8 @@ jobs:
           files: ./release-assets/*
           name: Release ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          body: "Portable binaries for ${{ APP_NAME }}"
+          body: "Portable binaries for ${{ env.APP_NAME }}"
           draft: false
           prerelease: false
-        env:
+        env.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
