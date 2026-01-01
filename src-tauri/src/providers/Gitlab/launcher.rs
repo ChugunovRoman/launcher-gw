@@ -13,7 +13,7 @@ pub async fn __get_launcher_latest_release(s: &Gitlab, project_id: u32) -> Resul
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("GitLab API error {}: {}", status, body);
+    bail!("__get_launcher_latest_release, GitLab API error {}: {} url: {}", status, body, url);
   }
 
   let release: Vec<ReleaseGitlab> = resp.json().await.context("Failed to parse ReleaseGitlab response as JSON")?;

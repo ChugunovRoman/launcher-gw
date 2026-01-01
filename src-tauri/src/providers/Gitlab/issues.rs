@@ -22,7 +22,7 @@ pub async fn __find_issue(s: &Gitlab, repo_id: &u32, search_params: HashMap<Stri
   if !response.status().is_success() {
     let status = response.status();
     let body = response.text().await.unwrap_or_else(|_| "No response body".to_string());
-    let msg = format!("GitLab API error {}: {}. Returning default UserData.", status, body);
+    let msg = format!("__find_issue, GitLab API error {}: {}. Returning default UserData.", status, body);
     log::warn!("{}", &msg);
     bail!(msg)
   }

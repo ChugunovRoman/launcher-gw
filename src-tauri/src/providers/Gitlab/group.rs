@@ -27,7 +27,7 @@ pub async fn __create_group(s: &Gitlab, name: &str, parent_id: &u32) -> Result<C
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await?;
-    bail!("GitLab API error ({}): {}", status, body);
+    bail!("__create_group, GitLab API error ({}): {} url: {}", status, body, url);
   }
 
   let result: CreategGroupResponseGitlab = resp.json().await?;
@@ -54,7 +54,7 @@ pub async fn __update_group(s: &Gitlab, group_id: &u32, data: UpdateGroupDtoGitl
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await?;
-    bail!("GitLab API error ({}): {}", status, body);
+    bail!("__update_group, GitLab API error ({}): {} url: {}", status, body, url);
   }
 
   Ok(())

@@ -276,11 +276,44 @@ impl AppConfig {
       return Ok(config);
     }
 
-    let content = fs::read_to_string(&config_path).context("Failed to read config.json")?;
-    let mut json_value: Value = serde_json::from_str(&content).context("Failed to parse config.json as JSON")?;
+    let content = match fs::read_to_string(&config_path) {
+      Ok(c) => c,
+      Err(e) => {
+        log::warn!("Cannot read {} file, return default config, error: {:?}", CONFIG_NAME, e);
+        let mut config = AppConfig::default();
+        config.first_run = true;
+        config.install_path = Self::get_path();
+        config.path = path;
+        config.save()?;
+        return Ok(config);
+      }
+    };
+    let mut json_value: Value = match serde_json::from_str(&content) {
+      Ok(c) => c,
+      Err(e) => {
+        log::warn!("Cannot parse JSON from {} file, return default config, error: {:?}", CONFIG_NAME, e);
+        let mut config = AppConfig::default();
+        config.first_run = true;
+        config.install_path = Self::get_path();
+        config.path = path;
+        config.save()?;
+        return Ok(config);
+      }
+    };
 
     let mut default = AppConfig::default();
-    let default_value: Value = serde_json::to_value(&default).context("Failed to serialize default config")?;
+    let default_value: Value = match serde_json::to_value(&default) {
+      Ok(c) => c,
+      Err(e) => {
+        log::warn!("Failed to serialize config {} file, return default config, error: {:?}", CONFIG_NAME, e);
+        let mut config = AppConfig::default();
+        config.first_run = true;
+        config.install_path = Self::get_path();
+        config.path = path;
+        config.save()?;
+        return Ok(config);
+      }
+    };
 
     let loaded_map = match &mut json_value {
       Value::Object(m) => m,

@@ -25,7 +25,7 @@ pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Re
   } else {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("GitLab API error {}: {}", status, body);
+    bail!("__get_file_raw, GitLab API error {}: {}, url: {}", status, body, url);
   }
 }
 
@@ -41,7 +41,7 @@ pub async fn __get_blob_by_url_stream(s: &Gitlab, url: &str) -> Result<Box<dyn S
   if !response.status().is_success() {
     let status = response.status();
     let body = response.text().await.unwrap_or_else(|_| "<failed to read response body>".to_string());
-    bail!("Error API GitLab: {} – {}", status, body);
+    bail!("__get_blob_by_url_stream, Error API GitLab: {} – {}", status, body);
   }
 
   Ok(Box::new(
@@ -66,7 +66,7 @@ pub async fn __tree(s: &Gitlab, repo_id: u32, search_params: HashMap<String, Str
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await?;
-    bail!("GitLab API error ({}): {}", status, body);
+    bail!("GitLab API error ({}): {} url: {}", status, body, url);
   }
 
   let items: Vec<TreeItemGitlab> = resp

@@ -15,7 +15,7 @@ pub async fn __get_releases(s: &Gitlab) -> Result<Vec<Release>> {
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("GitLab API error {}: {}", status, body);
+    bail!("__get_releases, GitLab API error {}: {} url: {}", status, body, url);
   }
 
   let groups: Vec<Group> = resp.json().await.context("Failed to parse GitLab groups response as JSON")?;
@@ -52,7 +52,7 @@ pub async fn __get_release_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Proj
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("GitLab API error {}: {}", status, body);
+    bail!("__get_release_repos, GitLab API error {}: {} url: {}", status, body, url);
   }
 
   let repos: Vec<ProjectGitlab> = resp.json().await.context("Failed to parse GitLab projects response as JSON")?;
@@ -79,7 +79,7 @@ pub async fn __get_updates_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Proj
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("GitLab API error {}: {}", status, body);
+    bail!("__get_updates_repos, GitLab API error {}: {} url: {}", status, body, url);
   }
 
   let repos: Vec<ProjectGitlab> = resp.json().await.context("Failed to parse GitLab projects response as JSON")?;

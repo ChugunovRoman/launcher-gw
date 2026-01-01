@@ -27,7 +27,7 @@ pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &u32) -> Result<Cr
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await?;
-    bail!("GitLab API error ({}): {}", status, body);
+    bail!("__create_repo, GitLab API error ({}): {} url: {}", status, body, url);
   }
 
   let response_text = resp.text().await.context("Failed to read response body")?;
@@ -59,7 +59,7 @@ pub async fn __update_repo(s: &Gitlab, repo_id: &u32, data: UpdateRepoDtoGitlab)
   if !resp.status().is_success() {
     let status = resp.status();
     let body = resp.text().await?;
-    bail!("GitLab API error ({}): {}", status, body);
+    bail!("__update_repo, GitLab API error ({}): {} url: {}", status, body, url);
   }
 
   Ok(())
