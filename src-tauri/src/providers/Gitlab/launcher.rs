@@ -1,5 +1,5 @@
 use crate::providers::{
-  Gitlab::{Gitlab::Gitlab, models::*},
+  Gitlab::{Gitlab::Gitlab, files::__get_file_content_size, models::*},
   dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform},
 };
 
@@ -28,8 +28,11 @@ pub async fn __get_launcher_latest_release(s: &Gitlab, project_id: &str) -> Resu
   let mut assets: Vec<ReleaseAssetGit> = vec![];
 
   for asset in &release[0].assets.links {
+    let size = __get_file_content_size(s, &asset.direct_asset_url).await?;
+
     assets.push(ReleaseAssetGit {
       name: asset.name.clone(),
+      size,
       platform: get_platform_type(&asset.name),
       download_link: asset.direct_asset_url.clone(),
     });

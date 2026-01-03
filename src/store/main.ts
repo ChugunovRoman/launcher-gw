@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 import { createMapStore } from './helpers';
 import { ConnectStatus } from '../consts';
 import { invoke } from '@tauri-apps/api/core';
-import { hasAnyLocalVersion, removeVersion } from './upload';
+import { hasAnyLocalVersion } from './upload';
 
 export const appConfig = writable<AppConfig>({
   default_installed_path: "",
@@ -25,6 +25,12 @@ export const showDlgRestartApp = writable(false);
 
 export const loadedTokens = writable(false);
 export const tokens = writable<Map<string, string>>(new Map());
+
+export const launcherDwnNeedUpdate = writable(false);
+export const launcherDwnVersion = writable<string | undefined>();
+export const launcherDwnBytes = writable(0);
+export const launcherDwnTotalBytes = writable(0);
+export const launcherDwnProgress = writable(0);
 
 export const localVersions = createMapStore<string, Version>();
 

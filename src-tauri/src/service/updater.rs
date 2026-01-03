@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use crate::consts::{BASE_DIR, REPO_LAUNCGER_ID_2};
 use crate::providers::ApiClient::ApiClient::ApiClient;
@@ -15,11 +16,20 @@ use tauri::path::BaseDirectory;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
-pub struct ServiceUpdater {}
+pub type DownloadProgressCallback = Box<dyn Fn(&str, u64, u64) + Send + Sync>;
+
+pub struct ServiceUpdater {
+  callback: Arc<DownloadProgressCallback>,
+}
 
 impl ServiceUpdater {
-  pub fn new() -> Self {
-    Self {}
+  pub fn new<F>(callback: F) -> Self
+  where
+    F: Fn(&str, u64, u64) + Send + Sync + 'static,
+  {
+    Self {
+      callback: Arc::new(Box::new(callback)),
+    }
   }
 
   pub async fn check(&self, api_client: &ApiClient, current_version: String) -> Result<Option<ReleaseGit>> {
@@ -82,10 +92,15 @@ impl ServiceUpdater {
       let mut file = File::create(&file_path).await.context("Failed to create output file")?;
 
       log::debug!("ServiceUpdater.download, start download file: {:?}", &target.download_link);
+      let mut downloaded: u64 = 0;
       while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("Error reading chunk from response stream")?;
+        let chunk_len = chunk.len() as u64;
 
         file.write_all(&chunk).await.context("Failed to write chunk to file")?;
+        downloaded += chunk_len;
+
+        (self.callback)(&release.version, downloaded, target.size);
       }
 
       log::debug!("ServiceUpdater.download, finish download file: {:?}", &target.download_link);

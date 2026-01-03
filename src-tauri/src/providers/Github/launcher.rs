@@ -30,6 +30,7 @@ pub async fn __get_launcher_latest_release(s: &Github, project_id: &str) -> Resu
     assets.push(ReleaseAssetGit {
       name: asset.name.clone(),
       platform: get_platform_type(&asset.name),
+      size: asset.size,
       download_link: asset.browser_download_url.clone(),
     });
   }

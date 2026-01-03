@@ -69,6 +69,9 @@ impl Gitlab {
   pub fn put(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().put(url)
   }
+  pub fn head(&self, url: &str) -> reqwest::RequestBuilder {
+    self.get_client().head(url)
+  }
 }
 
 #[async_trait]

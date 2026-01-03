@@ -39,6 +39,7 @@ pub struct CreateRepoResponseGithub {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseAssetGithub {
   pub id: u32,
+  pub size: u64,
   pub name: String,
   pub browser_download_url: String,
 }

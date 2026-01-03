@@ -4,7 +4,11 @@
       "connnecting": "(connecting to server...)",
       "connnected": "(connection to server established)",
       "connnect_error": "(connection error. Functionality is limited.)",
-      "error": "Server connection error"
+      "error": "Server connection error",
+      "updateChecking": "Checking for launcher updates",
+      "latest": "Using the latest version",
+      "restartApp": "Restart the launcher",
+      "download": "Downloading a new version of the launcher: "
     },
     "renderer": {
       "renderer_r2": "DirectX 9 (Basic)",

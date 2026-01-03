@@ -7,9 +7,18 @@
   import { _ } from "svelte-i18n";
   import { locale } from "svelte-i18n";
 
-  import { X, Minus, Minimize2, Maximize2 } from "lucide-svelte";
+  import { X, Minus, Minimize2, Maximize2, RefreshCw } from "lucide-svelte";
   import { Lang } from "../consts";
-  import { connectStatus, fontColor } from "../store/main";
+  import {
+    connectStatus,
+    fontColor,
+    launcherDwnNeedUpdate,
+    launcherDwnProgress,
+    launcherDwnVersion,
+    newLauncherVersionDownloaded,
+  } from "../store/main";
+  import Progress from "./Progress.svelte";
+  import Spin from "./Spin.svelte";
 
   let isMaximized = $state(false);
   let version = $state("0.1.0");
@@ -55,16 +64,53 @@
     console.log("loadLang: ", lang, currentLangIndex);
   }
 
+  function restartAppHandler() {
+    invoke("restart_app");
+  }
+
   onMount(async () => {
     version = await getVersion();
     console.log("version: ", version);
     loadLang();
   });
+
+  $effect(() => {
+    if ($newLauncherVersionDownloaded !== "" && version !== "0.1.0" && version === $newLauncherVersionDownloaded) {
+      launcherDwnNeedUpdate.set(false);
+      launcherDwnVersion.set(version);
+    }
+  });
 </script>
 
 <header>
   <h5 class="title" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
-    Global War Launcher {version} <span style="color: {$fontColor}; font-size: 0.7rem">{$_(`app.h.${$connectStatus}`)}</span>
+    <span>Global War Launcher {version}</span> <span style="color: {$fontColor}; font-size: 0.7rem">{$_(`app.h.${$connectStatus}`)}</span>
+    {#if $launcherDwnNeedUpdate && $launcherDwnVersion}
+      <div style="width: 20px;"></div>
+      {#if $launcherDwnProgress !== 100}
+        <span>{$_(`app.h.download`)} {$launcherDwnVersion}</span>
+      {:else}
+        <span role="button" class="restart" onclick={restartAppHandler}>{$_(`app.h.restartApp`)}</span>
+      {/if}
+      <div style="width: 10px;"></div>
+      {#if $launcherDwnProgress !== 100}
+        <span>
+          <Progress width={160} height={4} progress={$launcherDwnProgress} showPercents={false} />
+        </span>
+      {:else}
+        <div role="button" onclick={restartAppHandler} class="btn"><RefreshCw size={16} /></div>
+      {/if}
+    {:else if !$launcherDwnNeedUpdate && $launcherDwnVersion}
+      <div style="width: 20px;"></div>
+      <span>{$_(`app.h.latest`)}</span>
+    {:else}
+      <div style="width: 20px;"></div>
+      <span>{$_(`app.h.updateChecking`)}</span>
+      <div style="width: 10px;"></div>
+      <span>
+        <Spin size={16} />
+      </span>
+    {/if}
   </h5>
 
   <div role="button" onclick={toggleLang} class="btn">
@@ -93,12 +139,24 @@
   h5 {
     -webkit-app-region: drag;
   }
+  span {
+    padding-top: 4px;
+  }
+  .restart {
+    -webkit-app-region: drag;
+  }
+  .restart:hover {
+    cursor: pointer;
+  }
 
   .title {
+    display: flex;
+    white-space: nowrap;
     text-align: left;
     text-indent: 3%;
     padding: 0;
     margin: 4px 0;
+    padding-left: 20px;
   }
   .langicon {
     width: 18px;

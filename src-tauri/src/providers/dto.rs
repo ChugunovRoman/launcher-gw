@@ -30,6 +30,7 @@ pub struct Release {
 pub struct ReleaseAssetGit {
   pub name: String,
   pub platform: ReleasePlatform,
+  pub size: u64,
   pub download_link: String,
 }
 #[derive(Deserialize, Debug, Clone)]

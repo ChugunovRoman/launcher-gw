@@ -125,3 +125,24 @@ pub async fn __load_manifest(s: &Gitlab) -> Result<()> {
 pub async fn __get_launcher_bg(s: &Gitlab) -> Result<Vec<u8>> {
   __get_file_raw(s, &REPO_LAUNCGER_ID.to_string(), "data%2Fbg%2Fbg.jpg").await
 }
+
+pub async fn __get_file_content_size(s: &Gitlab, direct_url: &str) -> Result<u64> {
+  let resp = s
+    .head(direct_url)
+    .send()
+    .await
+    .context("Failed to send request to GitLab (get_launcher_release)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__get_file_content_size, GitLab API error {}: {} url: {}", status, body, direct_url);
+  }
+
+  let mut size: u64 = 0;
+  if let Some(header) = resp.headers().get("content-length") {
+    size = header.to_str()?.parse()?;
+  };
+
+  Ok(size)
+}

@@ -1,10 +1,12 @@
 <script lang="ts">
-  let { progress = $bindable(0) } = $props();
+  let { progress = $bindable(0), width = $bindable<number | undefined>(), height = $bindable<number | undefined>(), showPercents = true } = $props();
 </script>
 
-<div class="progress-container">
+<div class="progress-container" style="width: {width}px; height: {height}px">
   <div class="progress-bar" style="width: {Math.min(100, Math.max(0, Number(progress.toFixed(2))))}%;"></div>
-  <span class="progress-text">{Number(progress.toFixed(2))}%</span>
+  {#if showPercents}
+    <span class="progress-text">{Number(progress.toFixed(2))}%</span>
+  {/if}
 </div>
 
 <style>

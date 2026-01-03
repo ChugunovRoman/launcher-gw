@@ -5,7 +5,7 @@ import { formatSpeedBytesPerSec } from '../utils/dwn';
 import { invoke } from '@tauri-apps/api/core';
 import { join } from '@tauri-apps/api/path';
 import { get } from 'svelte/store';
-import { expandedIndex, fetchLocalVersions } from '../store/main';
+import { expandedIndex, fetchLocalVersions, launcherDwnBytes, launcherDwnNeedUpdate, launcherDwnProgress, launcherDwnTotalBytes, launcherDwnVersion } from '../store/main';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -39,6 +39,15 @@ export async function initDownloadListeners() {
       speedValue,
       sfxValue,
     }));
+  }));
+  unlisten.set('download-launcher-status', await listen('download-launcher-status', (event: Event<[string, number, number]>) => {
+    const [versionName, bytes, totalSize] = event.payload;
+
+    launcherDwnNeedUpdate.set(true);
+    launcherDwnVersion.set(versionName);
+    launcherDwnBytes.set(bytes);
+    launcherDwnTotalBytes.set(totalSize);
+    launcherDwnProgress.set(bytes / totalSize * 100);
   }));
   unlisten.set('download-unpack-version', await listen('download-unpack-version', async (event: Event<string>) => {
     const versionName = event.payload;

@@ -72,6 +72,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   let handle = app.handle().clone();
   let handle2 = app.handle().clone();
+  let handle3 = app.handle().clone();
   let logger = Arc::new(move |msg: &str| {
     log::info!("{}", &msg);
     let _ = handle.emit("upload-log", msg);
@@ -83,7 +84,9 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let service_files_arc = Arc::new(ServiceFiles::new(move |release_name, bytes, speed| {
     let _ = handle2.emit("download-speed-status", (release_name, &bytes, &speed));
   }));
-  let service_updater_arc = Arc::new(ServiceUpdater::new());
+  let service_updater_arc = Arc::new(ServiceUpdater::new(move |release_name, bytes, speed| {
+    let _ = handle3.emit("download-launcher-status", (release_name, &bytes, &speed));
+  }));
   let service_clone = service_arc.clone();
 
   let user_data_placeholder = Arc::new(Mutex::new(Option::<UserData>::None));
