@@ -10,6 +10,7 @@ use crate::{
 };
 
 use anyhow::{Context, Result, bail};
+use regex::Regex;
 
 async fn __fetch_releases(s: &Github) -> Result<()> {
   let mut map: HashMap<u32, ProjectGithub> = HashMap::new();
@@ -89,7 +90,7 @@ pub async fn __get_releases(s: &Github) -> Result<Vec<Release>> {
       releases.push(Release {
         id,
         name: project.description.clone(),
-        path: project.name,
+        path: Regex::new(r"\s+").unwrap().replace_all(&project.description, "-").to_string(),
       });
       exist_names.insert(project.description, true);
     }
