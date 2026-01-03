@@ -8,7 +8,7 @@ use crate::providers::{
   dto::Issue,
 };
 
-pub async fn __find_issue(s: &Gitlab, repo_id: &u32, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
+pub async fn __find_issue(s: &Gitlab, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
   let params = search_params.iter().map(|v| format!("{}={}", v.0, v.1)).collect::<Vec<_>>().join("&");
 
   let mut path = format!("{}/projects/{}/issues", s.host, repo_id);
@@ -28,7 +28,6 @@ pub async fn __find_issue(s: &Gitlab, repo_id: &u32, search_params: HashMap<Stri
   }
 
   let text = response.text().await?;
-  // log::info!("Get Issues: {}", &text);
   let issues: Vec<IssueGitlab> = serde_json::from_str(&text)?;
   let common: Vec<Issue> = issues
     .iter()
@@ -39,4 +38,18 @@ pub async fn __find_issue(s: &Gitlab, repo_id: &u32, search_params: HashMap<Stri
     .collect();
 
   Ok(common)
+}
+
+pub async fn __find_user(s: &Gitlab, repo_id: &str, uuid: &str) -> Result<Option<Issue>> {
+  let mut search_params = HashMap::new();
+  search_params.insert("search".to_string(), encode(uuid).to_string());
+  search_params.insert("in".to_string(), "title".to_string());
+
+  let issues = __find_issue(s, repo_id, search_params).await?;
+
+  if issues.len() > 0 {
+    return Ok(Some(issues[0].clone()));
+  }
+
+  Ok(None)
 }

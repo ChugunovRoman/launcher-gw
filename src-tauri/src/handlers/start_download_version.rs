@@ -104,7 +104,7 @@ pub async fn start_download_version(
   let all_files = {
     let service_guard = service.lock().await;
     service_guard
-      .get_main_release_files(selected_version.id)
+      .get_main_release_files(&selected_version.name)
       .await
       .context("Failed to get main release files")
       .map_err(|e| {

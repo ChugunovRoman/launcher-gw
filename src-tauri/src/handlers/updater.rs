@@ -23,7 +23,7 @@ pub async fn update(
     log_full_error(&e);
     e.to_string()
   })? {
-    let _ = app.emit("launcher-new-version", &latest_release.tag_name);
+    let _ = app.emit("launcher-new-version", &latest_release.version);
 
     service_updater
       .download_and_install(&api_client, &app, latest_release)

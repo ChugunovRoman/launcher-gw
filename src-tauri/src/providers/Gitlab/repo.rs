@@ -9,14 +9,14 @@ use crate::providers::{
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 
-pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &u32) -> Result<CreateRepoResponse> {
+pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &str) -> Result<CreateRepoResponse> {
   let url = format!("{}/projects", s.host);
   let data = CreateRepoBodyGitlab {
     name: name.to_owned(),
     path: Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string(),
     lfs_enabled: true,
     visibility: Visibility::Private,
-    namespace_id: parent_id.clone(),
+    namespace_id: parent_id.parse().unwrap(),
   };
 
   let resp = s.post(&url).json(&data).send().await.context(format!(
@@ -46,7 +46,7 @@ pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &u32) -> Result<Cr
   })
 }
 
-pub async fn __update_repo(s: &Gitlab, repo_id: &u32, data: UpdateRepoDtoGitlab) -> Result<()> {
+pub async fn __update_repo(s: &Gitlab, repo_id: &str, data: UpdateRepoDtoGitlab) -> Result<()> {
   let url = format!("{}/projects/{}", s.host, &repo_id);
 
   let resp = s

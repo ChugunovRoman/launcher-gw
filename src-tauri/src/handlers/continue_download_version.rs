@@ -1,5 +1,5 @@
 use crate::{
-  configs::AppConfig::{AppConfig, FileProgress, Version},
+  configs::AppConfig::{AppConfig, FileProgress},
   handlers::{
     dto::{DownloadProgress, DownloadStatus},
     start_download_version::CancelMap,
@@ -139,7 +139,7 @@ pub async fn continue_download_version(
       service_guard.api_client.clone()
     };
     service_files
-      .download_blob_to_file(&api_client, &version.name, &file.project_id, &file.id, &file_path)
+      .download_blob_to_file(&api_client, &version.name, &file.project_id.to_string(), &file.id, &file_path)
       .await
       .with_context(|| format!("Failed to download release file: {:?} for version: {}", file_path, version.name))
       .map_err(|e| {

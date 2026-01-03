@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::Stream;
 
-use crate::providers::{Gitlab::models::ReleaseGitlab, dto::*};
+use crate::providers::dto::*;
 
 #[async_trait]
 pub trait ApiProvider: Send + Sync {
@@ -27,23 +27,24 @@ pub trait ApiProvider: Send + Sync {
   async fn load_manifest(&self) -> Result<()>;
   fn get_manifest(&self) -> Result<Manifest>;
 
+  async fn get_launcher_bg(&self) -> Result<Vec<u8>>;
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>>;
-  async fn get_blob_stream(&self, project_id: &u32, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
+  async fn get_blob_stream(&self, project_id: &str, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
   async fn get_blob_by_url_stream(&self, link: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
-  async fn tree(&self, repo_id: u32, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>>;
-  async fn get_full_tree(&self, repo_id: u32) -> Result<Vec<TreeItem>>;
+  async fn tree(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>>;
+  async fn get_full_tree(&self, repo_id: String) -> Result<Vec<TreeItem>>;
 
-  async fn find_issue(&self, repo_id: &u32, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
+  async fn find_issue(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
+  async fn find_user(&self, repo_id: &str, uuid: &str) -> Result<Option<Issue>>;
 
-  async fn get_launcher_latest_release(&self, project_id: u32) -> Result<ReleaseGitlab>;
+  async fn get_launcher_latest_release(&self, project_id: &str) -> Result<ReleaseGit>;
   async fn get_releases(&self) -> Result<Vec<Release>>;
-  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
-  async fn get_release_repos_by_name(&self, release_name: String) -> Result<Vec<Project>>;
-  async fn get_release_repos(&self, release_id: u32) -> Result<Vec<Project>>;
-  async fn get_updates_repos(&self, release_id: u32) -> Result<Vec<Project>>;
+  async fn set_release_visibility(&self, release_id: &str, visibility: bool) -> Result<()>;
+  async fn get_release_repos_by_name(&self, release_id: &str) -> Result<Vec<Project>>;
+  async fn get_updates_repos_by_name(&self, release_name: &str) -> Result<Vec<Project>>;
 
   async fn create_group(&self, name: &str, parent_id: &u32) -> Result<CreategGroupResponse>;
-  async fn create_repo(&self, name: &str, parent_id: &u32) -> Result<CreateRepoResponse>;
+  async fn create_repo(&self, name: &str, description: &str, parent_id: &str) -> Result<CreateRepoResponse>;
 
   //
   fn clone_box(&self) -> Box<dyn ApiProvider + Send + Sync>;

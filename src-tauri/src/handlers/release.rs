@@ -46,11 +46,7 @@ pub async fn create_release_repos(app: tauri::AppHandle, name: String, path: Str
     log_full_error(&e);
     e.to_string()
   })?;
-  let parent_id_str = manifest.root_id.expect(&format!("root_id is not set for {} provider", api.id()));
-  let parent_id: u32 = parent_id_str
-    .parse()
-    .expect(&format!("Cannot conver root_id to u32, parent_id_str: {}", &parent_id_str));
-
+  let parent_id = manifest.root_id.expect(&format!("root_id is not set for {} provider", api.id()));
   let base_dir = Path::new(&path);
   let groups = group_files_by_size(base_dir, manifest.max_size).map_err(|e| {
     log_full_error(&e);
@@ -99,7 +95,7 @@ pub async fn get_release_manifest(app: tauri::AppHandle, releaseName: String) ->
     match release.manifest.clone() {
       Some(data) => data,
       None => {
-        let file = service_guard.get_release_manifest(release.name.clone()).await.map_err(|e| {
+        let file = service_guard.get_release_manifest(&release.name).await.map_err(|e| {
           log_full_error(&e);
           e.to_string()
         })?;

@@ -28,17 +28,14 @@ impl ServiceFiles {
   pub async fn get_launcher_bg(&self, api_client: &ApiClient) -> Result<Vec<u8>> {
     let api = api_client.current_provider()?;
 
-    api
-      .get_file_raw(&format!("{}", REPO_LAUNCGER_ID), "data%2Fbg%2Fbg.jpg")
-      .await
-      .context("Failed to fetch launcher background")
+    api.get_launcher_bg().await
   }
 
   pub async fn download_blob_to_file(
     &self,
     api_client: &ApiClient,
     release_name: &str,
-    project_id: &u32,
+    project_id: &str,
     blob_sha: &str,
     output_path: impl AsRef<Path>,
   ) -> Result<()> {
@@ -77,22 +74,5 @@ impl ServiceFiles {
     (self.callback)(release_name, downloaded, speed);
 
     Ok(())
-  }
-
-  pub async fn fetch_manifest_from_blob(&self, api_client: &ApiClient, project_id: &u32, blob_sha: &str) -> Result<ReleaseManifest> {
-    let api = api_client.current_provider()?;
-    let mut stream = api.get_blob_stream(project_id, blob_sha).await?;
-
-    let mut full_bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-      let bytes = chunk?;
-      full_bytes.extend_from_slice(&bytes);
-    }
-
-    let json_str = String::from_utf8(full_bytes)?;
-
-    let manifest: ReleaseManifest = serde_json::from_str(&json_str)?;
-
-    Ok(manifest)
   }
 }

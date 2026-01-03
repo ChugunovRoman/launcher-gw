@@ -6,12 +6,8 @@ use std::collections::HashMap;
 use crate::{
   consts::REPO_LAUNCGER_ID,
   providers::{
-    Gitlab::{
-      Gitlab::Gitlab,
-      issues::*,
-      models::{ManifestGitlab, TreeItemGitlab},
-    },
-    dto::TreeItem,
+    Gitlab::{Gitlab::Gitlab, issues::*, models::TreeItemGitlab},
+    dto::{Manifest, TreeItem},
   },
 };
 
@@ -29,7 +25,7 @@ pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Re
   }
 }
 
-pub async fn __get_blob_stream(s: &Gitlab, project_id: &u32, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+pub async fn __get_blob_stream(s: &Gitlab, project_id: &str, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
   let url = format!("{}/projects/{}/repository/blobs/{}/raw", s.host, project_id, blob_sha);
 
   __get_blob_by_url_stream(s, &url).await
@@ -49,7 +45,7 @@ pub async fn __get_blob_by_url_stream(s: &Gitlab, url: &str) -> Result<Box<dyn S
   ))
 }
 
-pub async fn __tree(s: &Gitlab, repo_id: u32, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>> {
+pub async fn __tree(s: &Gitlab, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>> {
   let params = search_params.iter().map(|v| format!("{}={}", v.0, v.1)).collect::<Vec<_>>().join("&");
   let mut url = format!("{}/projects/{}/repository/tree", s.host, repo_id);
 
@@ -78,7 +74,7 @@ pub async fn __tree(s: &Gitlab, repo_id: u32, search_params: HashMap<String, Str
     .iter()
     .map(|item| TreeItem {
       id: item.id.clone(),
-      project_id: repo_id,
+      project_id: repo_id.to_string(),
       name: item.name.clone(),
       path: item.path.clone(),
       item_type: item.item_type.clone(),
@@ -88,7 +84,7 @@ pub async fn __tree(s: &Gitlab, repo_id: u32, search_params: HashMap<String, Str
   Ok(common)
 }
 
-pub async fn __get_full_tree(s: &Gitlab, repo_id: u32) -> Result<Vec<TreeItem>> {
+pub async fn __get_full_tree(s: &Gitlab, repo_id: &str) -> Result<Vec<TreeItem>> {
   let mut all_files = Vec::new();
   let mut page: u16 = 1;
 
@@ -113,15 +109,19 @@ pub async fn __get_full_tree(s: &Gitlab, repo_id: u32) -> Result<Vec<TreeItem>> 
 
 pub async fn __load_manifest(s: &Gitlab) -> Result<()> {
   let search_params = HashMap::from([("in".to_owned(), "title".to_owned()), ("search".to_owned(), "mainfest.json".to_owned())]);
-  let issue = __find_issue(s, &REPO_LAUNCGER_ID, search_params).await?;
+  let issue = __find_issue(s, &REPO_LAUNCGER_ID.to_string(), search_params).await?;
 
   if issue.len() == 0 {
     bail!("Issue mainfest.json NOT FOUND!")
   }
 
-  let manifest: ManifestGitlab = serde_json::from_str(&issue[0].description)?;
+  let manifest: Manifest = serde_json::from_str(&issue[0].description)?;
 
   *s.manifest.lock().unwrap() = manifest;
 
   Ok(())
+}
+
+pub async fn __get_launcher_bg(s: &Gitlab) -> Result<Vec<u8>> {
+  __get_file_raw(s, &REPO_LAUNCGER_ID.to_string(), "data%2Fbg%2Fbg.jpg").await
 }

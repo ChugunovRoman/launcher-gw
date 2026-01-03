@@ -91,6 +91,7 @@
     },
     "tokens": {
       "label": {
+        "github": "GitHub Token",
         "gitlab": "GitLab Token"
       },
       "hide": "Hide",

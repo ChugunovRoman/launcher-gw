@@ -36,7 +36,7 @@ async fn __create_release_repos_gitlablike(s: &Service, name: &str, parent_id: &
   for i in 1..main_cnt.to_owned() + 1 {
     let repo_name = format!("main_{}", &i);
     (s.logger)(&format!("Create main repo for release: {} repo: {}", name, &repo_name));
-    let _ = api.create_repo(&repo_name, &release_group.id).await?;
+    let _ = api.create_repo(&repo_name, &repo_name, &release_group.id.to_string()).await?;
     (s.logger)(&format!("Create main repo for release: {} repo: {} COMPLETE !", name, &repo_name));
 
     sleep(Duration::from_millis(1000)).await;
@@ -44,9 +44,9 @@ async fn __create_release_repos_gitlablike(s: &Service, name: &str, parent_id: &
 
   for i in 1..updates_cnt.to_owned() + 1 {
     let repo_name = format!("updates_{}", &i);
-    (s.logger)(&format!("Create main repo for release: {} repo: {}", name, &repo_name));
-    let _ = api.create_repo(&repo_name, &release_group.id).await?;
-    (s.logger)(&format!("Create main repo for release: {} repo: {} COMPLETE !", name, &repo_name));
+    (s.logger)(&format!("Create repo for release updates: {} repo: {}", name, &repo_name));
+    let _ = api.create_repo(&repo_name, &repo_name, &release_group.id.to_string()).await?;
+    (s.logger)(&format!("Create repo for release updates: {} repo: {} COMPLETE !", name, &repo_name));
 
     sleep(Duration::from_millis(1000)).await;
   }
@@ -59,16 +59,20 @@ async fn __create_release_repos_githublike(s: &Service, name: &str, parent_id: &
   let api = s.api_client.current_provider()?;
   let code_name = Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string();
 
-  for i in 1..main_cnt.to_owned() {
-    let name = format!("{}_main_{}", &code_name, &i);
-    let _ = api.create_repo(&name, &parent_id).await?;
+  for i in 1..main_cnt.to_owned() + 1 {
+    let repo_name = format!("{}_main_{}", &code_name, &i);
+    (s.logger)(&format!("Create main repo for release: {} repo: {}", name, &repo_name));
+    let _ = api.create_repo(&repo_name, &name, &parent_id.to_string()).await?;
+    (s.logger)(&format!("Create main repo for release: {} repo: {} COMPLETE !", name, &repo_name));
 
     sleep(Duration::from_millis(1000)).await;
   }
 
-  for i in 1..updates_cnt.to_owned() {
-    let name = format!("{}_updates_{}", &code_name, &i);
-    let _ = api.create_repo(&name, &parent_id).await?;
+  for i in 1..updates_cnt.to_owned() + 1 {
+    let repo_name = format!("{}_updates_{}", &code_name, &i);
+    (s.logger)(&format!("Create repo for release updates: {} repo: {}", name, &repo_name));
+    let _ = api.create_repo(&repo_name, &name, &parent_id.to_string()).await?;
+    (s.logger)(&format!("Create repo for release updates: {} repo: {} COMPLETE !", name, &repo_name));
 
     sleep(Duration::from_millis(1000)).await;
   }

@@ -41,7 +41,7 @@ pub async fn __create_group(s: &Gitlab, name: &str, parent_id: &u32) -> Result<C
   })
 }
 
-pub async fn __update_group(s: &Gitlab, group_id: &u32, data: UpdateGroupDtoGitlab) -> Result<()> {
+pub async fn __update_group(s: &Gitlab, group_id: &str, data: UpdateGroupDtoGitlab) -> Result<()> {
   let url = format!("{}/groups/{}", s.host, &group_id);
 
   let resp = s

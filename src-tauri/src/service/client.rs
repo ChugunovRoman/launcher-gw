@@ -1,11 +1,8 @@
-use std::collections::HashMap;
-
 use crate::{
   consts::REPO_LAUNCGER_ID,
   service::{dto::UserData, main::Service},
 };
 use anyhow::Result;
-use urlencoding::encode;
 
 pub trait ServiceClient {
   async fn get_user(&self, uuid: String) -> Result<UserData>;
@@ -21,11 +18,7 @@ impl ServiceClient for Service {
       }
     };
 
-    let mut params = HashMap::new();
-    params.insert("search".to_string(), encode(&uuid).to_string());
-    params.insert("in".to_string(), "title".to_string());
-
-    let issues = match api.find_issue(&REPO_LAUNCGER_ID, params).await {
+    let issues = match api.find_user(&REPO_LAUNCGER_ID.to_string(), &uuid).await {
       Ok(data) => data,
       Err(error) => {
         log::warn!("Cannot parse issues response as JSON, returning default UserData. Error: {:?}", error);

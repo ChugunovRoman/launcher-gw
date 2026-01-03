@@ -262,7 +262,7 @@ pub async fn continue_upload(app: tauri::AppHandle) -> Result<(), String> {
     let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
     let service_guard = state.lock().await;
 
-    service_guard.set_release_visibility(progress_upload.path_repo.clone(), true).await
+    service_guard.set_release_visibility(&progress_upload.name, true).await
   }
   .map_err(|e| {
     log_full_error(&e);

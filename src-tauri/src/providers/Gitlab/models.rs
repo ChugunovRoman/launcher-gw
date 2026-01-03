@@ -24,13 +24,6 @@ impl fmt::Display for Visibility {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct ManifestGitlab {
-  #[serde(default)]
-  pub root_id: Option<u32>,
-  pub max_size: u64,
-}
-
-#[derive(Deserialize, Debug, Clone)]
 pub struct TreeItemGitlab {
   pub id: String,
   pub name: String,

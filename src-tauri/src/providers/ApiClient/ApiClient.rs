@@ -4,6 +4,7 @@ use crate::{
   utils::encoding::decode,
 };
 use anyhow::Result;
+use futures_util::future::join_all;
 use std::collections::HashMap;
 
 pub struct ApiClient {
@@ -63,20 +64,20 @@ impl ApiClient {
 
   /// Пингует все зарегистрированные провайдеры и обновляет их статус
   pub async fn ping_all(&self) -> Vec<(&'static str, ProviderStatus)> {
-    let mut results = Vec::new();
-    for (id, provider) in &self.providers {
+    let ping_futures = self.providers.iter().map(|(id, provider)| async move {
       let status = provider.ping().await;
 
       log::info!(
         "Provider '{}' is {} ms: {:?}",
-        &id,
+        id,
         if status.available { "UP" } else { "DOWN" },
         if status.available { status.latency_ms } else { None }
       );
 
-      results.push((*id, status));
-    }
-    results
+      (*id, status)
+    });
+
+    join_all(ping_futures).await
   }
 
   /// Возвращает только доступные провайдеры

@@ -4,7 +4,7 @@ use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -76,8 +76,8 @@ pub struct VersionProgressUpload {
 pub struct FileProgress {
   #[serde(default)]
   pub id: String,
-  #[serde(default)]
-  pub project_id: u32,
+  #[serde(deserialize_with = "de_string_or_number")]
+  pub project_id: String,
   #[serde(default)]
   pub name: String,
   #[serde(default)]
@@ -415,5 +415,22 @@ impl AppConfig {
     let json = serde_json::to_string_pretty(self).context("Failed to serialize config to JSON")?;
     fs::write(&self.path, json).context("Failed to write config file")?;
     Ok(())
+  }
+}
+
+fn de_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+  D: Deserializer<'de>,
+{
+  #[derive(Deserialize)]
+  #[serde(untagged)]
+  enum StringOrNumber {
+    String(String),
+    Number(u64),
+  }
+
+  match StringOrNumber::deserialize(deserializer)? {
+    StringOrNumber::String(s) => Ok(s),
+    StringOrNumber::Number(n) => Ok(n.to_string()),
   }
 }

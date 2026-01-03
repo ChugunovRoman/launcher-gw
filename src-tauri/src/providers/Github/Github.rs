@@ -8,40 +8,46 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::Stream;
+use rand_agents::user_agent;
 use reqwest::{
   Client,
   header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 
 use crate::{
-  consts::{GITLAB_PID, REPO_LAUNCGER_ID},
+  consts::GITHUB_PID,
   providers::{
     ApiProvider::ApiProvider,
-    Gitlab::{files::*, group::*, issues::*, launcher::*, models::ReleaseGitlab, release::*, repo::*},
+    Github::{files::*, issues::*, launcher::*, models::*, release::*, repo::*},
     dto::{Issue, *},
   },
   service::main::LogCallback,
 };
 
 #[derive(Clone)]
-pub struct Gitlab {
+pub struct Github {
   pub host: String,
   pub client: Arc<Mutex<Client>>,
   pub suppot_subgroups: bool,
 
   pub status: Arc<Mutex<ProviderStatus>>,
   pub manifest: Arc<Mutex<Manifest>>,
+  pub projects_map: Arc<Mutex<HashMap<u32, ProjectGithub>>>,
 
   pub logger: LogCallback,
 
   token: Arc<Mutex<String>>,
 }
 
-impl Gitlab {
+impl Github {
   pub fn new(h: &str, suppot_subgroups: bool, logger: LogCallback) -> Result<Self> {
-    log::info!("Start init Gitlab client");
+    let user_agent = user_agent();
+    log::info!("Start init Github client with User-Agent: {}", &user_agent);
 
-    let client = Client::builder().build()?;
+    let mut headers = HeaderMap::new();
+    headers.insert("User-Agent", HeaderValue::from_str(&user_agent)?);
+
+    let client = Client::builder().default_headers(headers).build()?;
 
     Ok(Self {
       host: h.to_string(),
@@ -51,6 +57,7 @@ impl Gitlab {
         latency_ms: None,
       })),
       suppot_subgroups,
+      projects_map: Arc::new(Mutex::new(HashMap::new())),
       manifest: Arc::new(Mutex::new(Manifest { root_id: None, max_size: 0 })),
       token: Arc::new(Mutex::new("".to_owned())),
       logger,
@@ -69,16 +76,21 @@ impl Gitlab {
   pub fn put(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().put(url)
   }
+  pub fn patch(&self, url: &str) -> reqwest::RequestBuilder {
+    self.get_client().patch(url)
+  }
 }
 
 #[async_trait]
-impl ApiProvider for Gitlab {
+impl ApiProvider for Github {
   fn set_token(&self, token: String) -> Result<()> {
     *self.token.lock().unwrap() = token.clone();
 
+    let user_agent = user_agent();
     let mut headers = HeaderMap::new();
-    let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).or_else(|_| HeaderValue::from_str(&format!("PRIVATE-TOKEN {}", token)))?;
+    let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).or_else(|_| HeaderValue::from_str(&format!("Authorization: {}", token)))?;
     headers.insert(AUTHORIZATION, auth_value);
+    headers.insert("User-Agent", HeaderValue::from_str(&user_agent)?);
 
     *self.client.lock().unwrap() = Client::builder().default_headers(headers).build()?;
 
@@ -89,14 +101,14 @@ impl ApiProvider for Gitlab {
   }
 
   fn id(&self) -> &'static str {
-    GITLAB_PID
+    GITHUB_PID
   }
   async fn ping(&self) -> ProviderStatus {
     log::info!("Start PING provider: {}, url: {}", self.id(), &self.host);
 
     let start = Instant::now();
     let res = self
-      .get(&format!("{}/projects/{}", &self.host, REPO_LAUNCGER_ID))
+      .get(&self.host)
       .timeout(Duration::from_secs(10)) // важно: не висеть вечно
       .send()
       .await;
@@ -178,12 +190,19 @@ impl ApiProvider for Gitlab {
 
   // Repo API
   async fn create_repo(&self, name: &str, description: &str, parent_id: &str) -> Result<CreateRepoResponse> {
-    __create_repo(self, name, parent_id).await
+    __create_repo(self, name, description).await
   }
 
   // Groups API
   async fn create_group(&self, name: &str, parent_id: &u32) -> Result<CreategGroupResponse> {
-    __create_group(self, name, parent_id).await
+    // Not applicable for Github
+    Ok(CreategGroupResponse {
+      id: 0,
+      name: "".to_owned(),
+      path: "".to_owned(),
+      lfs_enabled: false,
+      parent_id: 0,
+    })
   }
 
   // Release
@@ -193,8 +212,8 @@ impl ApiProvider for Gitlab {
   async fn get_releases(&self) -> Result<Vec<Release>> {
     __get_releases(self).await
   }
-  async fn set_release_visibility(&self, release_id: &str, visibility: bool) -> Result<()> {
-    __set_release_visibility(self, release_id, visibility).await
+  async fn set_release_visibility(&self, release_name: &str, visibility: bool) -> Result<()> {
+    __set_release_visibility(self, release_name, visibility).await
   }
   async fn get_release_repos_by_name(&self, release_id: &str) -> Result<Vec<Project>> {
     __get_release_repos_by_name(self, release_id).await

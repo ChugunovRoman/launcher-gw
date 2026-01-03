@@ -17,6 +17,7 @@ dependencies = [
  "futures-util",
  "git2",
  "log",
+ "rand_agents",
  "regex",
  "reqwest",
  "scopeguard",
@@ -3663,6 +3664,15 @@ checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
+]
+
+[[package]]
+name = "rand_agents"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a443ab8a19bb7bbfa003b760590d7b6fe13fab900e18d766d1819576c43e797c"
+dependencies = [
+ "rand 0.8.5",
 ]
 
 [[package]]

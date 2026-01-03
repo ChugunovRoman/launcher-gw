@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum ReleasePlatform {
+  Windows,
+  Linux,
+  MacOS,
+}
+
 #[derive(Serialize, Debug, Clone)]
 pub struct ProviderStatus {
   pub available: bool,
@@ -8,7 +15,7 @@ pub struct ProviderStatus {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Manifest {
-  pub root_id: Option<String>,
+  pub root_id: Option<u32>,
   pub max_size: u64,
 }
 
@@ -17,6 +24,19 @@ pub struct Release {
   pub id: u32,
   pub name: String,
   pub path: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ReleaseAssetGit {
+  pub name: String,
+  pub platform: ReleasePlatform,
+  pub download_link: String,
+}
+#[derive(Deserialize, Debug, Clone)]
+pub struct ReleaseGit {
+  pub name: String,
+  pub version: String,
+  pub assets: Vec<ReleaseAssetGit>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -33,7 +53,7 @@ pub struct Project {
 pub struct TreeItem {
   pub id: String,
   #[serde(skip)]
-  pub project_id: u32,
+  pub project_id: String,
   pub name: String,
   pub path: String,
   #[serde(rename = "type")]

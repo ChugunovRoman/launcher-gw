@@ -15,11 +15,11 @@ use regex::Regex;
 
 pub trait ServiceGetRelease {
   async fn get_releases(&self) -> Result<Vec<Version>>;
-  async fn get_release_manifest(&self, release_name: String) -> Result<ReleaseManifest>;
-  async fn get_main_release_files(&self, release_id: u32) -> Result<Vec<TreeItem>>;
+  async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest>;
+  async fn get_main_release_files(&self, release_id: &str) -> Result<Vec<TreeItem>>;
   async fn get_local_version(&self) -> Result<Vec<Version>>;
   async fn get_main_version(&self) -> Option<Version>;
-  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()>;
+  async fn set_release_visibility(&self, path: &str, visibility: bool) -> Result<()>;
 }
 
 impl ServiceGetRelease for Service {
@@ -44,7 +44,7 @@ impl ServiceGetRelease for Service {
     Ok(result)
   }
 
-  async fn get_release_manifest(&self, release_name: String) -> Result<ReleaseManifest> {
+  async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest> {
     let api = self.api_client.current_provider()?;
     let repos = api.get_release_repos_by_name(release_name.clone()).await?;
 
@@ -53,26 +53,37 @@ impl ServiceGetRelease for Service {
       .find(|r| r.name.starts_with("main_1") || r.name.ends_with("main_1"))
       .expect(&format!("Repo main_1 not found for release: {}", &release_name));
 
-    let bytes = api.get_file_raw(&format!("{}", project.id), MANIFEST_NAME).await?;
+    let project_id = if api.is_suppot_subgroups() {
+      project.id.to_string()
+    } else {
+      project.name.clone()
+    };
+    let bytes = api.get_file_raw(&project_id, MANIFEST_NAME).await?;
     let manifest: ReleaseManifest = serde_json::from_slice(&bytes)?;
 
     Ok(manifest)
   }
 
-  async fn get_main_release_files(&self, release_id: u32) -> Result<Vec<TreeItem>> {
+  async fn get_main_release_files(&self, release_name: &str) -> Result<Vec<TreeItem>> {
     let api = self.api_client.current_provider()?;
 
-    let repos = api.get_release_repos(release_id).await?;
+    let repos = api.get_release_repos_by_name(release_name).await?;
 
     if repos.is_empty() {
-      bail!("No 'main_' repos found for release {}", release_id);
+      bail!("No 'main_' repos found for release {}", release_name);
     }
 
     let tasks: Vec<_> = repos
       .iter()
       .map(|repo| {
+        let project_id = if api.is_suppot_subgroups() {
+          repo.id.to_string()
+        } else {
+          repo.name.clone()
+        };
+
         log::info!("Fetching files from repo: {:?}", repo);
-        api.get_full_tree(repo.id)
+        api.get_full_tree(project_id)
       })
       .collect();
 
@@ -226,10 +237,10 @@ impl ServiceGetRelease for Service {
     })
   }
 
-  async fn set_release_visibility(&self, path: String, visibility: bool) -> Result<()> {
+  async fn set_release_visibility(&self, release_name: &str, visibility: bool) -> Result<()> {
     let api = self.api_client.current_provider()?;
 
-    api.set_release_visibility(path, visibility).await?;
+    api.set_release_visibility(release_name, visibility).await?;
 
     Ok(())
   }

@@ -33,19 +33,19 @@ pub async fn __get_releases(s: &Gitlab) -> Result<Vec<Release>> {
   Ok(versions)
 }
 
-pub async fn __get_release_repos_by_name(s: &Gitlab, release_name: String) -> Result<Vec<Project>> {
+pub async fn __get_release_repos_by_name(s: &Gitlab, release_name: &str) -> Result<Vec<Project>> {
   let releases = __get_releases(s).await?;
   let release = releases
     .iter()
     .find(|r| r.name == release_name)
     .expect(&format!("get_release_repos_by_name(), relese with name: {} not found !", &release_name));
 
-  let repos = __get_release_repos(s, release.id).await?;
+  let repos = __get_release_repos(s, &release.id.to_string()).await?;
 
   Ok(repos)
 }
 
-pub async fn __get_release_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Project>> {
+async fn __get_release_repos(s: &Gitlab, release_id: &str) -> Result<Vec<Project>> {
   let url = format!("{}/groups/{}/projects", &s.host, &release_id);
   let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_repos)")?;
 
@@ -72,7 +72,7 @@ pub async fn __get_release_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Proj
   Ok(versions)
 }
 
-pub async fn __get_updates_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Project>> {
+pub async fn __get_updates_repos_by_name(s: &Gitlab, release_id: &str) -> Result<Vec<Project>> {
   let url = format!("{}/groups/{}/projects", &s.host, &release_id);
   let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_repos)")?;
 
@@ -99,12 +99,12 @@ pub async fn __get_updates_repos(s: &Gitlab, release_id: u32) -> Result<Vec<Proj
   Ok(versions)
 }
 
-pub async fn __set_release_visibility(s: &Gitlab, path: String, visibility: bool) -> Result<()> {
+pub async fn __set_release_visibility(s: &Gitlab, release_id: &str, visibility: bool) -> Result<()> {
   let releases = __get_releases(s).await?;
-  let release_id = match releases.iter().find(|r| r.path == path) {
+  let release_id = match releases.iter().find(|r| r.path == release_id) {
     Some(data) => data.id,
     None => {
-      bail!("set_release_visibility(), Release by path: {} not found !", &path)
+      bail!("set_release_visibility(), Release by path: {} not found !", release_id)
     }
   };
 
@@ -129,7 +129,7 @@ pub async fn __set_release_visibility(s: &Gitlab, path: String, visibility: bool
   if visibility {
     __update_group(
       s,
-      &release_id,
+      &release_id.to_string(),
       UpdateGroupDtoGitlab {
         visibility: if visibility {
           Some(Visibility::Public)
@@ -144,7 +144,7 @@ pub async fn __set_release_visibility(s: &Gitlab, path: String, visibility: bool
   for repo in repos {
     let _ = __update_repo(
       s,
-      &repo.id,
+      &repo.id.to_string(),
       UpdateRepoDtoGitlab {
         visibility: if visibility {
           Some(Visibility::Public)
@@ -160,7 +160,7 @@ pub async fn __set_release_visibility(s: &Gitlab, path: String, visibility: bool
   if !visibility {
     __update_group(
       s,
-      &release_id,
+      &release_id.to_string(),
       UpdateGroupDtoGitlab {
         visibility: if visibility {
           Some(Visibility::Public)

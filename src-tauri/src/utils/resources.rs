@@ -1,5 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
+use crate::consts::*;
+
 #[cfg(windows)]
 const SEVEN_ZIP_BIN: &[u8] = include_bytes!("../../../bin/win/7za.exe");
 #[cfg(windows)]
@@ -54,9 +56,9 @@ pub fn game_exe() -> String {
 
 pub fn launcher_exe() -> String {
   let binary_name = if cfg!(windows) {
-    "Launcher.exe".to_owned()
+    EXE_WIN_NAME.to_owned()
   } else {
-    "Launcher".to_owned()
+    EXE_LINUX_NAME.to_owned()
   };
 
   binary_name
