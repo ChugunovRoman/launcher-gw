@@ -288,6 +288,16 @@
     }
   }
 
+  function hasLocalVersion(version: Version) {
+    for (const [name, local] of $localVersions) {
+      if (name === version.name) return true;
+      if (local.path === version.name) return true;
+      if (local.path === version.path) return true;
+    }
+
+    return false;
+  }
+
   $effect(() => {
     if ($providersWasInited) {
       invoke<AppConfig>("get_config").then((config) => {
@@ -382,7 +392,7 @@
       {/if}
     {:else}
       {#each $versions as version, i}
-        {#if !$localVersions.has(version.name)}
+        {#if !hasLocalVersion(version)}
           <div class="release-item">
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
