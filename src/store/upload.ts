@@ -34,6 +34,9 @@ export function removeVersion(releaseName: string) {
     return data.filter(v => v.name !== releaseName);
   });
 }
+export function refreshVersions() {
+  versions.set(get(versions));
+}
 export function updateEachVersion(cb: (data: Version) => Partial<Version>) {
   versions.update((data) => {
     return data.map(version => {

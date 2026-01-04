@@ -11,6 +11,7 @@
   import LinksBar from "./Components/LinksBar.svelte";
 
   import RestartApp from "./Dialogs/RestartApp.svelte";
+  import RemoveVersion from "./Dialogs/RemoveVersion.svelte";
 
   import MainView from "./Views/Main.svelte";
   import SettingsView from "./Views/Settings.svelte";
@@ -115,6 +116,7 @@
   </div>
 
   <RestartApp />
+  <RemoveVersion />
 </main>
 
 <style>

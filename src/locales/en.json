@@ -27,6 +27,7 @@
       "attention": "Attention!",
       "restartTxt1": "Global War Launcher has been updated to version",
       "restartTxt2": "Restart the application?",
+      "removeVersion": "Are you sure you want to delete the version ",
       "yes": "Yes",
       "no": "No"
     },
@@ -118,6 +119,7 @@
       "runVersion": "Launch",
       "noAnyInstalledVersion": "No versions installed",
       "delete": "Delete",
+      "deleting": "Deleting...",
       "installed": "Downloaded"
     },
     "params": {

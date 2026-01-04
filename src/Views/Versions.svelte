@@ -8,9 +8,11 @@
     inDownloading,
     localVersions,
     providersWasInited,
-    removeLocalVersion,
     versionsWillBeLoaded,
     expandedIndex,
+    showDlgRemoveVersion,
+    removeVersion,
+    removeVersionInProcess,
   } from "../store/main";
   import {
     showUploading,
@@ -23,6 +25,7 @@
     hasAnyLocalVersion,
     updateEachVersion,
     mainVersion,
+    refreshVersions,
   } from "../store/upload";
   import { ConnectStatus, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed } from "../Icons";
@@ -31,6 +34,7 @@
 
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
+  import Spin from "../Components/Spin.svelte";
 
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
@@ -242,21 +246,8 @@
   async function deleteVersion(event: Event, version: Version) {
     event.stopPropagation();
 
-    await invoke<void>("delete_installed_version", { versionName: version.path });
-
-    removeLocalVersion(version.name);
-
-    if ($localVersions.size) {
-      const name = [...$localVersions.keys()][0];
-      await invoke<void>("set_current_game_version", { versionName: name });
-      selectedVersion.set(name);
-    } else if ($mainVersion) {
-      await invoke<void>("set_current_game_version", { versionName: $mainVersion.name });
-      selectedVersion.set($mainVersion.name);
-    } else {
-      await invoke<void>("set_current_game_version");
-      selectedVersion.set(undefined);
-    }
+    $removeVersion = version;
+    $showDlgRemoveVersion = true;
   }
 
   function getStatusText(status: DownloadStatus) {
@@ -305,6 +296,8 @@
           showUploading.set(true);
           releaseName.set(config.progress_upload.name);
           selectedVersion.set(config.selected_version);
+
+          refreshVersions();
 
           invoke<RepoSyncState | null>("get_upload_manifest").then((manifest) => {
             if (manifest) {
@@ -358,7 +351,12 @@
                 onclick={(e) => deleteVersion(e, version)}
                 class="choose-btn cancel-btn"
                 style="margin-left: auto; margin-right: 10px">
-                {$_("app.releases.delete")}
+                {#if $removeVersionInProcess && $removeVersion?.name === version.name}
+                  {$_("app.releases.deleting")}
+                  <Spin size={16} />
+                {:else}
+                  {$_("app.releases.delete")}
+                {/if}
               </button>
             </div>
           </div>

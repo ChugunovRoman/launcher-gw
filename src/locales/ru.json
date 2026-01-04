@@ -27,6 +27,7 @@
       "attention": "Внимание!",
       "restartTxt1": "Лаунчер Global War был обновлен до версии",
       "restartTxt2": "Перезапусить приложение?",
+      "removeVersion": "Вы действительно хотите удалить версию ",
       "yes": "Да",
       "no": "нет"
     },
@@ -118,6 +119,7 @@
       "runVersion": "Запустить",
       "noAnyInstalledVersion": "Нет ни одной установленной версии",
       "delete": "Удалить",
+      "deleting": "Удаление...",
       "installed": "Загружено"
     },
     "params": {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  let { children, isDisabled = $bindable(false), isRed = $bindable(false), isYellow = $bindable(false), onclick, style } = $props();
+  let { children, isDisabled = $bindable(false), isRed = $bindable(false), isYellow = $bindable(false), onclick, style = "" } = $props();
 </script>
 
 <span role="button" {style} tabindex="0" class="btn" class:btn_inactive={isDisabled} class:btn_red={isRed} class:btn_yellow={isYellow} {onclick}>
