@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum DownloadStatus {
   Init = 0,
+  Pause,
   DownloadFiles,
   Unpacking,
 }
@@ -23,6 +24,21 @@ pub struct DownloadProgress {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownlaodFileStat {
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseManifestFile {
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub size: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseManifest {
   #[serde(default)]
   pub total_files_count: u32,
@@ -30,4 +46,6 @@ pub struct ReleaseManifest {
   pub total_size: u64,
   #[serde(default)]
   pub compressed_size: u64,
+  #[serde(default)]
+  pub files: Vec<ReleaseManifestFile>,
 }

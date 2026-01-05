@@ -77,6 +77,7 @@ pub async fn create_archive(
     total_files_count: 0,
     total_size: 0,
     compressed_size: 0,
+    files: vec![],
   }));
 
   // Асинхронно читаем stderr

@@ -18,9 +18,9 @@
       "renderer_rgl": "OpenGL"
     },
     "common": {
-      "gbSfx": "Гб",
-      "mbSfx": "Mб",
-      "kbSfx": "Kб",
+      "gbSfx": "ГБ",
+      "mbSfx": "MБ",
+      "kbSfx": "KБ",
       "bSfx": "байт"
     },
     "dlg": {
@@ -152,9 +152,11 @@
       "addVersionName": "Добавить в путь название версии",
       "cancel": "Отменить",
       "start": "Загрузить",
+      "filesStats": "Статус загрузки файлов: ",
       "wait": "Подождите",
       "text": {
         "init": "Подготовка...",
+        "pause": "Приостановлено",
         "files": "Загрузка файлов...",
         "unpack": "Установка...",
         "text": ""

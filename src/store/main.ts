@@ -15,7 +15,6 @@ export const fontColor = writable("rgba(243, 240, 63, 1)");
 export const expandedIndex = writable<number | null>(null);
 
 export const providersWasInited = writable(false);
-export const inDownloading = writable(false);
 export const versionsWillBeLoaded = writable(false);
 
 export const allowPackMod = writable(false);

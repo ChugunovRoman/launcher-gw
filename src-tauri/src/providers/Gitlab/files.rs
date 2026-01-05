@@ -25,14 +25,32 @@ pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Re
   }
 }
 
-pub async fn __get_blob_stream(s: &Gitlab, project_id: &str, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+pub async fn __get_blob_stream(
+  s: &Gitlab,
+  project_id: &str,
+  blob_sha: &str,
+  seek: &Option<u64>,
+) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
   let url = format!("{}/projects/{}/repository/blobs/{}/raw", s.host, project_id, blob_sha);
 
-  __get_blob_by_url_stream(s, &url).await
+  __get_blob_by_url_stream(s, &url, seek).await
+}
+pub async fn __get_blob_direct_url(s: &Gitlab, project_id: &str, blob_sha: &str) -> String {
+  let url = format!("{}/projects/{}/repository/blobs/{}/raw", s.host, project_id, blob_sha);
+
+  url
 }
 
-pub async fn __get_blob_by_url_stream(s: &Gitlab, url: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
-  let response = s.get(url).send().await.context("Failed to send blob download request")?;
+pub async fn __get_blob_by_url_stream(s: &Gitlab, url: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+  let response = match seek {
+    Some(bytes) => s
+      .get(url)
+      .header("Range", format!("bytes={}-", bytes))
+      .send()
+      .await
+      .context("Failed to send blob download request")?,
+    None => s.get(url).send().await.context("Failed to send blob download request")?,
+  };
 
   if !response.status().is_success() {
     let status = response.status();
@@ -131,7 +149,7 @@ pub async fn __get_file_content_size(s: &Gitlab, direct_url: &str) -> Result<u64
     .head(direct_url)
     .send()
     .await
-    .context("Failed to send request to GitLab (get_launcher_release)")?;
+    .context("Failed to send request to GitLab (__get_file_content_size)")?;
 
   if !resp.status().is_success() {
     let status = resp.status();

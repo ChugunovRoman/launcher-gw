@@ -152,17 +152,28 @@ impl ApiProvider for Gitlab {
   }
 
   // Files API
+  async fn get_file_content_size(&self, direct_url: &str) -> Result<u64> {
+    __get_file_content_size(self, direct_url).await
+  }
   async fn get_launcher_bg(&self) -> Result<Vec<u8>> {
     __get_launcher_bg(self).await
   }
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
     __get_file_raw(self, project_id, file_path).await
   }
-  async fn get_blob_stream(&self, project_id: &str, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
-    __get_blob_stream(self, project_id, blob_sha).await
+  async fn get_blob_stream(
+    &self,
+    project_id: &str,
+    blob_sha: &str,
+    seek: &Option<u64>,
+  ) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+    __get_blob_stream(self, project_id, blob_sha, seek).await
   }
-  async fn get_blob_by_url_stream(&self, link: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
-    __get_blob_by_url_stream(self, link).await
+  async fn get_blob_direct_url(&self, project_id: &str, blob_sha: &str) -> String {
+    __get_blob_direct_url(self, project_id, blob_sha).await
+  }
+  async fn get_blob_by_url_stream(&self, link: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+    __get_blob_by_url_stream(self, link, seek).await
   }
   async fn tree(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>> {
     __tree(self, repo_id, search_params).await

@@ -11,6 +11,7 @@ export enum ConnectStatus {
 
 export enum DownloadStatus {
   Init = "Init",
+  Pause = "Pause",
   DownloadFiles = "DownloadFiles",
   Unpacking = "Unpacking",
 }

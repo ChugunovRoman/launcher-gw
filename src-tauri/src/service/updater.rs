@@ -78,7 +78,7 @@ impl ServiceUpdater {
     if let Some(target) = release.assets.iter().find(|&asset| asset.platform == asset_name) {
       log::debug!("ServiceUpdater.download, target: {:?}", &target);
 
-      let mut stream = api.get_blob_by_url_stream(&target.download_link).await?;
+      let mut stream = api.get_blob_by_url_stream(&target.download_link, &None).await?;
 
       let base_dir = app_handle
         .path()

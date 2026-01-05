@@ -1,14 +1,14 @@
 use crate::{
   configs::AppConfig::{AppConfig, Version},
   consts::BIN_DIR,
-  handlers::dto::ReleaseManifest,
+  handlers::dto::{DownlaodFileStat, ReleaseManifest},
   service::{create_release::ServiceRelease, get_release::ServiceGetRelease, main::Service},
   utils::{errors::log_full_error, git::grouping::group_files_by_size, resources::game_exe},
 };
 use anyhow::Context;
-use std::{convert::TryFrom, fs, path::PathBuf};
+use std::{convert::TryFrom, fs, os::windows::fs::MetadataExt, path::PathBuf};
 use std::{path::Path, sync::Arc};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 #[tauri::command]
@@ -84,13 +84,6 @@ pub async fn get_release_manifest(app: tauri::AppHandle, releaseName: String) ->
   };
   let manifest = {
     log::info!("manifest in config for release: {:?}", &release);
-
-    let content = r#"{"total_files_count":67362,"total_size":24744098842,"compressed_size":9164158137}"#;
-    let test: Result<ReleaseManifest, _> = serde_json::from_str(&content);
-    match &test {
-      Ok(cfg) => log::info!("Parsed OK: {:?}", cfg),
-      Err(e) => log::error!("Parse FAILED: {}", e),
-    }
 
     match release.manifest.clone() {
       Some(data) => data,
@@ -320,6 +313,49 @@ pub async fn clear_progress_version(app_config: tauri::State<'_, Arc<Mutex<AppCo
       e.to_string()
     })?;
   }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn emit_file_list_stats(
+  app: tauri::AppHandle,
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  versionName: String,
+) -> Result<(), String> {
+  let mut file_sizes: Vec<DownlaodFileStat> = vec![];
+
+  if let Some(version) = {
+    let config_guard = app_config.lock().await;
+
+    config_guard.progress_download.get(&versionName).cloned()
+  } {
+    for file in version.files.iter() {
+      let file_path = Path::new(&version.download_path).join(&file.1.path);
+      let file_part_path = Path::new(&version.download_path).join(format!("{}.part", &file.1.path));
+
+      if file_path.exists() {
+        let size = match tokio::fs::read_to_string(file_part_path).await {
+          Ok(content) => content.trim().parse::<u64>().unwrap_or(0),
+          Err(_) => file.1.total_size,
+        };
+
+        file_sizes.push(DownlaodFileStat {
+          name: file.1.path.clone(),
+          size: Some(size),
+        });
+      } else {
+        file_sizes.push(DownlaodFileStat {
+          name: file.1.path.clone(),
+          size: Some(0),
+        });
+      }
+    }
+  };
+
+  file_sizes.sort_by_key(|file| file.name.split('.').last().and_then(|ext| ext.parse::<u32>().ok()).unwrap_or(0));
+
+  let _ = app.emit("download-version-files", (&versionName, file_sizes));
 
   Ok(())
 }

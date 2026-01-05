@@ -152,9 +152,11 @@
       "addVersionName": "Add version name to path",
       "cancel": "Cancel",
       "start": "Download",
+      "filesStats": "File download status: ",
       "wait": "Please wait",
       "text": {
         "init": "Preparing...",
+        "pause": "Suspended",
         "files": "Downloading files...",
         "unpack": "Installing...",
         "text": ""

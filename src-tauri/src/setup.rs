@@ -81,8 +81,8 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   // Создаём сервис
   let service = Service::new(config_arc.clone(), logger);
   let service_arc = Arc::new(Mutex::new(service));
-  let service_files_arc = Arc::new(ServiceFiles::new(move |release_name, bytes, speed| {
-    let _ = handle2.emit("download-speed-status", (release_name, &bytes, &speed));
+  let service_files_arc = Arc::new(ServiceFiles::new(move |release_name, file_name, bytes, total_bytes, speed| {
+    let _ = handle2.emit("download-speed-status", (release_name, file_name, &bytes, &total_bytes, &speed));
   }));
   let service_updater_arc = Arc::new(ServiceUpdater::new(move |release_name, bytes, speed| {
     let _ = handle3.emit("download-launcher-status", (release_name, &bytes, &speed));

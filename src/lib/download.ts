@@ -28,17 +28,37 @@ export async function initDownloadListeners() {
       status,
     }));
   }));
-  unlisten.set('download-speed-status', await listen('download-speed-status', (event: Event<[string, number, number]>) => {
-    const [versionName, bytes, speed] = event.payload;
+  unlisten.set('download-speed-status', await listen('download-speed-status', (event: Event<[string, string, number, number, number]>) => {
+    const [versionName, fileName, bytes, totalBytes, speed] = event.payload;
 
     const [speedValue, sfxValue] = formatSpeedBytesPerSec(speed);
 
-    updateVersion(versionName, () => ({
-      downloadedFileBytes: bytes,
-      downloadSpeed: speed,
-      speedValue,
-      sfxValue,
-    }));
+    updateVersion(versionName, (version) => {
+      const map = version.filesProgress;
+      let totalSpeed = 0
+
+      for (const [name, progress] of map) {
+        totalSpeed += progress.downloadSpeed;
+      }
+
+      const [totalSpeedValue, totalSfxValue] = formatSpeedBytesPerSec(totalSpeed);
+
+      map.set(fileName, {
+        downloadProgress: bytes / totalBytes * 100,
+        downloadedFileBytes: bytes,
+        totalFileBytes: totalBytes,
+        downloadSpeed: speed,
+        speedValue,
+        sfxValue,
+      });
+
+      return {
+        downloadSpeed: totalSpeed,
+        speedValue: totalSpeedValue,
+        sfxValue: totalSfxValue,
+        filesProgress: map,
+      };
+    });
   }));
   unlisten.set('download-launcher-status', await listen('download-launcher-status', (event: Event<[string, number, number]>) => {
     const [versionName, bytes, totalSize] = event.payload;
@@ -48,6 +68,35 @@ export async function initDownloadListeners() {
     launcherDwnBytes.set(bytes);
     launcherDwnTotalBytes.set(totalSize);
     launcherDwnProgress.set(bytes / totalSize * 100);
+  }));
+  unlisten.set('download-version-files', await listen('download-version-files', (event: Event<[string, { name: string; size: number }[]]>) => {
+    const [versionName, fileSizesMap] = event.payload;
+
+    updateVersion(versionName, (version) => {
+      const map = new Map();
+
+      for (const item of fileSizesMap) {
+        const old = version.filesProgress.get(item.name);
+        map.set(item.name, {
+          downloadProgress: old ? (old.downloadedFileBytes / old?.totalFileBytes || 0) * 100 : 0,
+          downloadedFileBytes: item.size || 0,
+          totalFileBytes: old?.totalFileBytes || 0,
+          downloadSpeed: 0,
+          speedValue: 0,
+          sfxValue: "",
+        });
+      }
+
+
+      return {
+        filesProgress: map,
+      };
+    });
+  }));
+  unlisten.set('cancel-download-version', await listen('cancel-download-version', (event: Event<string>) => {
+    const versionName = event.payload;
+
+    console.log("cancel-download-version, versionName: ", versionName);
   }));
   unlisten.set('download-unpack-version', await listen('download-unpack-version', async (event: Event<string>) => {
     const versionName = event.payload;

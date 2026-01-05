@@ -2,8 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
 import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded } from '../store/main';
-import { ConnectStatus } from "../consts";
-import { versions, updateEachVersion, hasAnyLocalVersion } from '../store/upload';
+import { ConnectStatus, DownloadStatus } from "../consts";
+import { versions } from '../store/upload';
 import { get } from 'svelte/store';
 import { sep } from '@tauri-apps/api/path';
 
@@ -43,6 +43,7 @@ export async function initMainListeners() {
       let downloadedFilesCnt = 0;
       let totalFileCount = 0;
       let isStoped = false;
+      let status = DownloadStatus.Init;
 
       if (progress) {
         installed_path = progress.installed_path;
@@ -51,6 +52,9 @@ export async function initMainListeners() {
         totalFileCount = progress.total_file_count;
         isStoped = true;
         downloadProgress = (downloadedFilesCnt / totalFileCount) * 100.0;
+        status = DownloadStatus.Pause;
+
+        invoke('emit_file_list_stats', { versionName: version.name });
       }
 
       return {
@@ -69,6 +73,8 @@ export async function initMainListeners() {
         totalFileCount,
         speedValue: 0,
         sfxValue: "",
+        filesProgress: new Map(),
+        status,
       }
     }));
     versionsWillBeLoaded.set(true);

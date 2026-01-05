@@ -1,16 +1,19 @@
 use crate::{
-  configs::AppConfig::{AppConfig, FileProgress, Version, VersionProgress},
+  configs::AppConfig::{AppConfig, FileProgress, VersionProgress},
+  consts::PULL_FILES_SIZE,
   handlers::dto::{DownloadProgress, DownloadStatus},
   service::{files::ServiceFiles, get_release::ServiceGetRelease, main::Service},
   utils::errors::log_full_error,
 };
 use anyhow::Context;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::{
   collections::HashMap,
   path::Path,
   sync::{Arc, Mutex as StdMutex},
 };
 use tauri::Emitter;
+use tokio::sync::Semaphore;
 use tokio::sync::{Mutex, broadcast};
 
 pub type CancelMap = Arc<StdMutex<HashMap<String, broadcast::Sender<()>>>>;
@@ -38,7 +41,7 @@ pub async fn start_download_version(
 ) -> Result<(), String> {
   let (tx, mut rx) = broadcast::channel::<()>(1);
   {
-    channel_map.lock().unwrap().insert(versionName.clone(), tx);
+    channel_map.lock().unwrap().insert(versionName.clone(), tx.clone());
   }
   // Удаляем запись после завершения (успешного или нет)
   scopeguard::defer! {
@@ -66,7 +69,7 @@ pub async fn start_download_version(
       e.to_string()
     })?;
 
-  log::info!("start_download_versions, selected_version: {:?}", selected_version);
+  log::info!("start_download_versions, selected_version: {:?}", &selected_version);
 
   let mut version = VersionProgress {
     id: selected_version.id,
@@ -148,6 +151,12 @@ pub async fn start_download_version(
   );
 
   for file in &files {
+    let mut size: u64 = 0;
+    if let Some(meta) = &selected_version.manifest {
+      if let Some(found) = meta.files.iter().find(|f| f.name == file.name) {
+        size = found.size.clone();
+      };
+    };
     version.files.insert(
       file.id.clone(),
       FileProgress {
@@ -156,6 +165,8 @@ pub async fn start_download_version(
         name: file.name.clone(),
         path: file.path.clone(),
         is_downloaded: false,
+        size: 0,
+        total_size: size,
       },
     );
   }
@@ -191,90 +202,118 @@ pub async fn start_download_version(
     return Err("USER_CANCELLED".to_string());
   }
 
-  let mut downloaded_files_cnt: u16 = 0;
+  let total_file_count = files.len() as u16;
+  let downloaded_cnt = Arc::new(AtomicU16::new(0));
+  let semaphore = Arc::new(Semaphore::new(PULL_FILES_SIZE as usize));
+
+  let mut join_handles = Vec::new();
 
   for file in files {
-    if rx.try_recv().is_ok() {
-      log::info!("Download task '{}' was cancelled", &versionName);
-      return Err("USER_CANCELLED".to_string());
+    // 1. Проверяем, не была ли отменена загрузка перед стартом следующего файла
+    if !rx.is_empty() || rx.try_recv().is_ok() {
+      log::info!("Main loop caught cancel signal");
+      let _ = app.emit("cancel-download-version", &versionName);
+      break;
     }
 
-    log::info!("Get file {:?}", file.name);
+    // 2. Ждем свободного места в пуле (макс 6)
+    let permit = semaphore.clone().acquire_owned().await.map_err(|e| e.to_string())?;
 
-    let mut progress = (downloaded_files_cnt as f32 / version.total_file_count as f32) * 100.0;
-    let _ = app.emit(
-      "download-version",
-      DownloadProgress {
-        version_name: version.name.clone(),
-        status: DownloadStatus::DownloadFiles,
-        file: file.name.clone(),
-        progress,
-        downloaded_files_cnt,
-        total_file_count: version.total_file_count,
-      },
-    );
+    // 3. Логика ожидания 1 секунду перед добавлением следующего файла
+    // tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let file_path = download_dir.join(&file.path);
+    // Клонируем всё необходимое для перемещения в async block
+    let app_c = app.clone();
+    let app_config_c = app_config.inner().clone();
+    let service_files_c = service_files.inner().clone();
+    let service_c = service.inner().clone();
+    let version_name_c = versionName.clone();
+    let file_c = file.clone();
+    let download_dir_c = download_dir.to_path_buf();
+    let downloaded_cnt_c = downloaded_cnt.clone();
 
-    let api_client = {
-      let service_guard = service.lock().await;
-      service_guard.api_client.clone()
-    };
-    service_files
-      .download_blob_to_file(&api_client, &version.name, &file.project_id, &file.id, &file_path)
-      .await
-      .with_context(|| format!("Failed to download release file: {:?} for version: {}", file_path, version.name))
-      .map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
+    let mut local_rx = tx.subscribe();
+    let local_2_rx = tx.subscribe();
 
-    log::info!("Download file complete {:?}", &file.name);
+    let handle = tokio::spawn(async move {
+      // Переменная для контроля разрешения (permit)
+      // Она будет удерживаться до конца выполнения этого блока
+      let _permit = permit;
 
-    {
-      let mut config_guard = app_config.lock().await;
-
-      if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
-        if let Some(file_progress) = ver.files.get_mut(&file.id) {
-          file_progress.is_downloaded = true;
-        }
-        ver.downloaded_files_cnt += 1;
+      // Проверка отмены перед самым началом скачивания
+      if !local_rx.is_empty() || local_rx.try_recv().is_ok() {
+        log::info!("Main loop caught cancel signal");
+        let _ = app_c.emit("cancel-download-version", &version_name_c);
       }
-      config_guard.save().map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
-    }
 
-    downloaded_files_cnt += 1;
-    progress = (downloaded_files_cnt as f32 / version.total_file_count as f32) * 100.0;
+      let file_path = download_dir_c.join(&file_c.path);
+      log::debug!("Start download file: {:?}", file_path);
+      let api_client = {
+        let service_guard = service_c.lock().await;
+        service_guard.api_client.clone()
+      };
 
-    log::info!(
-      "download_files_progress: {} ({}/{})",
-      progress,
-      downloaded_files_cnt,
-      version.total_file_count,
-    );
+      // Выполняем загрузку
+      let download_result = tokio::select! {
+          _ = local_rx.recv() => {
+              // Если пришел сигнал отмены в процессе скачивания
+              log::info!("Task for {} received cancel", file_c.name);
+              let _ = app_c.emit("cancel-download-version", &version_name_c);
+              return;
+          }
+          res = service_files_c.download_blob_to_file(
+              &api_client,
+              &version_name_c,
+              &file_c.project_id,
+              &file_c.id,
+              &file_path,
+              &None,
+              local_2_rx
+          ) => res
+      };
 
-    let _ = app.emit(
-      "download-version",
-      DownloadProgress {
-        version_name: version.name.clone(),
-        status: DownloadStatus::DownloadFiles,
-        file: file.name,
-        progress,
-        downloaded_files_cnt,
-        total_file_count: version.total_file_count,
-      },
-    );
+      if let Err(e) = download_result {
+        log::error!("Error downloading {}: {}", file_c.name, e);
+        return;
+      }
+
+      // Обновляем состояние и конфиг
+      let current_downloaded = downloaded_cnt_c.fetch_add(1, Ordering::SeqCst) + 1;
+
+      {
+        let mut config_guard = app_config_c.lock().await;
+        if let Some(ver) = config_guard.progress_download.get_mut(&version_name_c) {
+          if let Some(file_progress) = ver.files.get_mut(&file_c.id) {
+            file_progress.is_downloaded = true;
+          }
+          ver.downloaded_files_cnt = current_downloaded;
+        }
+        let _ = config_guard.save();
+      }
+
+      // Эмит прогресса
+      let progress = (current_downloaded as f32 / total_file_count as f32) * 100.0;
+      let _ = app_c.emit(
+        "download-version",
+        DownloadProgress {
+          version_name: version_name_c,
+          status: DownloadStatus::DownloadFiles,
+          file: file_c.name,
+          progress,
+          downloaded_files_cnt: current_downloaded,
+          total_file_count,
+        },
+      );
+    });
+
+    join_handles.push(handle);
   }
 
-  if rx.try_recv().is_ok() {
-    log::info!("Download task '{}' was cancelled", &versionName);
-    return Err("USER_CANCELLED".to_string());
+  // Ждем завершения всех запущенных задач
+  for h in join_handles {
+    let _ = h.await;
   }
 
-  let _ = app.emit("download-unpack-version", &version.name);
-
+  let _ = app.emit("download-unpack-version", &versionName);
   Ok(())
 }

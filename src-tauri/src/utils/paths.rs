@@ -20,3 +20,7 @@ pub fn get_exe_name() -> Option<String> {
     .ok()
     .and_then(|path| path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
 }
+
+pub fn get_file_name<P: AsRef<Path>>(output_path: P) -> Option<String> {
+  output_path.as_ref().file_name().and_then(|os_str| os_str.to_str().map(|s| s.to_string()))
+}

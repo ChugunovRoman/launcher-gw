@@ -30,6 +30,14 @@ declare interface DownloadProgress {
   downloaded_files_cnt: number;
   total_file_count: number;
 }
+declare interface VersionFileDownload {
+  downloadProgress: number;
+  downloadedFileBytes: number;
+  totalFileBytes: number;
+  downloadSpeed: number;
+  speedValue: number;
+  sfxValue: string;
+}
 declare interface Version {
   id: string;
   name: string;
@@ -52,6 +60,7 @@ declare interface Version {
   speedValue: number;
   sfxValue: string;
   status: string;
+  filesProgress: Map<string, VersionFileDownload>;
 }
 declare interface VersionProgress {
   id: string;
@@ -70,6 +79,7 @@ declare interface FileProgress {
   name: string;
   path: string;
   is_downloaded: boolean;
+  total_size: number;
 }
 declare interface RunParams {
   cmd_params: string;
@@ -117,10 +127,15 @@ declare interface UploadManifest {
   total_size: number;
   compressed_size: number;
 }
+declare interface ReleaseManifestFile {
+  name: string;
+  size: number;
+}
 declare interface ReleaseManifest {
   total_files_count: number;
   total_size: number;
   compressed_size: number;
+  files: ReleaseManifestFile[];
 }
 
 declare interface CommitSyncState {

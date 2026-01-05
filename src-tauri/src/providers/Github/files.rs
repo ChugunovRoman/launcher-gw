@@ -29,14 +29,32 @@ pub async fn __get_file_raw(s: &Github, project_id: &str, file_path: &str) -> Re
   __get_file_raw_github(s, GITHUB_ORG, project_id, file_path).await
 }
 
-pub async fn __get_blob_stream(s: &Github, project_id: &str, file_path: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+pub async fn __get_blob_stream(
+  s: &Github,
+  project_id: &str,
+  file_path: &str,
+  seek: &Option<u64>,
+) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
   let url = format!("{}/{}/{}/raw/master/{}", GITHUB_HOST, GITHUB_ORG, project_id, file_path);
 
-  __get_blob_by_url_stream(s, &url).await
+  __get_blob_by_url_stream(s, &url, seek).await
+}
+pub async fn __get_blob_direct_url(s: &Github, project_id: &str, file_path: &str) -> String {
+  let url = format!("{}/{}/{}/raw/master/{}", GITHUB_HOST, GITHUB_ORG, project_id, file_path);
+
+  url
 }
 
-pub async fn __get_blob_by_url_stream(s: &Github, url: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
-  let response = s.get(url).send().await.context("Failed to send blob download request")?;
+pub async fn __get_blob_by_url_stream(s: &Github, url: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+  let response = match seek {
+    Some(bytes) => s
+      .get(url)
+      .header("Range", format!("bytes={}-", bytes))
+      .send()
+      .await
+      .context("Failed to send blob download request")?,
+    None => s.get(url).send().await.context("Failed to send blob download request")?,
+  };
 
   if !response.status().is_success() {
     let status = response.status();
@@ -119,4 +137,25 @@ pub async fn __load_manifest(s: &Github) -> Result<()> {
 
 pub async fn __get_launcher_bg(s: &Github) -> Result<Vec<u8>> {
   __get_file_raw_github(s, MAIN_DEVELOPER_NAME, GITHUB_LAUNCHER_REPO_NAME, "src%2Fstatic%2Fbg.jpg").await
+}
+
+pub async fn __get_file_content_size(s: &Github, direct_url: &str) -> Result<u64> {
+  let resp = s
+    .head(direct_url)
+    .send()
+    .await
+    .context("Failed to send request to Github (__get_file_content_size)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__get_file_content_size, Github API error {}: {} url: {}", status, body, direct_url);
+  }
+
+  let mut size: u64 = 0;
+  if let Some(header) = resp.headers().get("content-length") {
+    size = header.to_str()?.parse()?;
+  };
+
+  Ok(size)
 }

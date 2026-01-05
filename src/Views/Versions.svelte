@@ -5,7 +5,6 @@
   import { join } from "@tauri-apps/api/path";
   import {
     connectStatus,
-    inDownloading,
     localVersions,
     providersWasInited,
     versionsWillBeLoaded,
@@ -43,11 +42,33 @@
   let addVersionName = $state<boolean>(true);
 
   async function fetchVersionManifest(releaseName: string) {
+    const found = $versions.find((v) => v.name === releaseName);
+    if (found && found.manifest) {
+      return;
+    }
+
     const manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
 
-    updateVersion(releaseName, () => ({
-      manifest,
-    }));
+    updateVersion(releaseName, (version) => {
+      let map = new Map<string, VersionFileDownload>();
+      for (const file of manifest.files) {
+        const old = version.filesProgress.get(file.name);
+
+        map.set(file.name, {
+          downloadProgress: old ? (old.downloadedFileBytes / file.size) * 100 : 0,
+          downloadedFileBytes: old?.downloadedFileBytes || 0,
+          totalFileBytes: file.size,
+          downloadSpeed: 0,
+          speedValue: 0,
+          sfxValue: "",
+        });
+      }
+
+      return {
+        manifest,
+        filesProgress: map,
+      };
+    });
   }
 
   async function handleContinueDownload(
@@ -69,6 +90,7 @@
     updateVersion(version.name, () => ({
       inProgress: true,
       isStoped: false,
+      status: DownloadStatus.DownloadFiles,
     }));
 
     try {
@@ -254,6 +276,8 @@
     switch (status) {
       case DownloadStatus.Init:
         return $_("app.download.text.init");
+      case DownloadStatus.Pause:
+        return $_("app.download.text.pause");
       case DownloadStatus.DownloadFiles:
         return $_("app.download.text.files");
       case DownloadStatus.Unpacking:
@@ -402,12 +426,8 @@
                 toggleExpand(i + $localVersions.size);
               }}>
               <span class="plus-icon">
-                {#if $inDownloading}
-                  <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
-                    ><path
-                      class="fil0"
-                      d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
-                  </svg>
+                {#if version.inProgress}
+                  <Spin size={16} />
                 {:else}
                   <svg width="100" height="100" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
                     <path
@@ -422,7 +442,7 @@
                 {/if}
               </span>
               <span class="version-name">
-                {#if $inDownloading}
+                {#if version.inProgress}
                   {$_("app.download.inProgress")} {version.name}
                 {:else}
                   {version.name}
@@ -519,19 +539,18 @@
                 {:else}
                   <div class="content-row input-group">
                     <span>
-                      {getStatusText(version.status as DownloadStatus)}
+                      {getStatusText(version.status as DownloadStatus)} -
                       {#if version.status === DownloadStatus.Unpacking}
                         {version.downloadProgress.toFixed(2)}%
                       {:else}
                         {$_("app.download.status.progress")}
-                        {version.downloadProgress.toFixed(2)}% {$_("app.download.status.files")}
-                        {version.downloadedFilesCnt}/{version.totalFileCount}
-                        {$_("app.download.status.file")}
-                        {version.downloadCurrentFile}
-                        {getInMb(version.downloadedFileBytes)}Mb
+                        {version.downloadProgress.toFixed(2)}% -
+                        {$_("app.download.status.files")}
+                        {version.downloadedFilesCnt}/{version.totalFileCount} -
 
                         {$_("app.download.status.speed")}
-                        {version.speedValue}{version.sfxValue}
+                        {version.speedValue}
+                        {version.sfxValue}
                       {/if}
                     </span>
                   </div>
@@ -572,6 +591,28 @@
                     {/if}
                   {/if}
                 </div>
+                {#if !version.inProgress && !version.isStoped}
+                  <div style="margin-bottom: 2px;"></div>
+                {:else}
+                  <div class="content-row">
+                    <span>{$_("app.download.filesStats")}</span>
+                  </div>
+                  {#if version.inProgress || version.isStoped}
+                    {#each version.filesProgress as [name, progress], i}
+                      <div class="file-row">
+                        <span>{name}</span>
+
+                        <Progress height={12} maxWidth="1fr - 300px" progress={progress.downloadProgress} showPercents={false} />
+
+                        <span style="justify-self: end;"
+                          >{getInMb(progress.downloadedFileBytes)}/{getInMb(progress.totalFileBytes)}
+                          {$_(`app.common.${parseBytes(progress.totalFileBytes)[1]}`)}</span>
+
+                        <span style="justify-self: end;">{progress.speedValue} {progress.sfxValue}</span>
+                      </div>
+                    {/each}
+                  {/if}
+                {/if}
               </div>
             {/if}
           </div>
@@ -652,6 +693,10 @@
   }
   .content-row {
     display: flex;
+  }
+  .file-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 120px 100px;
   }
 
   .spinner {
@@ -749,7 +794,7 @@
     padding: 1rem 1.25rem 1.25rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     overflow-y: auto;
-    max-height: 500px;
+    max-height: 800px;
   }
   .expanded-content::-webkit-scrollbar {
     width: 12px;

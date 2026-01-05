@@ -29,10 +29,17 @@ pub trait ApiProvider: Send + Sync {
 
   async fn get_launcher_bg(&self) -> Result<Vec<u8>>;
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>>;
-  async fn get_blob_stream(&self, project_id: &str, blob_sha: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
-  async fn get_blob_by_url_stream(&self, link: &str) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
+  async fn get_blob_stream(
+    &self,
+    project_id: &str,
+    blob_sha: &str,
+    seek: &Option<u64>,
+  ) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
+  async fn get_blob_direct_url(&self, project_id: &str, blob_sha: &str) -> String;
+  async fn get_blob_by_url_stream(&self, link: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
   async fn tree(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>>;
   async fn get_full_tree(&self, repo_id: String) -> Result<Vec<TreeItem>>;
+  async fn get_file_content_size(&self, direct_url: &str) -> Result<u64>;
 
   async fn find_issue(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
   async fn find_user(&self, repo_id: &str, uuid: &str) -> Result<Option<Issue>>;

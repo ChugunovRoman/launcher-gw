@@ -21,10 +21,10 @@ export function parseBytes(value?: number): [number, string] {
 }
 export function formatSpeedBytesPerSec(bitsPerSec: number): [number, string] {
   if (bitsPerSec >= 1_000_000) {
-    return [Number((bitsPerSec / 1024 / 1024).toFixed(2)), "Мбит/с"];
+    return [Number((bitsPerSec / 1024 / 1024).toFixed(2)), "МБ/с"];
   } else if (bitsPerSec >= 1_000) {
-    return [Number((bitsPerSec / 1024).toFixed(2)), "Kбит/с "];
+    return [Number((bitsPerSec / 1024).toFixed(2)), "КБ/с "];
   } else {
-    return [Number(bitsPerSec.toFixed(2)), "бит/с "];
+    return [Number(bitsPerSec.toFixed(2)), "Б/с "];
   }
 }

@@ -84,6 +84,10 @@ pub struct FileProgress {
   pub path: String,
   #[serde(default)]
   pub is_downloaded: bool,
+  #[serde(default)]
+  pub size: u64,
+  #[serde(default)]
+  pub total_size: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
