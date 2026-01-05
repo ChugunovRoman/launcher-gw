@@ -1,11 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded } from '../store/main';
+import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate } from '../store/main';
 import { ConnectStatus, DownloadStatus } from "../consts";
 import { versions } from '../store/upload';
 import { get } from 'svelte/store';
 import { sep } from '@tauri-apps/api/path';
+import { getVersion } from '@tauri-apps/api/app';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -88,6 +89,13 @@ export async function initMainListeners() {
     invoke<boolean>('update').then(value => {
       console.log('launcher update:', value);
       showDlgRestartApp.set(value);
+
+      if (!value) {
+        getVersion().then(version => {
+          launcherDwnNeedUpdate.set(false);
+          launcherDwnVersion.set(version);
+        });
+      }
     });
     console.log("config-loaded ! payload: ", event.payload);
     appConfig.set(event.payload);
