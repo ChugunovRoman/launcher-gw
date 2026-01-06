@@ -7,6 +7,7 @@
 
   import Scroll from "../Components/Scroll.svelte";
   import TrackBar from "../Components/TrackBar.svelte";
+  import Bg from "../Components/Bg.svelte";
 
   const langMap = new BiMap<LangType, string>([
     [LangType.Rus, "Русский"],
@@ -105,98 +106,173 @@
 
   <Scroll value={240}>
     <!-- Поле для ключей запуска -->
-    <div class="input-row">
-      <input type="text" bind:value={launchArgs} placeholder={$_("app.labels.runparams_holder")} class="launch-args-input" />
-      <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.clear")} </button>
-    </div>
+    <Bg>
+      <div class="input-row">
+        <input type="text" bind:value={launchArgs} placeholder={$_("app.labels.runparams_holder")} class="launch-args-input" />
+        <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.clear")} </button>
+      </div>
+    </Bg>
 
-    <div class="options-row">
-      <label class="checkbox-label">
-        {$_("app.params.screen")}
-        <select bind:value={selectedResolution}>
-          {#each resolutions as res}
-            <option value={res}>{res}</option>
-          {/each}
-        </select>
-      </label>
-    </div>
-    <div class="options-row">
-      <label class="checkbox-label">
-        {$_("app.params.gameLang")}
-        <select bind:value={selectedLang}>
-          {#each langMap as [type, name]}
-            <option value={name}>{name}</option>
-          {/each}
-        </select>
-      </label>
-    </div>
-    <div class="options-row">
-      <label class="checkbox-label">
-        {$_("app.params.renderer")}
-        <select bind:value={selectedRenderer}>
-          {#each renderersMap as [type, name]}
-            <option value={name}>{$_(`app.renderer.${name}`)}</option>
-          {/each}
-        </select>
-      </label>
-    </div>
+    <div style="margin-bottom: 30px;" />
 
-    <div class="tracks-row">
-      <label class="checkbox-label">
-        {$_("app.params.fov")}: {fov}
-        <div style="width: 400px">
-          <TrackBar bind:value={fov} min={50} max={200} step={1} />
-        </div>
-      </label>
-    </div>
+    <div class="optview">
+      <div class="item">
+        <Bg>
+          <div class="opt">
+            <span>
+              {$_("app.params.screen")}
+            </span>
+            <div class="options-row">
+              <label class="checkbox-label">
+                <select bind:value={selectedResolution}>
+                  {#each resolutions as res}
+                    <option value={res}>{res}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="opt">
+            <span>
+              {$_("app.params.gameLang")}
+            </span>
+            <div class="options-row">
+              <label class="checkbox-label">
+                <select bind:value={selectedLang}>
+                  {#each langMap as [type, name]}
+                    <option value={name}>{name}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="opt">
+            <span>
+              {$_("app.params.renderer")}
+            </span>
+            <div class="options-row">
+              <label class="checkbox-label">
+                <select bind:value={selectedRenderer}>
+                  {#each renderersMap as [type, name]}
+                    <option value={name}>{$_(`app.renderer.${name}`)}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+          </div>
 
-    <div class="tracks-row">
-      <label class="checkbox-label">
-        {$_("app.params.hudFov")}: {hudFov}
-        <div style="width: 400px">
-          <TrackBar bind:value={hudFov} min={10} max={100} step={1} />
-        </div>
-      </label>
-    </div>
-
-    <!-- Дополнительные флаги -->
-    <div class="flags-section">
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={windowedMode} />
-        {$_("app.params.windowed")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={vsyncEnabled} />
-        {$_("app.params.vsync")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={waitForKeypress} />
-        {$_("app.params.presskey")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={noStaging} />
-        {$_("app.params.nostaging")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={noPrefetch} />
-        {$_("app.params.noprefetch")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={useSpawner} />
-        {$_("app.params.dbg")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={uiDebug} />
-        {$_("app.params.uidbg")}
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={checks} />
-        {$_("app.params.checks")} <span class="warntext">{$_("app.params.checksnote")}</span>
-      </label>
-      <label class="checkbox-label">
-        <input type="checkbox" bind:checked={debugSpawn} />
-        {$_("app.params.dbgsspwn")}
-      </label>
+          <div class="opt">
+            <span>
+              {$_("app.params.fov")}: {fov}
+            </span>
+            <div style="width: 100%">
+              <TrackBar bind:value={fov} min={50} max={200} step={1} />
+            </div>
+          </div>
+          <div class="opt">
+            <span>
+              {$_("app.params.hudFov")}: {hudFov}
+            </span>
+            <div style="width: 100%">
+              <TrackBar bind:value={hudFov} min={10} max={100} step={1} />
+            </div>
+          </div>
+        </Bg>
+      </div>
+      <div class="item">
+        <Bg>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={windowedMode} />
+              </div>
+              <span>
+                {$_("app.params.windowed")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={vsyncEnabled} />
+              </div>
+              <span>
+                {$_("app.params.vsync")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={waitForKeypress} />
+              </div>
+              <span>
+                {$_("app.params.presskey")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={noStaging} />
+              </div>
+              <span>
+                {$_("app.params.nostaging")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={noPrefetch} />
+              </div>
+              <span>
+                {$_("app.params.noprefetch")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={useSpawner} />
+              </div>
+              <span>
+                {$_("app.params.dbg")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={uiDebug} />
+              </div>
+              <span>
+                {$_("app.params.uidbg")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={checks} />
+              </div>
+              <span>
+                {$_("app.params.checks")} <span class="warntext">{$_("app.params.checksnote")}</span>
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={debugSpawn} />
+              </div>
+              <span>
+                {$_("app.params.dbgsspwn")}
+              </span>
+            </div>
+          </label>
+        </Bg>
+      </div>
     </div>
   </Scroll>
 
@@ -215,6 +291,39 @@
     margin-bottom: 4rem;
   }
 
+  .optview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .item {
+    flex: 1 1 600px;
+  }
+  .opt {
+    display: grid;
+    grid-template-columns: 14vw 1fr;
+    margin-bottom: 14px;
+  }
+  .check {
+    grid-template-columns: 4vw 1fr;
+  }
+  .opt > span {
+    justify-self: end;
+    padding-right: 14px;
+    align-self: center;
+  }
+  .opt > div {
+    justify-self: start;
+    align-self: center;
+  }
+  .check > span {
+    justify-self: start;
+  }
+  .check > div {
+    padding-right: 20px;
+    justify-self: end;
+  }
+
   .launch-params-view {
     padding: 1.5rem;
     margin: 0 auto;
@@ -225,7 +334,6 @@
     -webkit-app-region: no-drag;
     display: flex;
     gap: 0.75rem;
-    margin-bottom: 2.5rem;
   }
 
   .launch-args-input {
@@ -265,7 +373,6 @@
     display: flex;
     flex-wrap: nowrap;
     gap: 3.5rem;
-    margin-bottom: 2.5rem;
   }
 
   .options-row label {
@@ -299,11 +406,6 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    margin-bottom: 0.75rem;
-    width: 60%;
-    backdrop-filter: blur(2px);
-    padding: 2px 8px;
-    background: rgb(0 0 0 / 42%);
   }
   .checkbox-label:hover {
     cursor: pointer;

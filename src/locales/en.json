@@ -141,8 +141,8 @@
       "checks": "Enable start-up checks (-checks)",
       "checksnote": "(increases loading time)",
       "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)",
-      "gameLang": "Game language",
-      "renderer": "Renderer type",
+      "gameLang": "Game language:",
+      "renderer": "Renderer type:",
       "fov": "FOV",
       "hudFov": "HUD FOV"
     },

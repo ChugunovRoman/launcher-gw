@@ -141,8 +141,8 @@
       "checks": "Включить проверки при запуске игры (-checks)",
       "checksnote": "(увеличивает время загрузки)",
       "dbgsspwn": "Включить debug_start_spawn (-dbgsspwn)",
-      "gameLang": "Язык",
-      "renderer": "Тип рендера",
+      "gameLang": "Язык:",
+      "renderer": "Тип рендера:",
       "fov": "FOV",
       "hudFov": "FOV Худа"
     },

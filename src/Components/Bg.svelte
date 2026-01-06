@@ -14,7 +14,6 @@
     border-radius: 6px;
     margin-bottom: 1rem;
     overflow: hidden;
-    cursor: pointer;
     transition: background-color 0.2s ease;
   }
   .bg-item:hover {

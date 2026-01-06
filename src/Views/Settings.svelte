@@ -7,6 +7,7 @@
   import { choosePath } from "../utils/path";
   import { updateEachVersion, versions } from "../store/upload";
 
+  import Scroll from "../Components/Scroll.svelte";
   import Bg from "../Components/Bg.svelte";
   import Radio from "../Components/Radio.svelte";
   import { hasLocalVersion } from "../utils/checks";
@@ -77,45 +78,55 @@
 <div class="settings_view">
   <h2>{$_("app.labels.settings")}</h2>
 
-  <div class="input-group">
-    <span>{$_("app.settings.clientUuid")}</span>
-    <div class="input-row">
-      <input type="text" readonly bind:value={uuid} placeholder="" class="uuid-input" />
-      <button type="button" onclick={copyUuid} class="copy-btn" class:copy-btn__coping={coping} class:long_t={coping2}>
-        {#if coping}
-          {$_("app.copy.1")}
-        {:else}
-          {$_("app.copy.2")}
-        {/if}
-      </button>
-    </div>
-  </div>
+  <Scroll value={240}>
+    <Bg>
+      <span>{$_("app.settings.clientUuid")}</span>
+      <div style="margin-bottom: 10px;" />
+      <div class="input-row">
+        <input type="text" readonly bind:value={uuid} placeholder="" class="uuid-input" />
+        <button type="button" onclick={copyUuid} class="copy-btn" class:copy-btn__coping={coping} class:long_t={coping2}>
+          {#if coping}
+            {$_("app.copy.1")}
+          {:else}
+            {$_("app.copy.2")}
+          {/if}
+        </button>
+      </div>
+    </Bg>
 
-  <div class="input-group">
-    <span>{$_("app.download.defaultInstallPath")}</span>
-    <div class="input-row">
-      <input type="text" readonly bind:value={$appConfig.default_installed_path} placeholder={$_("app.download.installPath")} class="uuid-input" />
-      <button type="button" onclick={selectInstallPath} class="copy-btn">
-        {$_("app.releases.browse")}
-      </button>
-    </div>
-  </div>
-  <div class="input-group">
-    <span>{$_("app.download.defaultDownloadDataPath")}</span>
-    <div class="input-row">
-      <input
-        type="text"
-        readonly
-        bind:value={$appConfig.default_download_path}
-        placeholder={$_("app.download.downloadDataPath")}
-        class="uuid-input" />
-      <button type="button" onclick={selectDownloadPath} class="copy-btn">
-        {$_("app.releases.browse")}
-      </button>
-    </div>
-  </div>
+    <div style="margin-bottom: 20px;" />
 
-  <div class="input-group">
+    <Bg>
+      <span>{$_("app.download.defaultInstallPath")}</span>
+      <div style="margin-bottom: 10px;" />
+      <div class="input-row">
+        <input type="text" readonly bind:value={$appConfig.default_installed_path} placeholder={$_("app.download.installPath")} class="uuid-input" />
+        <button type="button" onclick={selectInstallPath} class="copy-btn">
+          {$_("app.releases.browse")}
+        </button>
+      </div>
+    </Bg>
+
+    <div style="margin-bottom: 20px;" />
+
+    <Bg>
+      <span>{$_("app.download.defaultDownloadDataPath")}</span>
+      <div style="margin-bottom: 10px;" />
+      <div class="input-row">
+        <input
+          type="text"
+          readonly
+          bind:value={$appConfig.default_download_path}
+          placeholder={$_("app.download.downloadDataPath")}
+          class="uuid-input" />
+        <button type="button" onclick={selectDownloadPath} class="copy-btn">
+          {$_("app.releases.browse")}
+        </button>
+      </div>
+    </Bg>
+
+    <div style="margin-bottom: 20px;" />
+
     <Bg>
       <div class="input-row input-column">
         <span>{$_("app.settings.servers")}</span>
@@ -131,7 +142,7 @@
         {/each}
       </div>
     </Bg>
-  </div>
+  </Scroll>
 </div>
 
 <style>
@@ -149,14 +160,10 @@
     -webkit-app-region: no-drag;
     display: flex;
     gap: 0.75rem;
-    margin-bottom: 2.5rem;
   }
   .input-column {
     flex-direction: column;
     align-items: baseline;
-  }
-  .input-group {
-    margin-bottom: 1.25rem;
   }
 
   .warntext {
