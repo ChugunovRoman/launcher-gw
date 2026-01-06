@@ -115,6 +115,12 @@ pub async fn __get_full_tree(s: &Github, repo_id: &str) -> Result<Vec<TreeItem>>
 }
 
 pub async fn __load_manifest(s: &Github) -> Result<()> {
+  let max_size = { s.manifest.lock().unwrap().max_size.clone() };
+
+  if max_size > 0 {
+    return Ok(());
+  }
+
   let search_params = HashMap::from([(
     "q".to_owned(),
     format!(

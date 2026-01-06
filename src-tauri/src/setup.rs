@@ -124,7 +124,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         service.register_all_providers().await?;
         service.load_manifest().await?;
 
-        let releases = service.get_releases().await?;
+        let releases = service.get_releases(false).await?;
 
         {
           let mut config_guard = config_arc_clone.lock().await;

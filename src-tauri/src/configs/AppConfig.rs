@@ -184,6 +184,8 @@ pub struct AppConfig {
   pub run_params: RunParams,
 
   #[serde(default)]
+  pub selected_provider_id: Option<String>,
+  #[serde(default)]
   pub selected_version: Option<String>,
   #[serde(default)]
   pub installed_versions: HashMap<String, Version>,
@@ -242,6 +244,7 @@ impl Default for AppConfig {
       unpack_source_dir: "".to_string(),
       unpack_target_dir: "".to_string(),
       installed_versions: HashMap::new(),
+      selected_provider_id: None,
       selected_version: None,
       versions: vec![],
       progress_download: HashMap::new(),

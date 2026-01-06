@@ -5,6 +5,8 @@ use tokio::sync::Mutex;
 use crate::{
   configs::{AppConfig::AppConfig, RunParams},
   consts::MANIFEST_NAME,
+  providers::dto::ProviderStatus,
+  service::main::Service,
   utils::{encoding::decode, git::state::RepoSyncState},
 };
 
@@ -158,4 +160,38 @@ pub async fn get_upload_manifest(app: tauri::AppHandle) -> Result<Option<RepoSyn
   let state: RepoSyncState = serde_json::from_str(&content).map_err(|e| e.to_string())?;
 
   Ok(Some(state))
+}
+
+#[tauri::command]
+pub async fn set_current_api_provider(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  service: tauri::State<'_, Arc<Mutex<Service>>>,
+  provider: String,
+) -> Result<(), String> {
+  {
+    let mut config_guard = app_config.lock().await;
+
+    config_guard.selected_provider_id = Some(provider.clone());
+    config_guard.save().map_err(|e| e.to_string())?;
+  }
+
+  {
+    let mut service_guard = service.lock().await;
+    let api_client = &mut service_guard.api_client;
+    let static_id: &'static str = Box::leak(provider.into_boxed_str());
+
+    api_client.set_current_provider(static_id).map_err(|e| e.to_string())?;
+  };
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn get_api_providers_stats(service: tauri::State<'_, Arc<Mutex<Service>>>) -> Result<Vec<(&'static str, ProviderStatus)>, String> {
+  let stats = {
+    let service_guard = service.lock().await;
+    service_guard.stats.clone()
+  };
+
+  Ok(stats)
 }

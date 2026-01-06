@@ -54,9 +54,9 @@ pub async fn upload_release(app: tauri::AppHandle, name: String, path: String, f
 
   let releases = {
     let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-    let service_guard = state.lock().await;
+    let mut service_guard = state.lock().await;
 
-    service_guard.get_releases().await
+    service_guard.get_releases(false).await
   }
   .map_err(|e| {
     log_full_error(&e);

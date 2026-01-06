@@ -6,7 +6,7 @@ use crate::{
   utils::{errors::log_full_error, git::grouping::group_files_by_size, resources::game_exe},
 };
 use anyhow::Context;
-use std::{convert::TryFrom, fs, os::windows::fs::MetadataExt, path::PathBuf};
+use std::{convert::TryFrom, fs, path::PathBuf};
 use std::{path::Path, sync::Arc};
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
@@ -14,8 +14,12 @@ use tokio::sync::Mutex;
 #[tauri::command]
 pub async fn get_available_versions(app: tauri::AppHandle, app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
-  let releases = service_guard.get_releases().await.context("Cannot get game releases").map_err(|e| {
+  let mut service_guard = state.lock().await;
+  service_guard.load_manifest().await.map_err(|e| {
+    log_full_error(&e);
+    e.to_string()
+  })?;
+  let releases = service_guard.get_releases(true).await.context("Cannot get game releases").map_err(|e| {
     log_full_error(&e);
     e.to_string()
   })?;

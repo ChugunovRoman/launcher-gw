@@ -35,6 +35,9 @@ export const launcherDwnBytes = writable(0);
 export const launcherDwnTotalBytes = writable(0);
 export const launcherDwnProgress = writable(0);
 
+export const providers = writable<[string, ProviderStatus][]>([]);
+export const radioApiProvider = writable<string>("github");
+
 export const localVersions = createMapStore<string, Version>();
 
 export function updateConfig<F extends keyof AppConfig>(field: F, value: any) {

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate } from '../store/main';
+import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, radioApiProvider } from '../store/main';
 import { ConnectStatus, DownloadStatus } from "../consts";
 import { versions } from '../store/upload';
 import { get } from 'svelte/store';
@@ -86,6 +86,14 @@ export async function initMainListeners() {
   }));
 
   unlisten.set('config-loaded', await listen('config-loaded', (event: Event<AppConfig>) => {
+    if (event.payload.selected_provider_id) {
+      radioApiProvider.set(event.payload.selected_provider_id);
+    }
+    invoke<[string, ProviderStatus][]>('get_api_providers_stats').then(result => {
+      result.sort((a, b) => a[1].latency_ms > b[1].latency_ms ? 1 : 0);
+      providers.set(result)
+    });
+
     invoke<boolean>('update').then(value => {
       console.log('launcher update:', value);
       showDlgRestartApp.set(value);

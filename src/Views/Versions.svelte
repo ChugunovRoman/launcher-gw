@@ -34,6 +34,7 @@
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
   import Spin from "../Components/Spin.svelte";
+  import { hasLocalVersion } from "../utils/checks";
 
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
@@ -301,16 +302,6 @@
       const releaseName = $versions[index]?.name;
       fetchVersionManifest(releaseName);
     }
-  }
-
-  function hasLocalVersion(version: Version) {
-    for (const [name, local] of $localVersions) {
-      if (name === version.name) return true;
-      if (local.path === version.name) return true;
-      if (local.path === version.path) return true;
-    }
-
-    return false;
   }
 
   $effect(() => {

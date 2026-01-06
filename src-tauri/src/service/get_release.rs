@@ -4,7 +4,7 @@ use crate::{
   configs::AppConfig::Version,
   consts::*,
   handlers::dto::ReleaseManifest,
-  providers::dto::TreeItem,
+  providers::dto::{Release, TreeItem},
   service::main::Service,
   utils::{encoding::read_cp1251_file, resources::game_exe},
 };
@@ -14,7 +14,7 @@ use futures_util::future::join_all;
 use regex::Regex;
 
 pub trait ServiceGetRelease {
-  async fn get_releases(&self) -> Result<Vec<Version>>;
+  async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>>;
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest>;
   async fn get_main_release_files(&self, release_id: &str) -> Result<Vec<TreeItem>>;
   async fn get_local_version(&self) -> Result<Vec<Version>>;
@@ -23,9 +23,17 @@ pub trait ServiceGetRelease {
 }
 
 impl ServiceGetRelease for Service {
-  async fn get_releases(&self) -> Result<Vec<Version>> {
+  async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>> {
     let api = self.api_client.current_provider()?;
-    let releases = api.get_releases().await?;
+    let mut releases: Vec<Release> = vec![];
+
+    if cashed && let Some(cash) = self.releases.get(api.id()) {
+      releases = cash.clone();
+    } else {
+      releases = api.get_releases().await?;
+
+      self.releases.insert(String::from(api.id()), releases.clone());
+    }
 
     let result = releases
       .iter()

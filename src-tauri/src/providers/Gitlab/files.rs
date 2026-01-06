@@ -126,6 +126,12 @@ pub async fn __get_full_tree(s: &Gitlab, repo_id: &str) -> Result<Vec<TreeItem>>
 }
 
 pub async fn __load_manifest(s: &Gitlab) -> Result<()> {
+  let max_size = { s.manifest.lock().unwrap().max_size.clone() };
+
+  if max_size > 0 {
+    return Ok(());
+  }
+
   let search_params = HashMap::from([("in".to_owned(), "title".to_owned()), ("search".to_owned(), "mainfest.json".to_owned())]);
   let issue = __find_issue(s, &REPO_LAUNCGER_ID.to_string(), search_params).await?;
 

@@ -1,6 +1,5 @@
 use crate::consts::MANIFEST_NAME;
-use crate::handlers::dto::ReleaseManifest;
-use crate::utils::errors::log_full_error;
+use crate::handlers::dto::{ReleaseManifest, ReleaseManifestFile};
 use crate::utils::parse_strings::*;
 use crate::utils::{self, resources};
 use anyhow::Result;
@@ -26,7 +25,7 @@ pub async fn create_archive(
 
   log::info!("create_archive, clear dir: {:?}", &targetPath);
 
-  utils::paths::clear_dir(targetPath).expect("Не удалось очистить папку");
+  utils::paths::clear_dir(&targetPath).expect("Не удалось очистить папку");
 
   log::info!("create_archive, sevenz: {:?}", &sevenz);
 
@@ -107,7 +106,31 @@ pub async fn create_archive(
   let status = child.wait().await.map_err(|e| e.to_string())?;
   let _ = reader_handle.await.map_err(|e| e.to_string())?;
 
-  let final_manifest = manifest.lock().await;
+  let mut final_manifest = manifest.lock().await;
+  for entry in fs::read_dir(Path::new(&targetPath)).map_err(|e| format!("Failed to read directory: {:?} error: {}", targetPath, e.to_string()))? {
+    let entry = entry.map_err(|e| e.to_string())?;
+    let path = entry.path();
+
+    if !path.is_file() {
+      continue;
+    }
+    let base_name = match path.file_name() {
+      Some(name) => name.to_string_lossy(),
+      None => continue,
+    };
+
+    if !base_name.starts_with("game.7z") {
+      continue;
+    }
+
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+    let file_size = metadata.len();
+
+    final_manifest.files.push(ReleaseManifestFile {
+      name: base_name.to_string(),
+      size: file_size,
+    });
+  }
   log::info!("Created manifest: {:?}", &*final_manifest);
   log::info!("manifest path: {:?}", &manifest_path);
 

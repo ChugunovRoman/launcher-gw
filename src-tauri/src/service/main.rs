@@ -1,9 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-  configs::AppConfig::AppConfig,
-  consts::{GITHUB_API_HOST, GITHUB_PID, GITLAB_API_HOST},
-  providers::{ApiClient::ApiClient::ApiClient, ApiProvider::ApiProvider, Github::Github::Github, Gitlab::Gitlab::Gitlab},
+  configs::AppConfig::{AppConfig, Version},
+  consts::{GITHUB_API_HOST, GITLAB_API_HOST},
+  providers::{
+    ApiClient::ApiClient::ApiClient,
+    ApiProvider::ApiProvider,
+    Github::Github::Github,
+    Gitlab::Gitlab::Gitlab,
+    dto::{ProviderStatus, Release},
+  },
 };
 use anyhow::{Result, bail};
 use tokio::sync::Mutex;
@@ -14,6 +20,9 @@ pub struct Service {
   pub api_client: ApiClient,
   pub config: Arc<Mutex<AppConfig>>,
   pub logger: LogCallback,
+
+  pub releases: HashMap<String, Vec<Release>>,
+  pub stats: Vec<(&'static str, ProviderStatus)>,
 }
 
 impl Service {
@@ -22,6 +31,8 @@ impl Service {
       api_client: ApiClient::new(logger.clone()),
       config,
       logger,
+      releases: HashMap::new(),
+      stats: vec![],
     }
   }
 
@@ -29,12 +40,22 @@ impl Service {
     self.register_github();
     self.register_gitlab();
 
-    let sorted_by_ping = self.api_client.ping_all().await;
+    self.stats = self.api_client.ping_all().await;
 
-    log::info!("Register providers, sorted_by_ping: {:?}", &sorted_by_ping);
+    log::info!("Register providers, sorted_by_ping: {:?}", &self.stats);
 
-    // self.api_client.set_current_provider(sorted_by_ping[0].0)?;
-    self.api_client.set_current_provider(GITHUB_PID)?;
+    match {
+      let cfg = self.config.lock().await;
+      cfg.selected_provider_id.clone()
+    } {
+      Some(id) => {
+        let static_id: &'static str = Box::leak(id.into_boxed_str());
+        self.api_client.set_current_provider(static_id)?;
+      }
+      None => {
+        self.api_client.set_current_provider(self.stats[0].0)?;
+      }
+    };
 
     Ok(())
   }

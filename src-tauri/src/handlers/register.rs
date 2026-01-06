@@ -24,6 +24,8 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_default_download_path,
     handlers::configs::set_current_game_version,
     handlers::configs::get_upload_manifest,
+    handlers::configs::set_current_api_provider,
+    handlers::configs::get_api_providers_stats,
     // user.ltx
     handlers::user_ltx::userltx_set_path,
     // service

@@ -115,6 +115,7 @@ declare interface AppConfig {
   unpack_source_dir: string;
   unpack_target_dir: string;
   selected_version?: string;
+  selected_provider_id?: string;
   installed_versions: Dict<Version>;
   tokens: Dict<string>;
   progress_upload?: VersionProgressUpload;

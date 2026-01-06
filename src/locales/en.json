@@ -43,7 +43,14 @@
       "settings": "Launcher Settings"
     },
     "settings": {
-      "clientUuid": "Client ID"
+      "clientUuid": "Client ID",
+      "ping": "ping: ",
+      "noAvailable": "Not available",
+      "servers": "Current server for downloading game files:"
+    },
+    "servers": {
+      "github": "Server 1",
+      "gitlab": "Server 2"
     },
     "launch": {
       "start": "Launch",

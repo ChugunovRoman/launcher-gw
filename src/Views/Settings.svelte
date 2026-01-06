@@ -2,10 +2,14 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-  import { appConfig, updateConfig, providersWasInited } from "../store/main";
-  import { choosePath } from "../utils/path";
-  import { updateEachVersion } from "../store/upload";
   import { sep } from "@tauri-apps/api/path";
+  import { appConfig, updateConfig, providersWasInited, radioApiProvider, providers } from "../store/main";
+  import { choosePath } from "../utils/path";
+  import { updateEachVersion, versions } from "../store/upload";
+
+  import Bg from "../Components/Bg.svelte";
+  import Radio from "../Components/Radio.svelte";
+  import { hasLocalVersion } from "../utils/checks";
 
   let coping = $state(false);
   let coping2 = $state(false);
@@ -51,14 +55,30 @@
       });
     }
   });
+  $effect(() => {
+    invoke("set_current_api_provider", { provider: $radioApiProvider });
+
+    setTimeout(() => {
+      invoke<Version[]>("get_available_versions").then((data) => {
+        versions.clear();
+
+        for (const item of data) {
+          const found = $versions.find((v) => v.name === item.name);
+          const hasLocal = hasLocalVersion(item);
+          if (!found && !hasLocal) {
+            $versions.push(item);
+          }
+        }
+      });
+    }, 500);
+  });
 </script>
 
 <div class="settings_view">
   <h2>{$_("app.labels.settings")}</h2>
 
   <div class="input-group">
-    <!-- svelte-ignore a11y_label_has_associated_control -->
-    <label class="input-label">{$_("app.settings.clientUuid")}</label>
+    <span>{$_("app.settings.clientUuid")}</span>
     <div class="input-row">
       <input type="text" readonly bind:value={uuid} placeholder="" class="uuid-input" />
       <button type="button" onclick={copyUuid} class="copy-btn" class:copy-btn__coping={coping} class:long_t={coping2}>
@@ -72,8 +92,7 @@
   </div>
 
   <div class="input-group">
-    <!-- svelte-ignore a11y_label_has_associated_control -->
-    <label class="input-label">{$_("app.download.defaultInstallPath")}</label>
+    <span>{$_("app.download.defaultInstallPath")}</span>
     <div class="input-row">
       <input type="text" readonly bind:value={$appConfig.default_installed_path} placeholder={$_("app.download.installPath")} class="uuid-input" />
       <button type="button" onclick={selectInstallPath} class="copy-btn">
@@ -82,8 +101,7 @@
     </div>
   </div>
   <div class="input-group">
-    <!-- svelte-ignore a11y_label_has_associated_control -->
-    <label class="input-label">{$_("app.download.defaultDownloadDataPath")}</label>
+    <span>{$_("app.download.defaultDownloadDataPath")}</span>
     <div class="input-row">
       <input
         type="text"
@@ -96,26 +114,56 @@
       </button>
     </div>
   </div>
+
+  <div class="input-group">
+    <Bg>
+      <div class="input-row input-column">
+        <span>{$_("app.settings.servers")}</span>
+        {#each $providers as [id, stats]}
+          <Radio name="provider" value={id} disabled={!stats.available} bind:group={$radioApiProvider}>
+            {$_(`app.servers.${id}`)}
+            {#if stats.available}
+              ({$_("app.settings.ping")} {stats.latency_ms})
+            {:else}
+              <span class="warntext">({$_("app.settings.noAvailable")})</span>
+            {/if}
+          </Radio>
+        {/each}
+      </div>
+    </Bg>
+  </div>
 </div>
 
 <style>
   h2 {
     margin-bottom: 4rem;
   }
+
   .settings_view {
     padding: 1.5rem;
     margin: 0 auto;
     font-family: system-ui, sans-serif;
   }
+
   .input-row {
     -webkit-app-region: no-drag;
     display: flex;
     gap: 0.75rem;
     margin-bottom: 2.5rem;
   }
+  .input-column {
+    flex-direction: column;
+    align-items: baseline;
+  }
   .input-group {
     margin-bottom: 1.25rem;
   }
+
+  .warntext {
+    font-size: 0.8rem;
+    color: rgba(252, 186, 186, 0.8);
+  }
+
   .uuid-input {
     -webkit-app-region: no-drag;
     flex: 1;
