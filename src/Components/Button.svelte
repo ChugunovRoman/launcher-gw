@@ -10,8 +10,8 @@
   } = $props();
 
   const sizes: any = {
-    slim: "padding: 0.5rem 1rem",
-    normal: "padding: 10px 40px",
+    slim: "padding: 6px 20px;",
+    normal: "padding: 10px 40px;",
   };
 </script>
 

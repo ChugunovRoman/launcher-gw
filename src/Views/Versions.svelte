@@ -527,7 +527,8 @@
               </span>
               {#if version.isStoped}
                 <Button
-                  style="padding: 6px 20px; margin-left: auto"
+                  style="margin-left: auto;"
+                  size="slim"
                   isYellow
                   onclick={(e: any) => handleContinueDownload(e, version, i + $localVersions.size)}>{$_("app.download.continue")}</Button>
               {/if}

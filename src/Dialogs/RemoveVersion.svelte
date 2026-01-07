@@ -4,10 +4,19 @@
   import Modal from "./index.svelte";
   import Button from "../Components/Button.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { mainVersion, refreshVersions, selectedVersion } from "../store/upload";
+  import { mainVersion, refreshVersions, selectedVersion, versions } from "../store/upload";
 
   function handleClose() {
     console.log("Dlg was closed");
+  }
+  function hasLocalVersion(version: Version) {
+    for (const [name, local] of $localVersions) {
+      if (name === version.name) return true;
+      if (local.path === version.name) return true;
+      if (local.path === version.path) return true;
+    }
+
+    return false;
   }
   async function yesHandler() {
     $showDlgRemoveVersion = false;
@@ -30,9 +39,21 @@
       selectedVersion.set(undefined);
     }
 
-    $removeVersionInProcess = false;
+    setTimeout(() => {
+      invoke<Version[]>("get_available_versions").then((data) => {
+        versions.clear();
 
-    refreshVersions();
+        for (const item of data) {
+          const found = $versions.find((v) => v.name === item.name);
+          const hasLocal = hasLocalVersion(item);
+          if (!found && !hasLocal) {
+            $versions.push(item);
+          }
+        }
+      });
+    }, 200);
+
+    $removeVersionInProcess = false;
 
     $expandedIndex = null;
   }

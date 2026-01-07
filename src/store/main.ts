@@ -78,12 +78,17 @@ export async function fetchLocalVersions() {
     invoke<Version[]>("get_installed_versions"),
   ]);
 
-  const common = versions_1.concat(versions_2);
-  for (const version of common) {
+  for (const version of versions_2) {
     localVersions.setItem(version.name, version);
   }
+  for (const version of versions_1) {
+    const found = [...get(localVersions).values()].find(v => v.installed_path === version.installed_path);
+    if (!found) {
+      localVersions.setItem(version.name, version);
+    }
+  }
 
-  if (common.length) {
+  if (versions_1.length || versions_2.length) {
     hasAnyLocalVersion.set(true);
   }
 }
