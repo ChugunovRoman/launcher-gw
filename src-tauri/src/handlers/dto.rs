@@ -8,6 +8,15 @@ pub enum DownloadStatus {
   Unpacking,
 }
 
+#[derive(Clone, Serialize)]
+pub struct ProgressPayload {
+  pub version_name: String,
+  pub file_name: String,
+  pub bytes_moved: u64,
+  pub total_bytes: u64,
+  pub percentage: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadProgress {
   #[serde(default)]

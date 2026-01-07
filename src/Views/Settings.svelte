@@ -3,14 +3,13 @@
   import { invoke } from "@tauri-apps/api/core";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { sep } from "@tauri-apps/api/path";
-  import { appConfig, updateConfig, providersWasInited, radioApiProvider, providers } from "../store/main";
+  import { appConfig, updateConfig, providersWasInited, radioApiProvider, providers, localVersions } from "../store/main";
   import { choosePath } from "../utils/path";
   import { updateEachVersion, versions } from "../store/upload";
 
   import Scroll from "../Components/Scroll.svelte";
   import Bg from "../Components/Bg.svelte";
   import Radio from "../Components/Radio.svelte";
-  import { hasLocalVersion } from "../utils/checks";
 
   let coping = $state(false);
   let coping2 = $state(false);
@@ -49,6 +48,16 @@
     setTimeout(() => (coping2 = false), 1500);
   }
 
+  function hasLocalVersion(version: Version) {
+    for (const [name, local] of $localVersions) {
+      if (name === version.name) return true;
+      if (local.path === version.name) return true;
+      if (local.path === version.path) return true;
+    }
+
+    return false;
+  }
+
   $effect(() => {
     if ($providersWasInited) {
       invoke<AppConfig>("get_config").then((config) => {
@@ -71,7 +80,7 @@
           }
         }
       });
-    }, 500);
+    }, 200);
   });
 </script>
 

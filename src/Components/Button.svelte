@@ -1,14 +1,34 @@
 <script lang="ts">
-  let { children, isDisabled = $bindable(false), isRed = $bindable(false), isYellow = $bindable(false), onclick, style = "" } = $props();
+  let {
+    children,
+    isDisabled = $bindable(false),
+    isRed = $bindable(false),
+    isYellow = $bindable(false),
+    onclick,
+    style = "",
+    size = $bindable<"slim" | "normal">("normal"),
+  } = $props();
+
+  const sizes: any = {
+    slim: "padding: 0.5rem 1rem",
+    normal: "padding: 10px 40px",
+  };
 </script>
 
-<span role="button" {style} tabindex="0" class="btn" class:btn_inactive={isDisabled} class:btn_red={isRed} class:btn_yellow={isYellow} {onclick}>
+<span
+  role="button"
+  tabindex="0"
+  class="btn"
+  class:btn_inactive={isDisabled}
+  class:btn_red={isRed}
+  class:btn_yellow={isYellow}
+  style="{style} {sizes[size]}"
+  {onclick}>
   {@render children?.()}
 </span>
 
 <style>
   .btn {
-    padding: 10px 40px;
     color: white;
     background-color: rgba(61, 93, 236, 0.8);
     transition: background-color 0.15s ease;

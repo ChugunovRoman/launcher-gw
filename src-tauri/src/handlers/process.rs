@@ -160,3 +160,21 @@ fn get_renderer(renderer: RenderType) -> String {
     RenderType::RendererRgl => "renderer_rgl".to_string(),
   }
 }
+
+#[tauri::command]
+pub fn open_explorer(path: String) {
+  #[cfg(target_os = "windows")]
+  {
+    Command::new("explorer").arg(path).spawn().unwrap();
+  }
+
+  #[cfg(target_os = "macos")]
+  {
+    Command::new("open").arg(path).spawn().unwrap();
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    Command::new("xdg-open").arg(path).spawn().unwrap();
+  }
+}

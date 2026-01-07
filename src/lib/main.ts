@@ -1,9 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, radioApiProvider } from '../store/main';
+import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, radioApiProvider, moveProgress } from '../store/main';
 import { ConnectStatus, DownloadStatus } from "../consts";
-import { versions } from '../store/upload';
+import { selectedVersion, versions } from '../store/upload';
 import { get } from 'svelte/store';
 import { sep } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
@@ -84,10 +84,18 @@ export async function initMainListeners() {
     console.log('launcher-new-version:', event.payload);
     newLauncherVersionDownloaded.set(event.payload);
   }));
+  unlisten.set('move-version', await listen('move-version', (event: Event<ProgressPayload>) => {
+    const { version_name } = event.payload;
+
+    moveProgress.setItem(version_name, event.payload);
+  }));
 
   unlisten.set('config-loaded', await listen('config-loaded', (event: Event<AppConfig>) => {
     if (event.payload.selected_provider_id) {
       radioApiProvider.set(event.payload.selected_provider_id);
+    }
+    if (event.payload.selected_version) {
+      selectedVersion.set(event.payload.selected_version);
     }
     invoke<[string, ProviderStatus][]>('get_api_providers_stats').then(result => {
       result.sort((a, b) => a[1].latency_ms > b[1].latency_ms ? 1 : 0);

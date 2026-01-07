@@ -33,7 +33,8 @@
     },
     "input": {
       "checks": {
-        "space": "Not enough free space on the selected drive! Required: "
+        "space": "Not enough free space on the selected drive! Required: ",
+        "badPath": "Warning: The folder path contains spaces or Cyrillic characters. This may cause errors. It is recommended to use only Latin letters and avoid spaces."
       }
     },
     "menu": {
@@ -123,6 +124,13 @@
       "continue": "Resume upload",
       "selected": "Selected",
       "toSelect": "Select",
+      "installedPath": "The game is located in: ",
+      "move": "Move",
+      "openDir": "Open the game folder",
+      "openLogDir": "Open the log folder",
+      "moving": "Moving...",
+      "movingFileName": "File: ",
+      "movingCompleted": "Completed !",
       "runVersion": "Launch",
       "noAnyInstalledVersion": "No versions installed",
       "delete": "Delete",

@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import { createMapStore } from './helpers';
 import { ConnectStatus } from '../consts';
 import { invoke } from '@tauri-apps/api/core';
@@ -38,6 +38,8 @@ export const launcherDwnProgress = writable(0);
 export const providers = writable<[string, ProviderStatus][]>([]);
 export const radioApiProvider = writable<string>("github");
 
+export const moveProgress = createMapStore<string, ProgressPayload>();
+
 export const localVersions = createMapStore<string, Version>();
 
 export function updateConfig<F extends keyof AppConfig>(field: F, value: any) {
@@ -54,6 +56,20 @@ export function removeLocalVersion(name: string) {
 
     return data;
   });
+}
+export function updateLocalVersion(releaseName: string, cb: (data: Version) => Partial<Version>) {
+  localVersions.update((data) => {
+    if (data.has(releaseName)) {
+      data.set(releaseName, {
+        ...data.get(releaseName)!,
+        ...cb(data.get(releaseName)!),
+      });
+    }
+    return data;
+  });
+}
+export function refreshLocalVersion() {
+  localVersions.set(get(localVersions));
 }
 
 export async function fetchLocalVersions() {

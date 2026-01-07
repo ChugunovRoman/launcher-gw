@@ -26,6 +26,7 @@ export function createArrayStore<T>(): Writable<T[]> & {
 export function createMapStore<K, V>(): Writable<Map<K, V>> & {
   clear: () => void;
   setItem: (key: K, item: V) => void;
+  delItem: (key: K) => void;
 } {
   const { subscribe, set, update } = writable<Map<K, V>>(new Map());
 
@@ -35,6 +36,7 @@ export function createMapStore<K, V>(): Writable<Map<K, V>> & {
     update,
     clear: () => set(new Map()),
     setItem: (key: K, item: V) => update(map => { map.set(key, item); return map; }),
+    delItem: (key: K) => update(map => { map.delete(key); return map; }),
   };
 }
 

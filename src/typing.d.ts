@@ -154,3 +154,11 @@ declare interface ProviderStatus {
   available: boolean;
   latency_ms: number;
 }
+
+declare interface ProgressPayload {
+  version_name: string,
+  file_name: string,
+  bytes_moved: number,
+  total_bytes: number,
+  percentage: number,
+}

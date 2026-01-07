@@ -1,10 +1,19 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { localVersions, providersWasInited } from "../store/main";
+  import { localVersions, providersWasInited, refreshLocalVersion } from "../store/main";
   import { onMount } from "svelte";
   import { currentView } from "../store/menu";
-  import { hasAnyLocalVersion, mainVersion, selectedVersion } from "../store/upload";
+  import {
+    hasAnyLocalVersion,
+    mainVersion,
+    refreshVersions,
+    releaseName,
+    selectedVersion,
+    showUploading,
+    totalFiles,
+    uploadedFiles,
+  } from "../store/upload";
 
   let pid: number | null = $state(null);
   let isProcessAlive = $state(false);
@@ -44,8 +53,23 @@
           pid = config.latest_pid;
 
           if (config.selected_version) {
-            selectedVersion.set(config.selected_version);
+            $selectedVersion = config.selected_version;
           }
+
+          if (!$showUploading && !!config.progress_upload) {
+            $showUploading = true;
+            $releaseName = config.progress_upload.name;
+
+            invoke<RepoSyncState | null>("get_upload_manifest").then((manifest) => {
+              if (manifest) {
+                $totalFiles = manifest.total_files_count;
+                $uploadedFiles = manifest.uploaded_files_count;
+              }
+            });
+          }
+
+          refreshLocalVersion();
+          refreshVersions();
 
           if (pid < 0) return;
 

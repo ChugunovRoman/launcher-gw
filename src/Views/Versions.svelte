@@ -3,44 +3,36 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
+  import { open } from "@tauri-apps/plugin-shell";
   import {
     connectStatus,
     localVersions,
-    providersWasInited,
     versionsWillBeLoaded,
     expandedIndex,
     showDlgRemoveVersion,
     removeVersion,
     removeVersionInProcess,
+    moveProgress,
+    updateLocalVersion,
   } from "../store/main";
-  import {
-    showUploading,
-    versions,
-    releaseName,
-    totalFiles,
-    uploadedFiles,
-    updateVersion,
-    selectedVersion,
-    hasAnyLocalVersion,
-    updateEachVersion,
-    mainVersion,
-    refreshVersions,
-  } from "../store/upload";
+  import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { ConnectStatus, DownloadStatus } from "../consts";
-  import { Play, Pause, Stop, Installed } from "../Icons";
+  import { Play, Pause, Stop, Installed, CinC } from "../Icons";
   import { choosePath } from "../utils/path";
   import { getInGb, getInMb, parseBytes } from "../utils/dwn";
 
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
   import Spin from "../Components/Spin.svelte";
-  import { hasLocalVersion } from "../utils/checks";
+  import { onMount } from "svelte";
 
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
   let input1Needed = $state<number>(0);
   let input2Needed = $state<number>(0);
   let addVersionName = $state<boolean>(true);
+  let badPath1 = $state<boolean>(false);
+  let badPath2 = $state<boolean>(false);
 
   async function fetchVersionManifest(releaseName: string) {
     const found = $versions.find((v) => v.name === releaseName);
@@ -53,7 +45,7 @@
     updateVersion(releaseName, (version) => {
       let map = new Map<string, VersionFileDownload>();
       for (const file of manifest.files) {
-        const old = version.filesProgress.get(file.name);
+        const old = version.filesProgress && version.filesProgress.get(file.name);
 
         map.set(file.name, {
           downloadProgress: old ? (old.downloadedFileBytes / file.size) * 100 : 0,
@@ -156,6 +148,15 @@
       return;
     }
 
+    if (/[\sА-Яа-я]/.test(version.download_path)) {
+      badPath1 = true;
+      return;
+    }
+    if (/[\sА-Яа-я]/.test(version.installed_path)) {
+      badPath2 = true;
+      return;
+    }
+
     if (version.download_path === version.installed_path) {
       input1Needed = manifest.compressed_size + manifest.total_size;
       input2Needed = input1Needed;
@@ -235,6 +236,13 @@
     await choosePath(async (selected) => {
       let path = selected;
 
+      badPath1 = false;
+      badPath2 = false;
+      if (/[\sА-Яа-я]/.test(selected)) {
+        badPath1 = true;
+        return;
+      }
+
       if (addVersionName) {
         path = await join(path, version.path);
       }
@@ -248,11 +256,17 @@
   async function chooseDownloadDataPath(event: Event, version: Version) {
     event.stopPropagation();
 
-    await choosePath((selected) =>
+    badPath1 = false;
+    badPath2 = false;
+    await choosePath((selected) => {
+      if (/[\sА-Яа-я]/.test(selected)) {
+        badPath2 = true;
+        return;
+      }
       updateVersion(version.name, () => ({
         download_path: selected,
-      })),
-    );
+      }));
+    });
   }
   async function chooseInstalledVersion(event: Event, version: Version) {
     event.stopPropagation();
@@ -271,6 +285,35 @@
 
     $removeVersion = version;
     $showDlgRemoveVersion = true;
+  }
+  async function handleMoveVerson(version: Version) {
+    const selected = await choosePath(() => {});
+
+    if (!selected) {
+      return;
+    }
+    if (/[\sА-Яа-я]/.test(selected)) {
+      badPath1 = true;
+      return;
+    }
+
+    await invoke("move_version", { versionName: version.path, dest: selected });
+
+    updateLocalVersion(version.name, (version) => ({
+      ...version,
+      installed_path: selected,
+    }));
+
+    setTimeout(() => {
+      moveProgress.delItem(version.name);
+    }, 2000);
+  }
+  async function handleOpenGameDir(version: Version) {
+    await invoke("open_explorer", { path: version.installed_path });
+  }
+  async function handleOpenLogDir(version: Version) {
+    const path = await join(version.installed_path, "appdata", "logs");
+    await invoke("open_explorer", { path });
   }
 
   function getStatusText(status: DownloadStatus) {
@@ -292,7 +335,6 @@
     $expandedIndex = $expandedIndex === index ? null : index;
 
     updateEachVersion((v) => {
-      console.log("updateEachVersion, v: ", v);
       return v;
     });
   }
@@ -304,25 +346,25 @@
     }
   }
 
-  $effect(() => {
-    if ($providersWasInited) {
-      invoke<AppConfig>("get_config").then((config) => {
-        if (!$showUploading && !!config.progress_upload) {
-          showUploading.set(true);
-          releaseName.set(config.progress_upload.name);
-          selectedVersion.set(config.selected_version);
-
-          refreshVersions();
-
-          invoke<RepoSyncState | null>("get_upload_manifest").then((manifest) => {
-            if (manifest) {
-              totalFiles.set(manifest.total_files_count);
-              uploadedFiles.set(manifest.uploaded_files_count);
-            }
-          });
-        }
-      });
+  function hasLocalVersion(version: Version) {
+    for (const [name, local] of $localVersions) {
+      if (name === version.name) return true;
+      if (local.path === version.name) return true;
+      if (local.path === version.path) return true;
     }
+
+    return false;
+  }
+
+  $effect(() => {
+    $selectedVersion = $selectedVersion;
+    $expandedIndex = $expandedIndex;
+    badPath1 = false;
+    badPath2 = false;
+  });
+
+  onMount(() => {
+    $expandedIndex = null;
   });
 </script>
 
@@ -342,6 +384,8 @@
           <span class="plus-icon">
             {#if name === $selectedVersion}
               <Installed size={28} isButton={false} />
+            {:else}
+              <CinC size={28} isButton={false} />
             {/if}
           </span>
           <span class="version-name">
@@ -361,6 +405,10 @@
         {#if $expandedIndex === i}
           <div class="expanded-content">
             <div class="content-row input-group">
+              <div>
+                <span>{$_("app.releases.installedPath")}</span>
+                <span>{version.installed_path}</span>
+              </div>
               <button
                 type="button"
                 onclick={(e) => deleteVersion(e, version)}
@@ -374,6 +422,44 @@
                 {/if}
               </button>
             </div>
+            {#if badPath1}
+              <div class="input-group">
+                <label class="input-label-2">{$_("app.input.checks.badPath")}</label>
+              </div>
+            {/if}
+            <div class="input-group">
+              <div class="input-buttons">
+                <Button size="slim" onclick={() => handleMoveVerson(version)}>
+                  {$_("app.releases.move")}
+                </Button>
+                <Button size="slim" onclick={() => handleOpenGameDir(version)}>
+                  {$_("app.releases.openDir")}
+                </Button>
+                <Button size="slim" onclick={() => handleOpenLogDir(version)}>
+                  {$_("app.releases.openLogDir")}
+                </Button>
+              </div>
+            </div>
+            {#if $moveProgress.has(version.name)}
+              <div class="input-group">
+                <div class="input-buttons">
+                  <span>{$_("app.releases.moving")}</span>
+                  {#if $moveProgress.get(version.name)!.percentage !== 100}
+                    <span>{$_("app.releases.movingFileName")}</span>
+                    <span>{$moveProgress.get(version.name)!.file_name}</span>
+                    <span
+                      >{parseBytes($moveProgress.get(version.name)!.bytes_moved)[0]}{$_(
+                        `app.common.${parseBytes($moveProgress.get(version.name)!.bytes_moved)[1]}`,
+                      )} / {parseBytes($moveProgress.get(version.name)!.total_bytes)[0]}{$_(
+                        `app.common.${parseBytes($moveProgress.get(version.name)!.total_bytes)[1]}`,
+                      )}</span>
+                  {:else}
+                    <span>{$_("app.releases.movingCompleted")}</span>
+                  {/if}
+                </div>
+                <Progress progress={$moveProgress.get(version.name)!.percentage} />
+              </div>
+            {/if}
           </div>
         {/if}
       </div>
@@ -502,6 +588,9 @@
                         {$_("app.releases.browse")}
                       </button>
                     </div>
+                    {#if badPath1}
+                      <label class="input-label-2">{$_("app.input.checks.badPath")}</label>
+                    {/if}
                     {#if input1Checks}
                       <label class="input-label-2">{$_(`app.input.checks.${input1Checks}`)} {getInGb(input1Needed)}{$_("app.common.sfx")}</label>
                     {/if}
@@ -520,6 +609,9 @@
                         {$_("app.releases.browse")}
                       </button>
                     </div>
+                    {#if badPath2}
+                      <label class="input-label-2">{$_("app.input.checks.badPath")}</label>
+                    {/if}
                     {#if input2Checks}
                       <label class="input-label-2">{$_(`app.input.checks.${input2Checks}`)} {getInGb(input2Needed)}{$_("app.common.sfx")}</label>
                     {/if}
@@ -733,6 +825,11 @@
     margin-right: 10px;
   }
 
+  .input-buttons {
+    display: flex;
+    gap: 10px;
+  }
+
   .input-group {
     margin-bottom: 1.25rem;
   }
@@ -746,7 +843,6 @@
     display: block;
     margin-bottom: 0.5rem;
     color: #f55858;
-    font-size: small;
   }
   .input-row {
     display: flex;

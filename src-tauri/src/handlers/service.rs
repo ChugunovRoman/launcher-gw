@@ -1,9 +1,12 @@
+use fs_extra::dir::{CopyOptions, TransitProcess, TransitProcessResult, move_dir_with_progress};
 use std::{fs, path::Path, sync::Arc};
+use tauri::Emitter;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
 use crate::{
   configs::AppConfig::AppConfig,
+  handlers::dto::ProgressPayload,
   providers::dto::ProviderStatus,
   service::{files::ServiceFiles, main::Service},
   utils::encoding::*,
@@ -133,6 +136,66 @@ pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppC
   };
 
   let _ = fs::remove_dir_all(Path::new(&version.download_path)).map_err(|e| e.to_string())?;
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn move_version(
+  app: tauri::AppHandle,
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  versionName: String,
+  dest: String,
+) -> Result<(), String> {
+  let version = {
+    let cfg = app_config.lock().await;
+    cfg
+      .installed_versions
+      .get(&versionName)
+      .expect(&format!("move_version() version not found: {} !", &versionName))
+      .clone()
+  };
+
+  let mut options = CopyOptions::new();
+  options.overwrite = true;
+  options.content_only = true;
+
+  let _ = move_dir_with_progress(&version.installed_path, &dest, &options, |process_info: TransitProcess| {
+    let percentage = (process_info.copied_bytes as f64 / process_info.total_bytes as f64) * 100.0;
+
+    let payload = ProgressPayload {
+      version_name: version.name.clone(),
+      file_name: process_info.file_name,
+      bytes_moved: process_info.copied_bytes,
+      total_bytes: process_info.total_bytes,
+      percentage,
+    };
+
+    let _ = app.emit("move-version", payload);
+    TransitProcessResult::OverwriteAll
+  })
+  .map_err(|e| e.to_string())?;
+
+  let payload = ProgressPayload {
+    version_name: version.name.clone(),
+    file_name: "".to_owned(),
+    bytes_moved: 0,
+    total_bytes: 0,
+    percentage: 100.,
+  };
+
+  let _ = app.emit("move-version", payload);
+
+  {
+    let mut cfg = app_config.lock().await;
+    let v = cfg
+      .installed_versions
+      .get_mut(&versionName)
+      .expect(&format!("move_version() version not found: {} !", &versionName));
+
+    v.installed_path = dest;
+    cfg.save().map_err(|e| e.to_string())?;
+  };
 
   Ok(())
 }

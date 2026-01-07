@@ -17,6 +17,7 @@ import Play from "./Play.svelte";
 import Pause from "./Pause.svelte";
 import Stop from "./Stop.svelte";
 import Installed from "./Installed.svelte";
+import CinC from "./CinC.svelte";
 
 export {
   Discord,
@@ -38,4 +39,5 @@ export {
   Pause,
   Stop,
   Installed,
+  CinC,
 };
