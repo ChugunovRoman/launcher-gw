@@ -12,10 +12,14 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 
-async fn __fetch_releases(s: &Github) -> Result<()> {
+async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
   let mut map: HashMap<u32, ProjectGithub> = HashMap::new();
   let mut page: u32 = 1;
-  let release_count = s.projects_map.lock().unwrap().len();
+  let mut release_count = s.projects_map.lock().unwrap().len();
+
+  if !cashed {
+    release_count = 0;
+  }
 
   loop {
     if release_count > 0 {
@@ -78,8 +82,8 @@ async fn __fetch_releases(s: &Github) -> Result<()> {
   Ok(())
 }
 
-pub async fn __get_releases(s: &Github) -> Result<Vec<Release>> {
-  __fetch_releases(s).await?;
+pub async fn __get_releases(s: &Github, cashed: bool) -> Result<Vec<Release>> {
+  __fetch_releases(s, cashed).await?;
 
   let cached_projects = s.projects_map.lock().unwrap().clone();
   let mut releases: Vec<Release> = vec![];
@@ -100,7 +104,7 @@ pub async fn __get_releases(s: &Github) -> Result<Vec<Release>> {
 }
 
 pub async fn __get_release_repos_by_name(s: &Github, release_name: &str) -> Result<Vec<Project>> {
-  __fetch_releases(s).await?;
+  __fetch_releases(s, true).await?;
 
   let cached_projects = s.projects_map.lock().unwrap().clone();
   let mut repos: Vec<Project> = vec![];
@@ -124,7 +128,7 @@ pub async fn __get_release_repos_by_name(s: &Github, release_name: &str) -> Resu
 }
 
 pub async fn __get_updates_repos_by_name(s: &Github, release_name: &str) -> Result<Vec<Project>> {
-  __fetch_releases(s).await?;
+  __fetch_releases(s, true).await?;
 
   let cached_projects = s.projects_map.lock().unwrap().clone();
   let mut repos: Vec<Project> = vec![];
@@ -148,7 +152,7 @@ pub async fn __get_updates_repos_by_name(s: &Github, release_name: &str) -> Resu
 }
 
 pub async fn __set_release_visibility(s: &Github, release_name: &str, visibility: bool) -> Result<()> {
-  __fetch_releases(s).await?;
+  __fetch_releases(s, true).await?;
 
   let cached_projects = s.projects_map.lock().unwrap().clone();
 

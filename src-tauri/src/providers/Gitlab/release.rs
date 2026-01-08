@@ -6,7 +6,7 @@ use crate::providers::{
 
 use anyhow::{Context, Result, bail};
 
-pub async fn __get_releases(s: &Gitlab) -> Result<Vec<Release>> {
+pub async fn __get_releases(s: &Gitlab, cashed: bool) -> Result<Vec<Release>> {
   let root_id = s.get_manifest()?.root_id.context("Cannot get root_id from Gitlab manifest file!")?;
 
   let url = format!("{}/groups/{}/subgroups?sort=desc", &s.host, &root_id);
@@ -34,7 +34,7 @@ pub async fn __get_releases(s: &Gitlab) -> Result<Vec<Release>> {
 }
 
 pub async fn __get_release_repos_by_name(s: &Gitlab, release_name: &str) -> Result<Vec<Project>> {
-  let releases = __get_releases(s).await?;
+  let releases = __get_releases(s, true).await?;
   let release = releases
     .iter()
     .find(|r| r.name == release_name)
@@ -100,7 +100,7 @@ pub async fn __get_updates_repos_by_name(s: &Gitlab, release_id: &str) -> Result
 }
 
 pub async fn __set_release_visibility(s: &Gitlab, release_id: &str, visibility: bool) -> Result<()> {
-  let releases = __get_releases(s).await?;
+  let releases = __get_releases(s, true).await?;
   let release_id = match releases.iter().find(|r| r.path == release_id) {
     Some(data) => data.id,
     None => {

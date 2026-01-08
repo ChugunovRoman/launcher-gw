@@ -45,7 +45,7 @@ pub trait ApiProvider: Send + Sync {
   async fn find_user(&self, repo_id: &str, uuid: &str) -> Result<Option<Issue>>;
 
   async fn get_launcher_latest_release(&self, project_id: &str) -> Result<ReleaseGit>;
-  async fn get_releases(&self) -> Result<Vec<Release>>;
+  async fn get_releases(&self, cashed: bool) -> Result<Vec<Release>>;
   async fn set_release_visibility(&self, release_id: &str, visibility: bool) -> Result<()>;
   async fn get_release_repos_by_name(&self, release_id: &str) -> Result<Vec<Project>>;
   async fn get_updates_repos_by_name(&self, release_name: &str) -> Result<Vec<Project>>;

@@ -6,14 +6,17 @@ use crate::{
   utils::errors::log_full_error,
 };
 use anyhow::Context;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::{
   collections::HashMap,
   path::Path,
   sync::{Arc, Mutex as StdMutex},
 };
+use std::{
+  sync::atomic::{AtomicU16, Ordering},
+  time::Duration,
+};
 use tauri::Emitter;
-use tokio::sync::Semaphore;
+use tokio::sync::mpsc;
 use tokio::sync::{Mutex, broadcast};
 
 pub type CancelMap = Arc<StdMutex<HashMap<String, broadcast::Sender<()>>>>;
@@ -197,123 +200,162 @@ pub async fn start_download_version(
     },
   );
 
-  if rx.try_recv().is_ok() {
-    log::info!("Download task '{}' was cancelled", &versionName);
-    return Err("USER_CANCELLED".to_string());
-  }
-
   let total_file_count = files.len() as u16;
   let downloaded_cnt = Arc::new(AtomicU16::new(0));
-  let semaphore = Arc::new(Semaphore::new(PULL_FILES_SIZE as usize));
+
+  // Создаем канал для очереди задач
+  // Запас емкости берем с запасом, чтобы влезли все файлы + возможные ретраи
+  let (tx_queue, mut rx_queue) = mpsc::channel(total_file_count as usize + 100);
+
+  // Заполняем очередь начальными файлами
+  for file in files {
+    tx_queue.send(file).await.map_err(|e| e.to_string())?;
+  }
+
+  // Обертка для доступа к API клиенту
+  let api_client = {
+    let service_guard = service.lock().await;
+    service_guard.api_client.clone()
+  };
 
   let mut join_handles = Vec::new();
+  let (cancel_tx, _) = broadcast::channel::<()>(1); // Локальный сигнал для воркеров
 
-  for file in files {
-    // 1. Проверяем, не была ли отменена загрузка перед стартом следующего файла
-    if !rx.is_empty() || rx.try_recv().is_ok() {
-      log::info!("Main loop caught cancel signal");
-      let _ = app.emit("cancel-download-version", &versionName);
-      break;
-    }
+  // Вставляем основной tx в карту отмены
+  channel_map.lock().unwrap().insert(versionName.clone(), cancel_tx.clone());
 
-    // 2. Ждем свободного места в пуле (макс 6)
-    let permit = semaphore.clone().acquire_owned().await.map_err(|e| e.to_string())?;
+  let rx_queue_arc = Arc::new(Mutex::new(rx_queue));
+  let tx_queue_arc = Arc::new(Mutex::new(tx_queue));
+  let cancel_tx_arc = Arc::new(cancel_tx);
 
-    // 3. Логика ожидания 1 секунду перед добавлением следующего файла
-    // tokio::time::sleep(Duration::from_secs(1)).await;
-
-    // Клонируем всё необходимое для перемещения в async block
+  // Запускаем фиксированное количество воркеров
+  for worker_id in 0..PULL_FILES_SIZE {
     let app_c = app.clone();
     let app_config_c = app_config.inner().clone();
     let service_files_c = service_files.inner().clone();
-    let service_c = service.inner().clone();
+    let api_client_c = api_client.clone();
     let version_name_c = versionName.clone();
-    let file_c = file.clone();
     let download_dir_c = download_dir.to_path_buf();
     let downloaded_cnt_c = downloaded_cnt.clone();
+    let rx_queue_c = rx_queue_arc.clone();
+    let tx_queue_c = tx_queue_arc.clone();
+    let cancel_tx_arc_c = cancel_tx_arc.clone();
+    let mut stop_rx = cancel_tx_arc.subscribe();
 
-    let mut local_rx = tx.subscribe();
-    let local_2_rx = tx.subscribe();
-
+    // Переменная для rx очереди (нужен Mutex, так как mpsc::Receiver не Thread-safe)
+    // Но в данном случае мы просто передаем владение rx каждому воркеру через Arc/Mutex
+    // или используем подход с одним циклом. Лучше всего:
     let handle = tokio::spawn(async move {
-      // Переменная для контроля разрешения (permit)
-      // Она будет удерживаться до конца выполнения этого блока
-      let _permit = permit;
+      loop {
+        let file_task = {
+          let mut rx_lock = rx_queue_c.lock().await;
 
-      // Проверка отмены перед самым началом скачивания
-      if !local_rx.is_empty() || local_rx.try_recv().is_ok() {
-        log::info!("Main loop caught cancel signal");
-        let _ = app_c.emit("cancel-download-version", &version_name_c);
-      }
-
-      let file_path = download_dir_c.join(&file_c.path);
-      log::debug!("Start download file: {:?}", file_path);
-      let api_client = {
-        let service_guard = service_c.lock().await;
-        service_guard.api_client.clone()
-      };
-
-      // Выполняем загрузку
-      let download_result = tokio::select! {
-          _ = local_rx.recv() => {
-              // Если пришел сигнал отмены в процессе скачивания
-              log::info!("Task for {} received cancel", file_c.name);
-              let _ = app_c.emit("cancel-download-version", &version_name_c);
-              return;
+          tokio::select! {
+              _ = stop_rx.recv() => break, // Остановка если пришла отмена
+              task = rx_lock.recv() => {
+                  match task {
+                      Some(t) => t,
+                      None => break, // Очередь пуста, воркер завершает работу
+                  }
+              }
           }
-          res = service_files_c.download_blob_to_file(
-              &api_client,
+        };
+
+        let file_path = download_dir_c.join(&file_task.path);
+        let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
+
+        // Читаем существующий прогресс для Range
+        let seek_pos = if let Ok(content) = std::fs::read_to_string(&part_path) {
+          content.trim().parse::<u64>().ok()
+        } else {
+          None
+        };
+
+        let mut local_cancel = cancel_tx_arc_c.subscribe();
+        let res = service_files_c
+          .download_blob_to_file(
+            &api_client_c,
+            &version_name_c,
+            &file_task.project_id,
+            &file_task.id,
+            &file_path,
+            &seek_pos,
+            local_cancel,
+          )
+          .await;
+
+        match res {
+          Ok(_) => {
+            // Успешно скачано
+            let current = downloaded_cnt_c.fetch_add(1, Ordering::SeqCst) + 1;
+            update_config_and_emit(
+              &app_c,
+              &app_config_c,
               &version_name_c,
-              &file_c.project_id,
-              &file_c.id,
-              &file_path,
-              &None,
-              local_2_rx
-          ) => res
-      };
-
-      if let Err(e) = download_result {
-        log::error!("Error downloading {}: {}", file_c.name, e);
-        return;
-      }
-
-      // Обновляем состояние и конфиг
-      let current_downloaded = downloaded_cnt_c.fetch_add(1, Ordering::SeqCst) + 1;
-
-      {
-        let mut config_guard = app_config_c.lock().await;
-        if let Some(ver) = config_guard.progress_download.get_mut(&version_name_c) {
-          if let Some(file_progress) = ver.files.get_mut(&file_c.id) {
-            file_progress.is_downloaded = true;
+              &file_task.id,
+              &file_task.name,
+              current,
+              total_file_count,
+            )
+            .await;
+            if current >= total_file_count {
+              let _ = cancel_tx_arc_c.send(());
+              break;
+            }
           }
-          ver.downloaded_files_cnt = current_downloaded;
+          Err(e) => {
+            log::error!("Error downloading {}: {}. Retrying...", file_task.name, e);
+            // Возвращаем в очередь
+            let channel = tx_queue_c.lock().await;
+            let _ = channel.send(file_task).await;
+            tokio::time::sleep(Duration::from_secs(2)).await; // Пауза перед ретраем
+          }
         }
-        let _ = config_guard.save();
       }
-
-      // Эмит прогресса
-      let progress = (current_downloaded as f32 / total_file_count as f32) * 100.0;
-      let _ = app_c.emit(
-        "download-version",
-        DownloadProgress {
-          version_name: version_name_c,
-          status: DownloadStatus::DownloadFiles,
-          file: file_c.name,
-          progress,
-          downloaded_files_cnt: current_downloaded,
-          total_file_count,
-        },
-      );
     });
-
     join_handles.push(handle);
   }
 
-  // Ждем завершения всех запущенных задач
+  // Важно: чтобы rx_queue закрылся, нужно дропнуть все tx_queue, кроме тех что в воркерах
+  drop(tx_queue_arc);
+
   for h in join_handles {
     let _ = h.await;
   }
 
   let _ = app.emit("download-unpack-version", &versionName);
   Ok(())
+}
+
+// Вспомогательная функция для получения задач из очереди внутри select!
+async fn update_config_and_emit(
+  app: &tauri::AppHandle,
+  config: &Arc<Mutex<AppConfig>>,
+  version_name: &str,
+  file_id: &str,
+  file_name: &str,
+  current: u16,
+  total: u16,
+) {
+  let mut config_guard = config.lock().await;
+  if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
+    if let Some(file_progress) = ver.files.get_mut(file_id) {
+      file_progress.is_downloaded = true;
+    }
+    ver.downloaded_files_cnt = current;
+  }
+  let _ = config_guard.save();
+
+  let progress = (current as f32 / total as f32) * 100.0;
+  let _ = app.emit(
+    "download-version",
+    DownloadProgress {
+      version_name: version_name.to_string(),
+      status: DownloadStatus::DownloadFiles,
+      file: file_name.to_string(),
+      progress,
+      downloaded_files_cnt: current,
+      total_file_count: total,
+    },
+  );
 }

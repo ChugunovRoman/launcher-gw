@@ -204,8 +204,8 @@ impl ApiProvider for Gitlab {
   async fn get_launcher_latest_release(&self, project_id: &str) -> Result<ReleaseGit> {
     __get_launcher_latest_release(self, project_id).await
   }
-  async fn get_releases(&self) -> Result<Vec<Release>> {
-    __get_releases(self).await
+  async fn get_releases(&self, cashed: bool) -> Result<Vec<Release>> {
+    __get_releases(self, cashed).await
   }
   async fn set_release_visibility(&self, release_id: &str, visibility: bool) -> Result<()> {
     __set_release_visibility(self, release_id, visibility).await

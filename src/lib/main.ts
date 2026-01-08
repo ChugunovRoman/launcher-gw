@@ -33,51 +33,10 @@ export async function initMainListeners() {
   unlisten.set('versions-loaded', await listen('versions-loaded', async (event: Event<Version[]>) => {
     console.log("versions-loaded ! payload: ", event.payload);
 
-    const { default_download_path, default_installed_path, progress_download } = get(appConfig);
     const separ = await sep();
 
-    versions.set(event.payload.map(version => {
-      const progress = progress_download[version.name];
-      let installed_path = version.installed_path === "" ? `${default_installed_path}${separ}${version.path}` : version.installed_path;
-      let download_path = version.download_path === "" ? `${default_download_path}${separ}${version.path}_data` : version.download_path;
-      let downloadProgress = 0.0;
-      let downloadedFilesCnt = 0;
-      let totalFileCount = 0;
-      let isStoped = false;
-      let status = DownloadStatus.Init;
+    versions.set(event.payload.map(version => prepareVersionItem(get(appConfig), version, separ)));
 
-      if (progress) {
-        installed_path = progress.installed_path;
-        download_path = progress.download_path;
-        downloadedFilesCnt = progress.downloaded_files_cnt;
-        totalFileCount = progress.total_file_count;
-        isStoped = true;
-        downloadProgress = (downloadedFilesCnt / totalFileCount) * 100.0;
-        status = DownloadStatus.Pause;
-
-        invoke('emit_file_list_stats', { versionName: version.name });
-      }
-
-      return {
-        ...version,
-        installed_path,
-        download_path,
-        is_local: false,
-        inProgress: false,
-        wasCanceled: false,
-        isStoped,
-        downloadedFileBytes: 0,
-        downloadSpeed: 0.0,
-        downloadCurrentFile: "",
-        downloadProgress,
-        downloadedFilesCnt,
-        totalFileCount,
-        speedValue: 0,
-        sfxValue: "",
-        filesProgress: new Map(),
-        status,
-      }
-    }));
     versionsWillBeLoaded.set(true);
   }));
   unlisten.set('launcher-new-version', await listen('launcher-new-version', (event: Event<string>) => {
@@ -118,4 +77,48 @@ export async function initMainListeners() {
 
     fetchLocalVersions();
   }));
+}
+
+export function prepareVersionItem(appConfig: AppConfig, version: Version, sep: string): Version {
+  const { default_download_path, default_installed_path, progress_download } = appConfig;
+  const progress = progress_download[version.name];
+  let installed_path = version.installed_path === "" ? `${default_installed_path}${sep}${version.path}` : version.installed_path;
+  let download_path = version.download_path === "" ? `${default_download_path}${sep}${version.path}_data` : version.download_path;
+  let downloadProgress = 0.0;
+  let downloadedFilesCnt = 0;
+  let totalFileCount = 0;
+  let isStoped = false;
+  let status = DownloadStatus.Init;
+
+  if (progress) {
+    installed_path = progress.installed_path;
+    download_path = progress.download_path;
+    downloadedFilesCnt = progress.downloaded_files_cnt;
+    totalFileCount = progress.total_file_count;
+    isStoped = true;
+    downloadProgress = (downloadedFilesCnt / totalFileCount) * 100.0;
+    status = DownloadStatus.Pause;
+
+    invoke('emit_file_list_stats', { versionName: version.name });
+  }
+
+  return {
+    ...version,
+    installed_path,
+    download_path,
+    is_local: false,
+    inProgress: false,
+    wasCanceled: false,
+    isStoped,
+    downloadedFileBytes: 0,
+    downloadSpeed: 0.0,
+    downloadCurrentFile: "",
+    downloadProgress,
+    downloadedFilesCnt,
+    totalFileCount,
+    speedValue: 0,
+    sfxValue: "",
+    filesProgress: new Map(),
+    status,
+  }
 }

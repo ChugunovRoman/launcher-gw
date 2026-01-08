@@ -32,13 +32,9 @@ pub async fn create_archive(
   let mut args = vec![
     "a".to_string(),
     "-t7z".to_string(),
-    "-m0=lzma2".to_string(),
-    "-mx=9".to_string(),
-    "-mfb=64".to_string(),
-    "-md=1g".to_string(), // 1 ГБ словарь — для максимального сжатия
-    "-ms=on".to_string(), // solid archive
-    "-v50m".to_string(),  // тома по 50 МБ
-    "-bsp1".to_string(),  // вывод прогресса в stdout
+    "-mx=15".to_string(),
+    "-v99m".to_string(), // тома по 50 МБ
+    "-bsp1".to_string(), // вывод прогресса в stdout
     "-bb3".to_string(),
     archive_path.to_string_lossy().into(),
     sourceDir,

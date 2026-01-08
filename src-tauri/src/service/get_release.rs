@@ -30,7 +30,7 @@ impl ServiceGetRelease for Service {
     if cashed && let Some(cash) = self.releases.get(api.id()) {
       releases = cash.clone();
     } else {
-      releases = api.get_releases().await?;
+      releases = api.get_releases(cashed).await?;
 
       self.releases.insert(String::from(api.id()), releases.clone());
     }

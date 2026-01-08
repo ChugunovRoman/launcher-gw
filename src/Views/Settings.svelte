@@ -10,6 +10,7 @@
   import Scroll from "../Components/Scroll.svelte";
   import Bg from "../Components/Bg.svelte";
   import Radio from "../Components/Radio.svelte";
+  import { prepareVersionItem } from "../lib/main";
 
   let coping = $state(false);
   let coping2 = $state(false);
@@ -69,16 +70,10 @@
     invoke("set_current_api_provider", { provider: $radioApiProvider });
 
     setTimeout(() => {
-      invoke<Version[]>("get_available_versions").then((data) => {
-        versions.clear();
+      invoke<Version[]>("get_available_versions").then(async (data) => {
+        const separ = await sep();
 
-        for (const item of data) {
-          const found = $versions.find((v) => v.name === item.name);
-          const hasLocal = hasLocalVersion(item);
-          if (!found && !hasLocal) {
-            $versions.push(item);
-          }
-        }
+        versions.set(data.map((version) => prepareVersionItem($appConfig, version, separ)).filter((v) => !hasLocalVersion(v)));
       });
     }, 200);
   });
