@@ -31,4 +31,4 @@ pub const STATE_FILE_NAME: &str = ".git_sync_state";
 pub const GITLAB_PID: &str = "gitlab";
 pub const GITHUB_PID: &str = "github";
 
-pub const PULL_FILES_SIZE: u8 = 4;
+pub const PULL_FILES_SIZE: u8 = 1;

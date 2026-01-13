@@ -1,3 +1,4 @@
+pub mod CountingWriter;
 pub mod encoding;
 pub mod errors;
 pub mod git;

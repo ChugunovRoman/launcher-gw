@@ -35,16 +35,12 @@ export async function initDownloadListeners() {
 
     updateVersion(versionName, (version) => {
       const map = version.filesProgress;
-      let totalSpeed = 0
-
-      for (const [name, progress] of map) {
-        totalSpeed += progress.downloadSpeed;
-      }
-
-      const [totalSpeedValue, totalSfxValue] = formatSpeedBytesPerSec(totalSpeed);
+      let totalSpeed = 0;
+      let downloadFilesTotalBytes = 0;
 
       map.set(fileName, {
         downloadProgress: bytes / totalBytes * 100,
+        unpackProgress: 0,
         downloadedFileBytes: bytes,
         totalFileBytes: totalBytes,
         downloadSpeed: speed,
@@ -52,7 +48,22 @@ export async function initDownloadListeners() {
         sfxValue,
       });
 
+      for (const [name, progress] of map) {
+        totalSpeed += progress.downloadSpeed;
+        downloadFilesTotalBytes += progress.downloadedFileBytes;
+      }
+
+      const [totalSpeedValue, totalSfxValue] = formatSpeedBytesPerSec(totalSpeed);
+
+      let downloadProgressVersion = version.downloadProgress;
+
+      if (version.manifest) {
+        downloadProgressVersion = downloadFilesTotalBytes / version.manifest.compressed_size * 100;
+      }
+
       return {
+        downloadProgress: downloadProgressVersion,
+        downloadedFileBytes: downloadFilesTotalBytes,
         downloadSpeed: totalSpeed,
         speedValue: totalSpeedValue,
         sfxValue: totalSfxValue,
@@ -69,7 +80,7 @@ export async function initDownloadListeners() {
     launcherDwnTotalBytes.set(totalSize);
     launcherDwnProgress.set(bytes / totalSize * 100);
   }));
-  unlisten.set('download-version-files', await listen('download-version-files', (event: Event<[string, { name: string; size: number }[]]>) => {
+  unlisten.set('download-version-files', await listen('download-version-files', (event: Event<[string, { name: string; unpacked: boolean; size: number }[]]>) => {
     const [versionName, fileSizesMap] = event.payload;
 
     updateVersion(versionName, (version) => {
@@ -81,12 +92,12 @@ export async function initDownloadListeners() {
           downloadProgress: old ? (old.downloadedFileBytes / old?.totalFileBytes || 0) * 100 : 0,
           downloadedFileBytes: item.size || 0,
           totalFileBytes: old?.totalFileBytes || 0,
+          unpackProgress: item.unpacked ? 100 : 0,
           downloadSpeed: 0,
           speedValue: 0,
           sfxValue: "",
         });
       }
-
 
       return {
         filesProgress: map,
@@ -100,18 +111,6 @@ export async function initDownloadListeners() {
   }));
   unlisten.set('download-unpack-version', await listen('download-unpack-version', async (event: Event<string>) => {
     const versionName = event.payload;
-
-    const version = get(versions).find(v => v.name === versionName);
-
-    if (!version) {
-      throw new Error(`version by name: ${versionName} not found !`);
-    }
-
-    await invoke<string>("extract_archive", {
-      versionName,
-      archivePath: await join(version.download_path, "game.7z.001"),
-      outputDir: await join(version.installed_path),
-    });
 
     await invoke<void>("add_installed_version_from_config", { versionName });
 

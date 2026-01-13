@@ -93,6 +93,11 @@
     "pack": {
       "packing": "Packing",
       "start": "Pack",
+      "addFiles": "Adding files...",
+      "compressing": "Packaging...",
+      "size": "Size: ",
+      "file": "File: ",
+      "chunkSize": "The size limit for one archive in MB",
       "source": {
         "placeholder": "Path to game folder",
         "btn": "Browse"

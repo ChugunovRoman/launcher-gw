@@ -38,16 +38,14 @@ impl ServiceFiles {
     &self,
     api_client: &ApiClient,
     release_name: &str,
-    project_id: &str,
-    blob_sha: &str,
+    direct_url: &str,
+    total_bytes: &u64,
     output_path: impl AsRef<Path>,
     seek: &Option<u64>,
     mut rx: Receiver<()>,
   ) -> Result<()> {
     let api = api_client.current_provider()?;
-    let mut stream = api.get_blob_stream(project_id, blob_sha, seek).await?;
-    let direct_url = api.get_blob_direct_url(project_id, blob_sha).await;
-    let total_bytes = api.get_file_content_size(&direct_url).await?;
+    let mut stream = api.get_blob_by_url_stream(&direct_url, seek).await?;
 
     let file_name = get_file_name(&output_path).unwrap();
     let part_file_path = format!("{}.part", output_path.as_ref().to_str().unwrap());
@@ -92,7 +90,7 @@ impl ServiceFiles {
           0.0
         };
 
-        (self.callback)(release_name, &file_name, downloaded, total_bytes, speed);
+        (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), speed);
         last_callback = now;
       }
     }
@@ -102,7 +100,7 @@ impl ServiceFiles {
     // 3. После успешного завершения удаляем .part файл
     let _ = tokio::fs::remove_file(&part_file_path).await;
 
-    (self.callback)(release_name, &file_name, downloaded, total_bytes, 0.);
+    (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.);
     Ok(())
   }
 

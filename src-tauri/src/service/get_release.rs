@@ -4,7 +4,7 @@ use crate::{
   configs::AppConfig::Version,
   consts::*,
   handlers::dto::ReleaseManifest,
-  providers::dto::{Release, TreeItem},
+  providers::dto::{Release, ReleaseGit, TreeItem},
   service::main::Service,
   utils::{encoding::read_cp1251_file, resources::game_exe},
 };
@@ -17,6 +17,7 @@ pub trait ServiceGetRelease {
   async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>>;
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest>;
   async fn get_main_release_files(&self, release_id: &str) -> Result<Vec<TreeItem>>;
+  async fn get_main_release(&self, release_name: &str) -> Result<ReleaseGit>;
   async fn get_local_version(&self) -> Result<Vec<Version>>;
   async fn get_main_version(&self) -> Option<Version>;
   async fn set_release_visibility(&self, path: &str, visibility: bool) -> Result<()>;
@@ -70,6 +71,29 @@ impl ServiceGetRelease for Service {
     let manifest: ReleaseManifest = serde_json::from_slice(&bytes)?;
 
     Ok(manifest)
+  }
+
+  async fn get_main_release(&self, release_name: &str) -> Result<ReleaseGit> {
+    let api = self.api_client.current_provider()?;
+
+    let repos = api.get_release_repos_by_name(release_name).await?;
+
+    if repos.is_empty() {
+      bail!("No 'main_' repos found for release {}", release_name);
+    }
+
+    let main_repo = repos
+      .iter()
+      .find(|r| r.name.contains("_main_1"))
+      .expect(&format!("Repo main_1 not found for release: {}", &release_name));
+
+    let project_id = if api.is_suppot_subgroups() {
+      main_repo.id.to_string()
+    } else {
+      main_repo.name.clone()
+    };
+
+    api.get_launcher_latest_release(GITHUB_ORG, &project_id).await
   }
 
   async fn get_main_release_files(&self, release_name: &str) -> Result<Vec<TreeItem>> {
@@ -128,6 +152,10 @@ impl ServiceGetRelease for Service {
       let config_guard = self.config.lock().await;
       config_guard.default_installed_path.clone()
     };
+    let progress_download = {
+      let config_guard = self.config.lock().await;
+      config_guard.progress_download.clone()
+    };
     let versions_dir = Path::new(&install_path);
 
     let mut versions: Vec<Version> = vec![];
@@ -156,6 +184,10 @@ impl ServiceGetRelease for Service {
 
       let key_path = entry.file_name().clone().into_string().expect("OsString was not valid UTF-8");
       let name = Regex::new(r"[-]+").unwrap().replace_all(&key_path, " ").to_string();
+
+      if let Some(_) = progress_download.iter().find(|(_, progress)| progress.path == key_path) {
+        continue;
+      };
 
       log::info!(
         "Get local version, name {:?} path: {:?} file_name: {:?} entry: {:?}",

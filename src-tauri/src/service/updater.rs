@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use crate::consts::{BASE_DIR, REPO_LAUNCGER_ID_2};
+use crate::consts::{BASE_DIR, GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME, REPO_LAUNCGER_ID_2};
 use crate::providers::ApiClient::ApiClient::ApiClient;
 use crate::providers::dto::{ReleaseGit, ReleasePlatform};
 use crate::utils::paths::get_exe_name;
@@ -37,7 +37,12 @@ impl ServiceUpdater {
 
     log::debug!("ServiceUpdater.check, start");
 
-    let latest_release = api.get_launcher_latest_release(&REPO_LAUNCGER_ID_2.to_string()).await?;
+    let project_id = if api.is_suppot_subgroups() {
+      REPO_LAUNCGER_ID_2.to_string()
+    } else {
+      GITHUB_LAUNCHER_REPO_NAME.to_string()
+    };
+    let latest_release = api.get_launcher_latest_release(MAIN_DEVELOPER_NAME, &project_id).await?;
 
     log::debug!("ServiceUpdater.check, latest_release.tag_name: {:?}", &latest_release.version);
 

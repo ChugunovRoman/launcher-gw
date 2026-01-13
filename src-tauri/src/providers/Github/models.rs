@@ -91,3 +91,24 @@ pub struct IssueResponseGithub {
   pub incomplete_results: bool,
   pub items: Vec<IssueGithub>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddFileContentBodyGithub {
+  pub message: String,
+  pub content: String,
+  pub branch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseRequestGithub {
+  pub name: String,
+  pub tag_name: String,
+  pub target_commitish: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseResponseGithub {
+  pub id: u32,
+  pub url: String,
+  pub assets_url: String,
+  pub upload_url: String,
+}

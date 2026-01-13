@@ -3,11 +3,26 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { providersWasInited } from "../store/main";
-  import { showUploading, inProcess, versions, logText, releaseName, releasePath, filesPerCommit, totalFiles, uploadedFiles } from "../store/upload";
+  import {
+    showUploading,
+    inProcess,
+    versions,
+    logText,
+    releaseName,
+    releasePath,
+    filesPerCommit,
+    totalFiles,
+    uploadedFiles,
+    uploadFilesMap,
+  } from "../store/upload";
   import { choosePath } from "../utils/path";
 
+  import Progress from "../Components/Progress.svelte";
+  import Button from "../Components/Button.svelte";
+  import Spin from "../Components/Spin.svelte";
+  import { getInMb, parseBytes } from "../utils/dwn";
+
   let expandedIndex = $state<number | null>(null);
-  let container: HTMLDivElement;
 
   async function fetchVersions() {
     const fetched = await invoke<Version[]>("get_available_versions");
@@ -43,10 +58,9 @@
   }
 
   async function startUploadingRelease() {
-    await invoke<void>("upload_release", {
+    await invoke<void>("upload_v2_release", {
       name: $releaseName,
       path: $releasePath,
-      filesPerCommit: parseInt($filesPerCommit),
     });
 
     await fetchVersions();
@@ -104,14 +118,6 @@
       });
     }
   });
-  $effect(() => {
-    const logs = $logText;
-    if (container) {
-      queueMicrotask(() => {
-        container.scrollTop = container.scrollHeight;
-      });
-    }
-  });
 </script>
 
 <div class="releases-view">
@@ -157,10 +163,7 @@
         <div class="header" role="button" tabindex="0">
           <span class="plus-icon">
             {#if $inProcess}
-              <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
-                ><path
-                  class="fil0"
-                  d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" /></svg>
+              <Spin size={16} />
             {:else}
               <svg width="20" height="20" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
                 <path d="M24 5L44 43H4L24 5Z" fill="none" stroke="rgba(233, 236, 61, 1)" stroke-width="4" stroke-linejoin="round" />
@@ -170,7 +173,7 @@
             {/if}
           </span>
           {#if $inProcess}
-            <span class="placeholder-text">{$_("app.releases.uploading")}, {$_("app.releases.uploaded")} {$uploadedFiles}/{$totalFiles}</span>
+            <span class="placeholder-text">{$_("app.releases.uploading")}, {$_("app.releases.uploaded")}</span>
           {:else}
             <span class="placeholder-text">{$_("app.releases.stoped")} ({$releaseName})</span>
           {/if}
@@ -181,7 +184,21 @@
           {/if}
         </div>
         {#if expandedIndex === -1}
-          <div class="expanded-content" bind:this={container}>
+          <div class="expanded-content">
+            {#each $uploadFilesMap as [name, progress], i}
+              <div class="file-row">
+                <span>{name}</span>
+
+                <Progress height={12} maxWidth="1fr - 300px" progress={progress.progress} showPercents={false} />
+
+                <span style="justify-self: end;"
+                  >{parseBytes(progress.file_uploaded_size)[0]}
+                  {$_(`app.common.${parseBytes(progress.file_uploaded_size)[1]}`)} / {parseBytes(progress.file_total_size)[0]}
+                  {$_(`app.common.${parseBytes(progress.file_total_size)[1]}`)}</span>
+
+                <span style="justify-self: end;">{progress.speedValue} {progress.sfxValue}</span>
+              </div>
+            {/each}
             {#each $logText as text, i}
               <span class="log-text">{text}</span>
             {/each}
@@ -221,6 +238,11 @@
     font-family: system-ui, sans-serif;
   }
 
+  .file-row {
+    display: grid;
+    grid-template-columns: 120px 1fr 140px 100px;
+  }
+
   .releases-scroll {
     overflow-y: auto;
     -webkit-app-region: no-drag;
@@ -257,20 +279,6 @@
   }
   .release-item:hover {
     background-color: rgba(50, 50, 50, 0.7);
-  }
-
-  .spinner {
-    width: 16px;
-    height: 16px;
-    animation: spin 1s linear infinite;
-  }
-  @keyframes spin {
-    0% {
-      transform: rotate(0deg);
-    }
-    100% {
-      transform: rotate(360deg);
-    }
   }
 
   .header {

@@ -56,10 +56,10 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::release::clear_progress_version,
     handlers::release::emit_file_list_stats,
     handlers::upload::upload_release,
+    handlers::upload_v2::upload_v2_release,
     handlers::continue_upload::continue_upload,
     // compress
-    handlers::compress::create_archive,
-    handlers::compress::extract_archive,
+    handlers::compress::create_split_archives,
     // permissions
     handlers::permissions::allow_pack_mod,
     // updater

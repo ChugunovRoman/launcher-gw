@@ -2,13 +2,16 @@ use crate::{
   configs::AppConfig::AppConfig,
   consts::PULL_FILES_SIZE,
   handlers::{
-    dto::{DownlaodFileStat, DownloadProgress, DownloadStatus},
+    dto::{DownlaodFileStat, DownloadProgress, DownloadStatus, UnzipTask},
     start_download_version::CancelMap,
   },
-  service::{files::ServiceFiles, main::Service},
+  service::{files::ServiceFiles, main::Service, unpack::ServiceUnpacker},
 };
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{cmp::Reverse, fs, path::Path, sync::Arc, time::Duration};
+use std::{
+  path::PathBuf,
+  sync::atomic::{AtomicU16, Ordering},
+};
 use tauri::Emitter;
 use tokio::sync::{Mutex, broadcast, mpsc};
 
@@ -19,6 +22,7 @@ pub async fn continue_download_version(
   app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
   service: tauri::State<'_, Arc<Mutex<Service>>>,
   service_files: tauri::State<'_, Arc<ServiceFiles>>,
+  service_unpack: tauri::State<'_, Arc<ServiceUnpacker>>,
   versionName: String,
 ) -> Result<(), String> {
   log::info!("Start continue_download_version, version: {:?}", &versionName);
@@ -29,12 +33,12 @@ pub async fn continue_download_version(
     channel_map.lock().unwrap().insert(versionName.clone(), cancel_tx.clone());
   }
   scopeguard::defer! {
-      channel_map.lock().unwrap().remove(&versionName);
+    channel_map.lock().unwrap().remove(&versionName);
   };
 
   // 2. Сбор статистики и подготовка данных
   let mut file_sizes: Vec<DownlaodFileStat> = vec![];
-  let (version, files_to_download) = {
+  let (version, mut files_to_download) = {
     let mut cfg_guard = app_config.lock().await;
     let mut to_download = Vec::new();
     let version_data = {
@@ -46,8 +50,8 @@ pub async fn continue_download_version(
       let mut files_dwn_cnt: u16 = 0;
 
       for (_, file_progress) in version_data.files.iter_mut() {
-        let file_path = Path::new(&version_data.download_path).join(&file_progress.path);
-        let file_part_path = Path::new(&version_data.download_path).join(format!("{}.part", &file_progress.path));
+        let file_path = Path::new(&version_data.download_path).join(&file_progress.name);
+        let file_part_path = Path::new(&version_data.download_path).join(format!("{}.part", &file_progress.name));
 
         let current_size = if file_part_path.exists() {
           tokio::fs::read_to_string(&file_part_path)
@@ -56,6 +60,8 @@ pub async fn continue_download_version(
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(0)
         } else if file_path.exists() && file_progress.is_downloaded {
+          file_progress.total_size
+        } else if !file_path.exists() && file_progress.is_unpacked {
           file_progress.total_size
         } else {
           0
@@ -72,7 +78,8 @@ pub async fn continue_download_version(
         }
 
         file_sizes.push(DownlaodFileStat {
-          name: file_progress.path.clone(),
+          name: file_progress.name.clone(),
+          unpacked: file_progress.is_unpacked,
           size: Some(current_size),
         });
       }
@@ -87,7 +94,9 @@ pub async fn continue_download_version(
   };
 
   // Сортировка для UI (по номеру чанка в расширении)
-  file_sizes.sort_by_key(|file| file.name.split('.').last().and_then(|ext| ext.parse::<u32>().ok()).unwrap_or(0));
+  file_sizes.sort_by_key(|file| Reverse(file.size));
+  files_to_download.sort_by_key(|file| Reverse(file.size));
+
   let _ = app.emit("download-version-files", (&versionName, &file_sizes));
   let progress = (version.downloaded_files_cnt as f32 / version.total_file_count as f32) * 100.0;
   // Отправляем ивент на фронт с сохраненными данными о прогресса после паузы. Это нужна для начальной инициализации UI
@@ -109,11 +118,53 @@ pub async fn continue_download_version(
   let (tx_queue, rx_queue) = mpsc::channel(total_file_count as usize + 100);
 
   for file in files_to_download {
+    log::debug!("tx_queue.send, file: {:?}", &file);
     let _ = tx_queue.send(file).await;
   }
 
+  let (tx_unzip, mut rx_unzip) = mpsc::channel::<UnzipTask>(total_file_count as usize);
+
+  // Отдельный поток-менеджер распаковки
+  let app_unzip = app.clone();
+  let version_name_unzip = versionName.clone();
+  let service_unpack_arc = service_unpack.inner().clone();
+  let app_config_arc = app_config.inner().clone();
+  let unzip_manager_handle = tokio::spawn(async move {
+    while let Some(data) = rx_unzip.recv().await {
+      if data.is_latest {
+        break;
+      }
+
+      let app_inner = app_unzip.clone();
+      let v_name = version_name_unzip.clone();
+      let service_unpack_for_thread = service_unpack_arc.clone();
+      let app_config_arc_for_thread = app_config_arc.clone();
+
+      // Используем spawn_blocking, так как распаковка — это CPU-intensive задача
+      tokio::task::spawn_blocking(move || {
+        let _ = service_unpack_for_thread.extract_zip(&v_name, &data.file_name, &data.archive_path, &data.destination_path);
+        let _ = app_inner.emit("file-unzipped", (&v_name, data.archive_path.to_str()));
+        // Для работы с async Mutex внутри синхронного spawn_blocking
+        // используем блокирующий вызов через текущий runtime
+        let mut config_guard = tokio::runtime::Handle::current().block_on(app_config_arc_for_thread.lock());
+
+        if let Some(ver) = config_guard.progress_download.get_mut(&v_name) {
+          if let Some(file_progress) = ver.files.get_mut(&data.file_name) {
+            file_progress.is_unpacked = true;
+          }
+        }
+        let _ = config_guard.save();
+        fs::remove_file(&data.archive_path).ok();
+      })
+      .await
+      .ok();
+    }
+    log::info!("Unzip queue finished");
+  });
+
   let rx_queue_arc = Arc::new(Mutex::new(rx_queue));
   let cancel_tx_arc = Arc::new(cancel_tx);
+  let tx_unzip_arc = Arc::new(tx_unzip);
 
   let api_client = service.lock().await.api_client.clone();
   let mut join_handles = Vec::new();
@@ -125,9 +176,11 @@ pub async fn continue_download_version(
     let service_files_c = service_files.inner().clone();
     let api_client_c = api_client.clone();
     let version_name_c = versionName.clone();
+    let version_install_path_c = version.installed_path.clone();
     let download_dir_c = Path::new(&version.download_path).to_path_buf();
     let downloaded_cnt_c = downloaded_cnt.clone();
 
+    let tx_unzip_c = tx_unzip_arc.clone();
     let rx_queue_c = rx_queue_arc.clone();
     let tx_queue_c = tx_queue.clone();
     let cancel_tx_arc_c = cancel_tx_arc.clone();
@@ -146,7 +199,7 @@ pub async fn continue_download_version(
           }
         };
 
-        let file_path = download_dir_c.join(&file_task.path);
+        let file_path = download_dir_c.join(&file_task.name);
         let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
 
         // Актуальный seek перед каждой попыткой
@@ -160,8 +213,8 @@ pub async fn continue_download_version(
           .download_blob_to_file(
             &api_client_c,
             &version_name_c,
-            &file_task.project_id,
-            &file_task.id,
+            &file_task.download_link,
+            &file_task.total_size,
             &file_path,
             &seek_pos,
             local_cancel,
@@ -171,6 +224,15 @@ pub async fn continue_download_version(
         match res {
           Ok(_) => {
             let current = downloaded_cnt_c.fetch_add(1, Ordering::SeqCst) + 1;
+
+            let _ = tx_unzip_c
+              .send(UnzipTask {
+                file_name: file_task.name.clone(),
+                archive_path: file_path.clone(),
+                destination_path: PathBuf::from(&version_install_path_c),
+                is_latest: current >= total_file_count,
+              })
+              .await;
 
             // Обновляем конфиг
             {
@@ -221,10 +283,14 @@ pub async fn continue_download_version(
     let _ = h.await;
   }
 
-  // Проверяем, действительно ли всё скачано перед распаковкой
-  if downloaded_cnt.load(Ordering::SeqCst) >= total_file_count {
-    let _ = app.emit("download-unpack-version", &versionName);
-  }
+  // ВАЖНО: Закрываем передатчик очереди распаковки.
+  // После этого rx_unzip.recv() вернет None, когда обработает ВСЕ задачи в очереди.
+  drop(tx_unzip_arc);
+
+  // Ждем, пока менеджер распаковки закончит последний файл
+  let _ = unzip_manager_handle.await;
+
+  let _ = app.emit("download-unpack-version", &versionName);
 
   Ok(())
 }

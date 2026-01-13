@@ -5,7 +5,7 @@ use crate::providers::{
 
 use anyhow::{Context, Result, bail};
 
-pub async fn __get_launcher_latest_release(s: &Gitlab, project_id: &str) -> Result<ReleaseGit> {
+pub async fn __get_launcher_latest_release(s: &Gitlab, owner: &str, project_id: &str) -> Result<ReleaseGit> {
   let url = format!("{}/projects/{}/releases", &s.host, &project_id);
   let resp = s
     .get(&url)

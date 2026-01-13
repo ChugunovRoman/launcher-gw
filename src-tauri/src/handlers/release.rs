@@ -6,7 +6,7 @@ use crate::{
   utils::{errors::log_full_error, git::grouping::group_files_by_size, resources::game_exe},
 };
 use anyhow::Context;
-use std::{convert::TryFrom, fs, path::PathBuf};
+use std::{cmp::Reverse, convert::TryFrom, fs, path::PathBuf};
 use std::{path::Path, sync::Arc};
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
@@ -56,10 +56,10 @@ pub async fn create_release_repos(app: tauri::AppHandle, name: String, path: Str
     log_full_error(&e);
     e.to_string()
   })?;
-  let cnt: u16 = u16::try_from(groups.len()).expect("create_release_repos|groups.len() Value too large for u16");
+  // let cnt: u16 = u16::try_from(groups.len()).expect("create_release_repos|groups.len() Value too large for u16");
 
-  let main_cnt: u16 = cnt;
-  let updates_cnt: u16 = 2;
+  let main_cnt: u16 = 1;
+  let updates_cnt: u16 = 1;
 
   let _ = service_guard
     .create_release_repos(&name, &parent_id, &main_cnt, &updates_cnt)
@@ -335,8 +335,8 @@ pub async fn emit_file_list_stats(
     config_guard.progress_download.get(&versionName).cloned()
   } {
     for file in version.files.iter() {
-      let file_path = Path::new(&version.download_path).join(&file.1.path);
-      let file_part_path = Path::new(&version.download_path).join(format!("{}.part", &file.1.path));
+      let file_path = Path::new(&version.download_path).join(&file.1.name);
+      let file_part_path = Path::new(&version.download_path).join(format!("{}.part", &file.1.name));
 
       if file_path.exists() {
         let size = match tokio::fs::read_to_string(file_part_path).await {
@@ -345,19 +345,27 @@ pub async fn emit_file_list_stats(
         };
 
         file_sizes.push(DownlaodFileStat {
-          name: file.1.path.clone(),
+          name: file.1.name.clone(),
+          unpacked: file.1.is_unpacked,
           size: Some(size),
+        });
+      } else if file.1.is_unpacked {
+        file_sizes.push(DownlaodFileStat {
+          name: file.1.name.clone(),
+          unpacked: file.1.is_unpacked,
+          size: Some(file.1.total_size),
         });
       } else {
         file_sizes.push(DownlaodFileStat {
-          name: file.1.path.clone(),
+          name: file.1.name.clone(),
+          unpacked: file.1.is_unpacked,
           size: Some(0),
         });
       }
     }
   };
 
-  file_sizes.sort_by_key(|file| file.name.split('.').last().and_then(|ext| ext.parse::<u32>().ok()).unwrap_or(0));
+  file_sizes.sort_by_key(|file| Reverse(file.size));
 
   let _ = app.emit("download-version-files", (&versionName, file_sizes));
 

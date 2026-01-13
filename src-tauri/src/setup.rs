@@ -14,6 +14,7 @@ use tauri::{App, Emitter};
 use crate::handlers::start_download_version::CancelMap;
 use crate::service::files::ServiceFiles;
 use crate::service::get_release::ServiceGetRelease;
+use crate::service::unpack::ServiceUnpacker;
 use crate::service::updater::ServiceUpdater;
 use crate::service::wake_detector::WakeDetector;
 use crate::utils::errors::log_full_error;
@@ -70,9 +71,13 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let user_ltx_config = UserLtx(GameConfig::new(""));
   let tmp_ltx_config = TmpLtx(GameConfig::new(""));
 
-  let handle = app.handle().clone();
-  let handle2 = app.handle().clone();
-  let handle3 = app.handle().clone();
+  let handle = Arc::new(app.handle().clone());
+  let handle2 = handle.clone();
+  let handle3 = handle.clone();
+  let handle4 = handle.clone();
+  let app_handle = handle.clone();
+  let app_handle_bg = handle.clone();
+
   let logger = Arc::new(move |msg: &str| {
     log::info!("{}", &msg);
     let _ = handle.emit("upload-log", msg);
@@ -81,11 +86,14 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   // Создаём сервис
   let service = Service::new(config_arc.clone(), logger);
   let service_arc = Arc::new(Mutex::new(service));
+  let service_unpack_arc = Arc::new(ServiceUnpacker::new(move |release_name, file_name, count, total| {
+    let _ = handle2.emit("game-archive-unack-progress", (release_name, file_name, count, total));
+  }));
   let service_files_arc = Arc::new(ServiceFiles::new(move |release_name, file_name, bytes, total_bytes, speed| {
-    let _ = handle2.emit("download-speed-status", (release_name, file_name, &bytes, &total_bytes, &speed));
+    let _ = handle3.emit("download-speed-status", (release_name, file_name, &bytes, &total_bytes, &speed));
   }));
   let service_updater_arc = Arc::new(ServiceUpdater::new(move |release_name, bytes, speed| {
-    let _ = handle3.emit("download-launcher-status", (release_name, &bytes, &speed));
+    let _ = handle4.emit("download-launcher-status", (release_name, &bytes, &speed));
   }));
   let service_clone = service_arc.clone();
 
@@ -93,7 +101,6 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   log::info!("Init Service Completed");
 
-  let app_handle = app.handle().clone();
   let wake_callback = move || {
     restart_app(&app_handle);
   };
@@ -108,12 +115,12 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(user_data_placeholder.clone());
   app.manage(service_arc);
   app.manage(service_files_arc);
+  app.manage(service_unpack_arc);
   app.manage(service_updater_arc);
   app.manage(Arc::new(StdMutex::new(HashMap::new())) as CancelMap);
 
   log::info!("init App State Completed");
 
-  let app_handle_bg = app.handle().clone();
   let user_data_bg = user_data_placeholder.clone();
 
   tauri::async_runtime::spawn(async move {

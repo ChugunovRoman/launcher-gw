@@ -175,3 +175,54 @@ pub async fn __set_release_visibility(s: &Gitlab, release_id: &str, visibility: 
 
   Ok(())
 }
+
+pub async fn __create_tag(s: &Gitlab, repo_id: &str, tag_name: &str, branch: &str) -> Result<()> {
+  let url = format!("{}/projects/{}/repository/tags?tag_name={}&ref={}", s.host, repo_id, tag_name, branch);
+  let resp = s.post(&url).send().await.context("Failed to send request to Gitlab (__create_tag)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__create_tag, Gitlab API error {}: {} url: {}", status, body, url);
+  }
+
+  Ok(())
+}
+
+pub async fn __create_release(s: &Gitlab, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse> {
+  let url = format!("{}/projects/{}/releases", s.host, repo_id);
+  let body = CreateReleaseRequestGitlab {
+    name: format!("Release {}", &tag_name),
+    tag_name: tag_name.to_string(),
+    description: format!("Release {}", &tag_name),
+    assets: CreateReleaseAssetsGitlab {
+      links: assets
+        .iter()
+        .map(|asset| CreateReleaseAssetGitlab {
+          name: asset.file_name.clone(),
+          url: asset.file_download_url.clone(),
+        })
+        .collect(),
+    },
+  };
+
+  let resp = s
+    .post(&url)
+    .json(&body)
+    .send()
+    .await
+    .context("Failed to send request to Gitlab (__create_release)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__create_release, Gitlab API error {}: {} url: {}", status, body, url);
+  }
+
+  let _: CreateReleaseResponseGitlab = resp.json().await?;
+
+  Ok(CreateReleaseResponse {
+    id: 0,
+    upload_url: format!("{}/projects/<PROJECT_ID>/packages/generic/<NAME_SPACE>/<VERSION>/<FILE_NAME>", s.host),
+  })
+}

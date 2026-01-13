@@ -3,7 +3,6 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
-  import { open } from "@tauri-apps/plugin-shell";
   import {
     connectStatus,
     localVersions,
@@ -16,10 +15,10 @@
     updateLocalVersion,
   } from "../store/main";
   import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
-  import { ConnectStatus, DownloadStatus } from "../consts";
+  import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC } from "../Icons";
   import { choosePath } from "../utils/path";
-  import { getInGb, getInMb, parseBytes } from "../utils/dwn";
+  import { getInGb, parseBytes } from "../utils/dwn";
 
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
@@ -51,6 +50,7 @@
           downloadProgress: old ? (old.downloadedFileBytes / file.size) * 100 : 0,
           downloadedFileBytes: old?.downloadedFileBytes || 0,
           totalFileBytes: file.size,
+          unpackProgress: 0,
           downloadSpeed: 0,
           speedValue: 0,
           sfxValue: "",
@@ -158,7 +158,7 @@
     }
 
     if (version.download_path === version.installed_path) {
-      input1Needed = manifest.compressed_size + manifest.total_size;
+      input1Needed = manifest.compressed_size + manifest.total_size * COFF_FROM_COMPRESSED_SIZE;
       input2Needed = input1Needed;
       const isSpaceEnough = await invoke<boolean>("check_available_disk_space", { path: version.download_path, needed: input1Needed });
       if (!isSpaceEnough) {
@@ -176,7 +176,7 @@
       }
       if (!isSpaceEnough2) {
         input2Checks = "space";
-        input2Needed = manifest.compressed_size;
+        input2Needed = manifest.compressed_size * COFF_FROM_COMPRESSED_SIZE;
       }
     }
 
@@ -686,10 +686,21 @@
                       <div class="file-row">
                         <span>{name}</span>
 
-                        <Progress height={12} maxWidth="1fr - 300px" progress={progress.downloadProgress} showPercents={false} />
+                        <div class="one-column">
+                          <Progress height={12} maxWidth="1fr - 300px" progress={progress.downloadProgress} showPercents={false} />
+                          {#if progress.downloadProgress >= 100}
+                            <Progress
+                              height={4}
+                              maxWidth="1fr - 300px"
+                              style="margin-top: 0;"
+                              progress={progress.unpackProgress}
+                              showPercents={false} />
+                          {/if}
+                        </div>
 
                         <span style="justify-self: end;"
-                          >{getInMb(progress.downloadedFileBytes)}/{getInMb(progress.totalFileBytes)}
+                          >{parseBytes(progress.downloadedFileBytes)[0]}
+                          {$_(`app.common.${parseBytes(progress.downloadedFileBytes)[1]}`)} / {parseBytes(progress.totalFileBytes)[0]}
                           {$_(`app.common.${parseBytes(progress.totalFileBytes)[1]}`)}</span>
 
                         <span style="justify-self: end;">{progress.speedValue} {progress.sfxValue}</span>
@@ -780,7 +791,12 @@
   }
   .file-row {
     display: grid;
-    grid-template-columns: 160px 1fr 120px 100px;
+    grid-template-columns: 160px 1fr 160px 100px;
+  }
+
+  .one-column {
+    display: flex;
+    flex-direction: column;
   }
 
   .spinner {

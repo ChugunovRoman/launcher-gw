@@ -20,4 +20,25 @@ export async function initUnpackListener() {
       }));
     }
   });
+  unlisten = await listen('game-archive-unack-progress', (event: Event<[string, string, number, number]>) => {
+    const [versionName, fileName, size, total] = event.payload;
+
+    const percent = size / total * 100;
+    console.log('game-archive-unack-progress, payload: ', percent, event.payload);
+
+    if (versionName !== "") {
+      updateVersion(versionName, (version) => {
+        const map = version.filesProgress;
+
+        map.set(fileName, {
+          ...map.get(fileName)!,
+          unpackProgress: percent,
+        });
+
+        return {
+          filesProgress: map,
+        };
+      });
+    }
+  });
 }

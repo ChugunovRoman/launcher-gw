@@ -176,3 +176,33 @@ pub struct CreategGroupResponseGitlab {
   pub lfs_enabled: bool,
   pub parent_id: u32,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddFileContentBodyGitlab {
+  pub commit_message: String,
+  pub content: String,
+  pub branch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseAssetGitlab {
+  pub name: String,
+  pub url: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseAssetsGitlab {
+  pub links: Vec<CreateReleaseAssetGitlab>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseRequestGitlab {
+  pub name: String,
+  pub tag_name: String,
+  pub description: String,
+  pub assets: CreateReleaseAssetsGitlab,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseResponseGitlab {
+  pub name: String,
+  pub tag_name: String,
+  pub description: String,
+}

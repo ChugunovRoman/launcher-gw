@@ -163,6 +163,10 @@ impl ApiProvider for Github {
     })
   }
 
+  fn get_asset_url(&self) -> String {
+    "".to_string()
+  }
+
   // Files API
   async fn get_file_content_size(&self, direct_url: &str) -> Result<u64> {
     __get_file_content_size(self, direct_url).await
@@ -193,6 +197,25 @@ impl ApiProvider for Github {
   async fn get_full_tree(&self, repo_id: String) -> Result<Vec<TreeItem>> {
     __get_full_tree(self, &repo_id).await
   }
+  async fn add_file_to_repo(&self, repo_id: &str, file_name: &str, content: &str, commmit_msg: &str, branch: &str) -> Result<()> {
+    __add_file_to_repo(self, repo_id, file_name, content, commmit_msg, branch).await
+  }
+  async fn upload_release_file(
+    &self,
+    url: &str,
+    content_length: u64,
+    stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin>,
+  ) -> Result<()> {
+    __upload_release_file(self, url, content_length, stream).await
+  }
+
+  async fn create_tag(&self, repo_id: &str, tag_name: &str, branch: &str) -> Result<()> {
+    Ok(())
+  }
+
+  async fn create_release(&self, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse> {
+    __create_release(self, repo_id, tag_name, assets).await
+  }
 
   // Issues API
   async fn find_issue(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
@@ -220,9 +243,10 @@ impl ApiProvider for Github {
   }
 
   // Release
-  async fn get_launcher_latest_release(&self, project_id: &str) -> Result<ReleaseGit> {
-    __get_launcher_latest_release(self, project_id).await
+  async fn get_launcher_latest_release(&self, owner: &str, project_id: &str) -> Result<ReleaseGit> {
+    __get_launcher_latest_release(self, owner, project_id).await
   }
+
   async fn get_releases(&self, cashed: bool) -> Result<Vec<Release>> {
     __get_releases(self, cashed).await
   }

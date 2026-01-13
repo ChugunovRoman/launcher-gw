@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use std::collections::HashMap;
@@ -164,4 +165,52 @@ pub async fn __get_file_content_size(s: &Github, direct_url: &str) -> Result<u64
   };
 
   Ok(size)
+}
+
+pub async fn __add_file_to_repo(s: &Github, repo_id: &str, file_name: &str, content: &str, commmit_msg: &str, branch: &str) -> Result<()> {
+  let url = format!("{}/repos/{}/{}/contents/{}", s.host, GITHUB_ORG, repo_id, file_name);
+  let content_base64 = general_purpose::STANDARD.encode(content);
+  let data = AddFileContentBodyGithub {
+    content: content_base64.to_string(),
+    message: commmit_msg.to_string(),
+    branch: branch.to_string(),
+  };
+  let resp = s
+    .put(&url)
+    .json(&data)
+    .send()
+    .await
+    .context("Failed to send request to Github (__add_file_to_repo)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__add_file_to_repo, Github API error {}: {} data: {:?} url: {}", status, body, data, url);
+  }
+
+  Ok(())
+}
+
+pub async fn __upload_release_file(
+  s: &Github,
+  url: &str,
+  content_length: u64,
+  stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin>,
+) -> Result<()> {
+  let response = s
+    .put(url)
+    .header("Content-Type", "application/zip")
+    .header("Content-Length", content_length.to_string())
+    .body(reqwest::Body::wrap_stream(stream))
+    .send()
+    .await?;
+
+  if response.status().is_success() {
+    Ok(())
+  } else {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_else(|_| "No body".to_string());
+    log::error!("{:?}", body);
+    Err(anyhow::anyhow!("Upload failed, url: {}: {}", url, status))
+  }
 }

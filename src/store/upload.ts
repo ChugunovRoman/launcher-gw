@@ -1,5 +1,8 @@
 import { get, writable } from 'svelte/store';
-import { createArrayStore, createNumStore } from './helpers';
+import { createArrayStore, createMapStore, createNumStore } from './helpers';
+
+export const manifest = writable<ReleaseManifest | undefined>();
+export const uploadFilesMap = createMapStore<String, UploadFileData>();
 
 export const selectedVersion = writable<string | undefined>();
 export const hasAnyLocalVersion = writable<boolean>(false);

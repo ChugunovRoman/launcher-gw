@@ -177,3 +177,36 @@ pub async fn __set_release_visibility(s: &Github, release_name: &str, visibility
 
   Ok(())
 }
+
+pub async fn __create_release(s: &Github, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse> {
+  let url = format!("{}/repos/{}/{}/releases", s.host, GITHUB_ORG, repo_id);
+  let body = CreateReleaseRequestGithub {
+    name: format!("Release {}", &tag_name),
+    tag_name: tag_name.to_string(),
+    target_commitish: "master".to_string(),
+  };
+
+  let resp = s
+    .post(&url)
+    .json(&body)
+    .send()
+    .await
+    .context("Failed to send request to Github (__create_release)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__create_release, Github API error {}: {} url: {}", status, body, url);
+  }
+
+  let response: CreateReleaseResponseGithub = resp.json().await?;
+  let mut upload_url = response.upload_url.clone();
+
+  if let Some((base, _)) = upload_url.split_once('{') {
+    upload_url = base.to_string();
+  }
+
+  upload_url = format!("{}?name=<FILE_NAME>&label=<FILE_NAME>", upload_url);
+
+  Ok(CreateReleaseResponse { id: response.id, upload_url })
+}

@@ -8,8 +8,8 @@ use crate::{
 
 use anyhow::{Context, Result, bail};
 
-pub async fn __get_launcher_latest_release(s: &Github, project_id: &str) -> Result<ReleaseGit> {
-  let url = format!("{}/repos/{}/{}/releases/latest", &s.host, MAIN_DEVELOPER_NAME, GITHUB_LAUNCHER_REPO_NAME);
+pub async fn __get_launcher_latest_release(s: &Github, owner: &str, project_id: &str) -> Result<ReleaseGit> {
+  let url = format!("{}/repos/{}/{}/releases/latest", &s.host, owner, project_id);
   let resp = s
     .get(&url)
     .send()

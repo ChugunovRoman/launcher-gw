@@ -1,3 +1,5 @@
+export const COFF_FROM_COMPRESSED_SIZE = 0.3;
+
 export enum Lang {
   Ru = 'ru',
   En = 'en',

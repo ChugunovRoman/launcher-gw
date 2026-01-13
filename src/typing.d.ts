@@ -32,6 +32,7 @@ declare interface DownloadProgress {
 }
 declare interface VersionFileDownload {
   downloadProgress: number;
+  unpackProgress: number;
   downloadedFileBytes: number;
   totalFileBytes: number;
   downloadSpeed: number;
@@ -70,6 +71,7 @@ declare interface VersionProgress {
   download_path: string;
   files: Dict<FileProgress>;
   is_downloaded: boolean;
+  is_unpacked: boolean;
   downloaded_files_cnt: number;
   total_file_count: number;
   manifest?: ReleaseManifest;
@@ -156,9 +158,34 @@ declare interface ProviderStatus {
 }
 
 declare interface ProgressPayload {
-  version_name: string,
-  file_name: string,
-  bytes_moved: number,
-  total_bytes: number,
-  percentage: number,
+  version_name: string;
+  file_name: string;
+  bytes_moved: number;
+  total_bytes: number;
+  percentage: number;
+}
+
+declare interface CompressProgressPayload {
+  status: number;
+  current_file: string;
+  total_size: number;
+  processed_size: number;
+  percentage: number;
+}
+
+declare interface UploadProgressPayload {
+  file_name: string;
+  file_uploaded_size: number;
+  file_total_size: number;
+  total_uploaded_size: number;
+  total_size: number;
+  speed: number;
+}
+
+declare interface UploadFileData {
+  file_uploaded_size: number;
+  file_total_size: number;
+  progress: number;
+  speedValue: number;
+  sfxValue: string;
 }

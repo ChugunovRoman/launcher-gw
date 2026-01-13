@@ -40,11 +40,22 @@ pub trait ApiProvider: Send + Sync {
   async fn tree(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>>;
   async fn get_full_tree(&self, repo_id: String) -> Result<Vec<TreeItem>>;
   async fn get_file_content_size(&self, direct_url: &str) -> Result<u64>;
+  async fn add_file_to_repo(&self, repo_id: &str, file_name: &str, content: &str, commmit_msg: &str, branch: &str) -> Result<()>;
+  async fn upload_release_file(
+    &self,
+    url: &str,
+    content_length: u64,
+    stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin>,
+  ) -> Result<()>;
 
   async fn find_issue(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
   async fn find_user(&self, repo_id: &str, uuid: &str) -> Result<Option<Issue>>;
 
-  async fn get_launcher_latest_release(&self, project_id: &str) -> Result<ReleaseGit>;
+  async fn create_tag(&self, repo_id: &str, tag_name: &str, branch: &str) -> Result<()>;
+  async fn create_release(&self, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse>;
+  fn get_asset_url(&self) -> String;
+
+  async fn get_launcher_latest_release(&self, owner: &str, project_id: &str) -> Result<ReleaseGit>;
   async fn get_releases(&self, cashed: bool) -> Result<Vec<Release>>;
   async fn set_release_visibility(&self, release_id: &str, visibility: bool) -> Result<()>;
   async fn get_release_repos_by_name(&self, release_id: &str) -> Result<Vec<Project>>;

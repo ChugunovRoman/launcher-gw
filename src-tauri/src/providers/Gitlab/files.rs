@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::{
   consts::REPO_LAUNCGER_ID,
   providers::{
-    Gitlab::{Gitlab::Gitlab, issues::*, models::TreeItemGitlab},
+    Gitlab::{Gitlab::Gitlab, issues::*, models::*},
     dto::{Manifest, TreeItem},
   },
 };
@@ -169,4 +169,47 @@ pub async fn __get_file_content_size(s: &Gitlab, direct_url: &str) -> Result<u64
   };
 
   Ok(size)
+}
+
+pub async fn __add_file_to_repo(s: &Gitlab, repo_id: &str, file_name: &str, content: &str, commmit_msg: &str, branch: &str) -> Result<()> {
+  let url = format!("{}/projects/{}/repository/files/{}", s.host, repo_id, file_name);
+  let data = AddFileContentBodyGitlab {
+    content: content.to_string(),
+    commit_message: commmit_msg.to_string(),
+    branch: branch.to_string(),
+  };
+  let resp = s
+    .put(&url)
+    .json(&data)
+    .send()
+    .await
+    .context("Failed to send request to Gitlab (__add_file_to_repo)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__add_file_to_repo, Gitlab API error {}: {} data: {:?} url: {}", status, body, data, url);
+  }
+
+  Ok(())
+}
+
+pub async fn __upload_release_file(
+  s: &Gitlab,
+  url: &str,
+  content_length: u64,
+  stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin>,
+) -> Result<()> {
+  let response = s
+    .put(url)
+    .body(reqwest::Body::wrap_stream(stream))
+    .header("Content-Length", content_length.to_string())
+    .send()
+    .await?;
+
+  if response.status().is_success() {
+    Ok(())
+  } else {
+    Err(anyhow::anyhow!("Upload failed, url: {}: {}", url, response.status()))
+  }
 }

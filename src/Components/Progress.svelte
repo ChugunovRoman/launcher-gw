@@ -5,10 +5,11 @@
     maxWidth = $bindable<string | undefined>(),
     height = $bindable<number | undefined>(),
     showPercents = true,
+    style = "",
   } = $props();
 </script>
 
-<div class="progress-container" style="width: {width}px; max-width: {maxWidth}; height: {height}px">
+<div class="progress-container" style="width: {width}px; max-width: {maxWidth}; height: {height}px; {style}">
   <div class="progress-bar" style="width: {Math.min(100, Math.max(0, Number(progress.toFixed(2))))}%;"></div>
   {#if showPercents}
     <span class="progress-text">{Number(progress.toFixed(2))}%</span>

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -37,6 +39,8 @@ pub struct DownlaodFileStat {
   #[serde(default)]
   pub name: String,
   #[serde(default)]
+  pub unpacked: bool,
+  #[serde(default)]
   pub size: Option<u64>,
 }
 
@@ -57,4 +61,30 @@ pub struct ReleaseManifest {
   pub compressed_size: u64,
   #[serde(default)]
   pub files: Vec<ReleaseManifestFile>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct CompressProgressPayload {
+  pub status: u8,
+  pub current_file: String,
+  pub total_size: u64,
+  pub processed_size: u64,
+  pub percentage: f64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct UploadProgressPayload {
+  pub file_name: String,
+  pub file_uploaded_size: u64,
+  pub file_total_size: u64,
+  pub total_uploaded_size: u64,
+  pub total_size: u64,
+  pub speed: f64,
+}
+
+pub struct UnzipTask {
+  pub file_name: String,
+  pub archive_path: PathBuf,
+  pub destination_path: PathBuf,
+  pub is_latest: bool,
 }

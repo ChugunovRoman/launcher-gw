@@ -1,18 +1,19 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { join } from "@tauri-apps/api/path";
   import { onDestroy } from "svelte";
 
-  import { progress, isInProcess, finish, completed } from "../store/pack";
+  import { progress, isInProcess, finish, completed, currentFile, processedSize, totalSize, status } from "../store/pack";
   import { providersWasInited } from "../store/main";
   import { choosePath } from "../utils/path";
 
   import Progress from "../Components/Progress.svelte";
   import Spin from "../Components/Spin.svelte";
+  import { getInMb, parseBytes } from "../utils/dwn";
 
   let packPath = $state("");
   let targetPath = $state("");
+  let chunkSize = $state(2000);
 
   async function chooseSrcPath() {
     await choosePath((selected) => (packPath = selected));
@@ -32,38 +33,56 @@
 
     await invoke<AppConfig>("set_pack_paths", { source: packPath, target: targetPath });
 
-    const result = await invoke<string>("create_archive", {
-      sourceDir: await join(packPath, "*"),
+    const result = await invoke<string>("create_split_archives", {
+      sourceDir: packPath,
       targetPath: targetPath,
+      chunkSize,
       excludePatterns: [
         "*.git",
-        "*.gitlab-ci.yml",
+        "*.git/**",
+        ".gitlab-ci.yml",
+        "*/.gitlab-ci.yml",
         ".editorconfig",
+        "*/.editorconfig",
         ".gitignore",
+        "*/.gitignore",
         ".gitmodules",
+        "*/.gitmodules",
         ".gitconfig",
+        "*/.gitconfig",
         ".gitattributes",
+        "*/.gitattributes",
         "*.pl",
         "*.sh",
-        "*.rar",
+        "utils/**",
         "utils",
+        "*.rar",
         ".vscode",
+        ".vscode/**",
+        "*/.vscode/**",
         "xrLost.exe",
         "xrPlay.ini",
         "packer.exe",
-        await join("*", ".gitlab-ci.yml"),
-        await join("utils", "*"),
-        await join("gamedata", "helpers", "*"),
-        await join("appdata", "logs", "*"),
-        await join("appdata", "savedgames", "*"),
-        await join("appdata", "screenshots", "*"),
-        await join("appdata", "shaders_cache", "*"),
-        await join("appdata", "shaders_cache_oxr", "*"),
-        await join("appdata", "launcherdata", "*"),
-        await join("appdata", "cdb_cache", "*"),
-        await join("appdata", "reports", "*"),
-        await join("appdata", "*.ltx"),
-        await join("gamedata", "configs", "misc", "armament", "custom", "*"),
+        "gamedata/helpers",
+        "gamedata/helpers/**",
+        "appdata/logs",
+        "appdata/logs/**",
+        "appdata/savedgames",
+        "appdata/savedgames/**",
+        "appdata/screenshots",
+        "appdata/screenshots/**",
+        "appdata/shaders_cache",
+        "appdata/shaders_cache/**",
+        "appdata/shaders_cache_oxr",
+        "appdata/shaders_cache_oxr/**",
+        "appdata/launcherdata",
+        "appdata/launcherdata/**",
+        "appdata/cdb_cache",
+        "appdata/cdb_cache/**",
+        "appdata/reports",
+        "appdata/reports/**",
+        "gamedata/configs/misc/armament/custom",
+        "gamedata/configs/misc/armament/custom/**",
         "*JSGME*",
         "*.lnk",
         "*.txt",
@@ -75,6 +94,15 @@
     $progress = 100;
     $completed = true;
     console.log("pack result: ", result);
+  }
+
+  function getStatusStr(st: number) {
+    switch (st) {
+      case 0:
+        return "addFiles";
+      case 1:
+        return "compressing";
+    }
   }
 
   $effect(() => {
@@ -123,6 +151,21 @@
     </div>
   </div>
 
+  <div class="input-group">
+    <label class="input-label">{$_("app.pack.chunkSize")}</label>
+    <div class="input-row">
+      <input type="number" bind:value={chunkSize} placeholder={$_("app.pack.chunkSize")} class="uuid-input" />
+    </div>
+  </div>
+
+  {#if $isInProcess}
+    <div class="meta">
+      <span>{$_(`app.pack.${getStatusStr($status)}`)}</span>
+      <span>{$_("app.pack.size")}{getInMb($processedSize)}/{getInMb($totalSize)}{$_(`app.common.${parseBytes($totalSize / 1024)[1]}`)}</span>
+      <span>{$_("app.pack.file")} {$currentFile}</span>
+    </div>
+  {/if}
+
   <Progress progress={$progress} />
 
   <span
@@ -151,6 +194,12 @@
     padding: 1.5rem;
     margin: 0 auto;
     font-family: system-ui, sans-serif;
+  }
+
+  .meta {
+    -webkit-app-region: no-drag;
+    margin-bottom: 0.5rem;
+    text-align: left;
   }
 
   .input-group {

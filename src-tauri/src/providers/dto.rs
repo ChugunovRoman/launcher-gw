@@ -86,3 +86,14 @@ pub struct Issue {
   pub title: String,
   pub description: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseAsset {
+  pub file_name: String,
+  pub file_download_url: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateReleaseResponse {
+  pub id: u32,
+  pub upload_url: String,
+}

@@ -74,19 +74,12 @@ pub struct VersionProgressUpload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileProgress {
-  #[serde(default)]
   pub id: String,
-  #[serde(deserialize_with = "de_string_or_number")]
-  pub project_id: String,
-  #[serde(default)]
+  pub download_link: String,
   pub name: String,
-  #[serde(default)]
-  pub path: String,
-  #[serde(default)]
   pub is_downloaded: bool,
-  #[serde(default)]
+  pub is_unpacked: bool,
   pub size: u64,
-  #[serde(default)]
   pub total_size: u64,
 }
 

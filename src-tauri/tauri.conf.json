@@ -77,12 +77,6 @@
       "webviewInstallMode": {
         "type": "embedBootstrapper"
       }
-    },
-    "resources": {
-      "../bin/win/7za.dll": "7za.dll",
-      "../bin/win/7za.exe": "7za.exe",
-      "../bin/win/7zxa.dll": "7zxa.dll",
-      "../bin/linux/7zzs": "7zzs"
     }
   }
 }
