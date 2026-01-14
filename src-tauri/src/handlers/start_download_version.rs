@@ -214,9 +214,7 @@ pub async fn start_download_version(
   let app_config_arc = app_config.inner().clone();
   let unzip_manager_handle = tokio::spawn(async move {
     while let Some(data) = rx_unzip.recv().await {
-      if data.is_latest {
-        break;
-      }
+      log::debug!("Worker got msg to unpack file, data: {:?}", &data);
 
       let app_inner = app_unzip.clone();
       let v_name = version_name_unzip.clone();
@@ -241,6 +239,10 @@ pub async fn start_download_version(
       })
       .await
       .ok();
+
+      if data.is_latest {
+        break;
+      }
     }
     log::info!("Unzip queue finished");
   });

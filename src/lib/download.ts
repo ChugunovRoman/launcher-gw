@@ -1,11 +1,10 @@
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { updateVersion, versions } from '../store/upload';
+import { selectedVersion, updateVersion, versions } from '../store/upload';
 import { formatSpeedBytesPerSec } from '../utils/dwn';
 import { invoke } from '@tauri-apps/api/core';
-import { join } from '@tauri-apps/api/path';
 import { get } from 'svelte/store';
-import { expandedIndex, fetchLocalVersions, launcherDwnBytes, launcherDwnNeedUpdate, launcherDwnProgress, launcherDwnTotalBytes, launcherDwnVersion } from '../store/main';
+import { expandedIndex, fetchLocalVersions, launcherDwnBytes, launcherDwnNeedUpdate, launcherDwnProgress, launcherDwnTotalBytes, launcherDwnVersion, localVersions } from '../store/main';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -118,7 +117,15 @@ export async function initDownloadListeners() {
 
     await invoke<void>("clear_progress_version", { versionName });
 
+    if (localVersions.size() === 0) {
+      selectedVersion.set(undefined);
+    }
+
     await fetchLocalVersions();
+
+    if (!get(selectedVersion)) {
+      selectedVersion.set([...get(localVersions).keys()][0]);
+    }
 
     expandedIndex.set(null);
   }));

@@ -38,9 +38,10 @@ pub async fn continue_download_version(
 
   // 2. Сбор статистики и подготовка данных
   let mut file_sizes: Vec<DownlaodFileStat> = vec![];
-  let (version, mut files_to_download) = {
+  let (version, mut files_to_download, files_to_unpack) = {
     let mut cfg_guard = app_config.lock().await;
     let mut to_download = Vec::new();
+    let mut to_unpack = Vec::new();
     let version_data = {
       let version_data = cfg_guard
         .progress_download
@@ -77,6 +78,10 @@ pub async fn continue_download_version(
           to_download.push(file_progress.clone());
         }
 
+        if file_progress.is_downloaded && !file_progress.is_unpacked {
+          to_unpack.push(file_progress.clone());
+        }
+
         file_sizes.push(DownlaodFileStat {
           name: file_progress.name.clone(),
           unpacked: file_progress.is_unpacked,
@@ -90,7 +95,7 @@ pub async fn continue_download_version(
 
     cfg_guard.save().map_err(|e| e.to_string())?;
 
-    (version_data.clone(), to_download)
+    (version_data.clone(), to_download, to_unpack)
   };
 
   // Сортировка для UI (по номеру чанка в расширении)
@@ -131,9 +136,7 @@ pub async fn continue_download_version(
   let app_config_arc = app_config.inner().clone();
   let unzip_manager_handle = tokio::spawn(async move {
     while let Some(data) = rx_unzip.recv().await {
-      if data.is_latest {
-        break;
-      }
+      log::debug!("Worker got msg to unpack file, data: {:?}", &data);
 
       let app_inner = app_unzip.clone();
       let v_name = version_name_unzip.clone();
@@ -158,6 +161,10 @@ pub async fn continue_download_version(
       })
       .await
       .ok();
+
+      if data.is_latest {
+        break;
+      }
     }
     log::info!("Unzip queue finished");
   });
@@ -165,6 +172,19 @@ pub async fn continue_download_version(
   let rx_queue_arc = Arc::new(Mutex::new(rx_queue));
   let cancel_tx_arc = Arc::new(cancel_tx);
   let tx_unzip_arc = Arc::new(tx_unzip);
+
+  for file in files_to_unpack {
+    let download_dir_c = Path::new(&version.download_path).to_path_buf();
+    let file_path = download_dir_c.join(&file.name);
+    let _ = tx_unzip_arc
+      .send(UnzipTask {
+        file_name: file.name.clone(),
+        archive_path: file_path,
+        destination_path: PathBuf::from(&version.installed_path),
+        is_latest: downloaded_cnt.fetch_add(1, Ordering::SeqCst) >= total_file_count,
+      })
+      .await;
+  }
 
   let api_client = service.lock().await.api_client.clone();
   let mut join_handles = Vec::new();

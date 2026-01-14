@@ -82,6 +82,7 @@ pub struct UploadProgressPayload {
   pub speed: f64,
 }
 
+#[derive(Debug)]
 pub struct UnzipTask {
   pub file_name: String,
   pub archive_path: PathBuf,

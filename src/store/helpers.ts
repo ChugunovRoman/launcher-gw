@@ -27,6 +27,7 @@ export function createMapStore<K, V>(): Writable<Map<K, V>> & {
   clear: () => void;
   setItem: (key: K, item: V) => void;
   delItem: (key: K) => void;
+  size: () => number;
 } {
   const { subscribe, set, update } = writable<Map<K, V>>(new Map());
 
@@ -37,6 +38,15 @@ export function createMapStore<K, V>(): Writable<Map<K, V>> & {
     clear: () => set(new Map()),
     setItem: (key: K, item: V) => update(map => { map.set(key, item); return map; }),
     delItem: (key: K) => update(map => { map.delete(key); return map; }),
+    size: () => {
+      let size = 0;
+      update(map => {
+        size = map.size;
+        return map;
+      });
+
+      return size;
+    },
   };
 }
 
