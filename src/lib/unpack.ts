@@ -24,6 +24,11 @@ export async function initUnpackListener() {
     const [versionName, fileName, size, total] = event.payload;
 
     const percent = size / total * 100;
+    let status = 2;
+    if (percent === 100) {
+      status = 3;
+    }
+
     console.log('game-archive-unack-progress, payload: ', percent, event.payload);
 
     if (versionName !== "") {
@@ -33,6 +38,7 @@ export async function initUnpackListener() {
         map.set(fileName, {
           ...map.get(fileName)!,
           unpackProgress: percent,
+          status,
         });
 
         return {

@@ -45,6 +45,7 @@ export async function initDownloadListeners() {
         downloadSpeed: speed,
         speedValue,
         sfxValue,
+        status: 1,
       });
 
       for (const [name, progress] of map) {
@@ -95,6 +96,7 @@ export async function initDownloadListeners() {
           downloadSpeed: 0,
           speedValue: 0,
           sfxValue: "",
+          status: item.unpacked ? 3 : 0,
         });
       }
 
@@ -125,6 +127,7 @@ export async function initDownloadListeners() {
 
     if (!get(selectedVersion)) {
       selectedVersion.set([...get(localVersions).keys()][0]);
+      await invoke<void>("set_current_game_version", { versionName: get(selectedVersion) });
     }
 
     expandedIndex.set(null);

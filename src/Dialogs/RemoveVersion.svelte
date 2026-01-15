@@ -1,10 +1,20 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
-  import { expandedIndex, localVersions, removeLocalVersion, removeVersion, removeVersionInProcess, showDlgRemoveVersion } from "../store/main";
+  import {
+    appConfig,
+    expandedIndex,
+    localVersions,
+    removeLocalVersion,
+    removeVersion,
+    removeVersionInProcess,
+    showDlgRemoveVersion,
+  } from "../store/main";
   import Modal from "./index.svelte";
   import Button from "../Components/Button.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { mainVersion, refreshVersions, selectedVersion, versions } from "../store/upload";
+  import { mainVersion, selectedVersion, versions } from "../store/upload";
+  import { sep } from "@tauri-apps/api/path";
+  import { prepareVersionItem } from "../lib/main";
 
   function handleClose() {
     console.log("Dlg was closed");
@@ -23,6 +33,7 @@
     $removeVersionInProcess = true;
 
     const version = $removeVersion!;
+    const separ = await sep();
     await invoke<void>("delete_installed_version", { versionName: version.path });
 
     removeLocalVersion(version.name);
@@ -47,7 +58,7 @@
           const found = $versions.find((v) => v.name === item.name);
           const hasLocal = hasLocalVersion(item);
           if (!found && !hasLocal) {
-            $versions.push(item);
+            $versions.push(prepareVersionItem($appConfig, item, separ));
           }
         }
       });

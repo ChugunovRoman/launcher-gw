@@ -38,6 +38,8 @@ declare interface VersionFileDownload {
   downloadSpeed: number;
   speedValue: number;
   sfxValue: string;
+  // 0 - в очереди на загрузку; 1 - загружается; 2 - распаковывается; 3 - скачаен и распакован
+  status: number;
 }
 declare interface Version {
   id: string;

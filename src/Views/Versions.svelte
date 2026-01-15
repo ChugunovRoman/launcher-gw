@@ -16,7 +16,8 @@
   } from "../store/main";
   import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
-  import { Play, Pause, Stop, Installed, CinC } from "../Icons";
+  import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
+  import { FileDown } from "lucide-svelte";
   import { choosePath } from "../utils/path";
   import { getInGb, parseBytes } from "../utils/dwn";
 
@@ -54,6 +55,7 @@
           downloadSpeed: 0,
           speedValue: 0,
           sfxValue: "",
+          status: old?.status || 0,
         });
       }
 
@@ -684,6 +686,18 @@
                   {#if version.inProgress || version.isStoped}
                     {#each version.filesProgress as [name, progress], i}
                       <div class="file-row">
+                        <span style="justify-self: end; align-content: center;">
+                          {#if progress.status === 0}
+                            <FileDown size={12} />
+                          {:else if progress.status === 1}
+                            <Spin size={12} />
+                          {:else if progress.status === 2}
+                            <Spin size={12} />
+                          {:else if progress.status === 3}
+                            <Installed2 size={16} isButton={false} />
+                          {/if}
+                        </span>
+
                         <span>{name}</span>
 
                         <div class="one-column">
@@ -791,7 +805,7 @@
   }
   .file-row {
     display: grid;
-    grid-template-columns: 160px 1fr 160px 100px;
+    grid-template-columns: 20px 100px 1fr 160px 100px;
   }
 
   .one-column {

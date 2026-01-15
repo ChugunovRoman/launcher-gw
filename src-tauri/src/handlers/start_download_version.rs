@@ -179,7 +179,7 @@ pub async fn start_download_version(
     "download-version",
     DownloadProgress {
       version_name: version.name.clone(),
-      status: DownloadStatus::Init,
+      status: DownloadStatus::DownloadFiles,
       file: "".to_owned(),
       progress: 0.0,
       downloaded_files_cnt: version.downloaded_files_cnt,
