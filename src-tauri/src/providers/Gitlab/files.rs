@@ -132,14 +132,16 @@ pub async fn __load_manifest(s: &Gitlab) -> Result<()> {
     return Ok(());
   }
 
-  let search_params = HashMap::from([("in".to_owned(), "title".to_owned()), ("search".to_owned(), "mainfest.json".to_owned())]);
-  let issue = __find_issue(s, &REPO_LAUNCGER_ID.to_string(), search_params).await?;
+  // let search_params = HashMap::from([("in".to_owned(), "title".to_owned()), ("search".to_owned(), "mainfest.json".to_owned())]);
+  // let issue = __find_issue(s, &REPO_LAUNCGER_ID.to_string(), search_params).await?;
 
-  if issue.len() == 0 {
-    bail!("Issue mainfest.json NOT FOUND!")
-  }
+  // if issue.len() == 0 {
+  //   bail!("Issue mainfest.json NOT FOUND!")
+  // }
 
-  let manifest: Manifest = serde_json::from_str(&issue[0].description)?;
+  let str = "{\"root_id\": 122475050,\"max_size\": 10200547328}".to_owned();
+  let manifest: Manifest = serde_json::from_str(&str)?;
+  // let manifest: Manifest = serde_json::from_str(&issue[0].description)?;
 
   *s.manifest.lock().unwrap() = manifest;
 
@@ -179,7 +181,7 @@ pub async fn __add_file_to_repo(s: &Gitlab, repo_id: &str, file_name: &str, cont
     branch: branch.to_string(),
   };
   let resp = s
-    .put(&url)
+    .post(&url)
     .json(&data)
     .send()
     .await

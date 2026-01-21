@@ -6,8 +6,10 @@ import { initMainListeners } from "./lib/main";
 import { initUnpackListener } from "./lib/unpack";
 import { initUploadListeners } from "./lib/upload";
 import { initDownloadListeners } from "./lib/download";
+import { initProfilesListeners } from './lib/profiles';
 
 export async function init() {
+  initProfilesListeners();
   initMainListeners();
   initPackListener();
   initUnpackListener();

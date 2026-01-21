@@ -27,6 +27,7 @@ impl ServiceClient for Service {
     };
 
     // Ищем точное совпадение по заголовку
+    // log::debug!("exact_match, uuid: {} issues: {:?}", &uuid, &issues);
     let exact_match = issues.into_iter().find(|i| i.title == uuid);
 
     let issue = match exact_match {

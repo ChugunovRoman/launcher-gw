@@ -8,6 +8,7 @@ import Youtube from "./Youtube.svelte";
 import Home from "./Home.svelte";
 import Settings from "./Settings.svelte";
 import RunParams from "./RunParams.svelte";
+import Keybindings from "./Keybindings.svelte";
 import Pack from "./Pack.svelte";
 import Unpack from "./Unpack.svelte";
 import Releases from "./Releases.svelte";
@@ -32,6 +33,7 @@ export {
   Home,
   Settings,
   RunParams,
+  Keybindings,
   Pack,
   Unpack,
   Releases,

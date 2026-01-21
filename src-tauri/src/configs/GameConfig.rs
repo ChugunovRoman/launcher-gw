@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
-use serde_json::Map;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+use crate::consts::NO_KEY;
 
 #[derive(Debug, Clone)]
 pub struct GameConfig {
@@ -135,5 +136,28 @@ impl GameConfig {
 
   pub fn set_file_path<P: AsRef<Path>>(&mut self, path: P) {
     self.file_path = path.as_ref().to_path_buf().to_string_lossy().to_string();
+  }
+
+  pub fn merge(&mut self, other: &GameConfig) {
+    for (other_key, other_inner_map) in &other.data {
+      for (inner_key, inner_value) in other_inner_map {
+        if inner_value == NO_KEY {
+          // Логика удаления
+          if let Some(current_inner_map) = self.data.get_mut(other_key) {
+            current_inner_map.remove(inner_key);
+          }
+        } else {
+          // Логика вставки/обновления (как была раньше)
+          self
+            .data
+            .entry(other_key.clone())
+            .or_insert_with(HashMap::new)
+            .insert(inner_key.clone(), inner_value.clone());
+        }
+      }
+    }
+
+    // Удаляем пустые секции, которые могли остаться после удаления ключей
+    self.data.retain(|_, inner_map| !inner_map.is_empty());
   }
 }

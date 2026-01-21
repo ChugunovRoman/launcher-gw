@@ -1,4 +1,4 @@
-use crate::consts::{BASE_DIR, CONFIG_NAME, VERSIONS_DIR};
+use crate::consts::{BASE_DIR, CONFIG_NAME, CUSTOM_BIND_LTX, VERSIONS_DIR};
 use crate::handlers::dto::ReleaseManifest;
 use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
@@ -181,6 +181,8 @@ pub struct AppConfig {
   #[serde(default)]
   pub selected_version: Option<String>,
   #[serde(default)]
+  pub selected_profile: Option<String>,
+  #[serde(default)]
   pub installed_versions: HashMap<String, Version>,
   #[serde(default)]
   pub progress_download: HashMap<String, VersionProgress>,
@@ -239,6 +241,7 @@ impl Default for AppConfig {
       installed_versions: HashMap::new(),
       selected_provider_id: None,
       selected_version: None,
+      selected_profile: Some(CUSTOM_BIND_LTX.to_owned()),
       versions: vec![],
       progress_download: HashMap::new(),
       tokens: HashMap::new(),

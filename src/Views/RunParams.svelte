@@ -109,7 +109,7 @@
     <Bg>
       <div class="input-row">
         <input type="text" bind:value={launchArgs} placeholder={$_("app.labels.runparams_holder")} class="launch-args-input" />
-        <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.clear")} </button>
+        <button type="button" onclick={clearLaunchArgs} class="clear-btn"> {$_("app.btn.clear")} </button>
       </div>
     </Bg>
 

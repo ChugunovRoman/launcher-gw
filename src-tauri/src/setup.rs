@@ -14,6 +14,7 @@ use tauri::{App, Emitter};
 use crate::handlers::start_download_version::CancelMap;
 use crate::service::files::ServiceFiles;
 use crate::service::get_release::ServiceGetRelease;
+use crate::service::keybind_manager::KeybindManager;
 use crate::service::unpack::ServiceUnpacker;
 use crate::service::updater::ServiceUpdater;
 use crate::service::wake_detector::WakeDetector;
@@ -83,6 +84,9 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let _ = handle.emit("upload-log", msg);
   });
 
+  let keybind_manager_arc = Arc::new(KeybindManager::new(&handle2));
+  let keybind_manager_arc_clone = keybind_manager_arc.clone();
+
   // Создаём сервис
   let service = Service::new(config_arc.clone(), logger);
   let service_arc = Arc::new(Mutex::new(service));
@@ -114,6 +118,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(Arc::new(Mutex::new(tmp_ltx_config)));
   app.manage(user_data_placeholder.clone());
   app.manage(service_arc);
+  app.manage(keybind_manager_arc);
   app.manage(service_files_arc);
   app.manage(service_unpack_arc);
   app.manage(service_updater_arc);
@@ -142,6 +147,12 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let _ = app_handle_bg.emit("versions-loaded", releases);
+      }
+
+      {
+        keybind_manager_arc_clone.load_profiles().await?;
+        let profiles = keybind_manager_arc_clone.get_profiles_str().await;
+        let _ = app_handle_bg.emit("load-key-profiles", profiles);
       }
 
       // 2. Получение данных пользователя

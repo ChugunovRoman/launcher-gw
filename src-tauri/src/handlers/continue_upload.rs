@@ -4,7 +4,7 @@ use std::{
   sync::Arc,
 };
 use tauri::{Emitter, Manager};
-use tokio::{fs, sync::Mutex};
+use tokio::sync::Mutex;
 
 use crate::{
   configs::AppConfig::AppConfig,

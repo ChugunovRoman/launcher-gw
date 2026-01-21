@@ -25,6 +25,10 @@ pub const USER_LTX: &str = "user.ltx";
 pub const TMP_LTX: &str = "tmp.ltx";
 pub const FSGAME_LTX: &str = "fsgame.ltx";
 
+pub const NO_KEY: &str = "---";
+pub const DEFAULT_BIND_LTX: &str = "default.ltx";
+pub const CUSTOM_BIND_LTX: &str = "custom.ltx";
+
 pub const STATE_FILE_NAME: &str = ".git_sync_state";
 
 // Providers ids

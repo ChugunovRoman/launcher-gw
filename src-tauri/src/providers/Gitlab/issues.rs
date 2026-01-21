@@ -9,13 +9,19 @@ use crate::providers::{
 };
 
 pub async fn __find_issue(s: &Gitlab, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
-  let params = search_params.iter().map(|v| format!("{}={}", v.0, v.1)).collect::<Vec<_>>().join("&");
+  let params = search_params
+    .iter()
+    .map(|v| format!("{}={}", v.0, encode(&v.1)))
+    .collect::<Vec<_>>()
+    .join("&");
 
   let mut path = format!("{}/projects/{}/issues", s.host, repo_id);
 
   if search_params.len() > 0 {
-    path = format!("{}?{}", &path, encode(&params));
+    path = format!("{}?{}", &path, &params);
   }
+
+  // log::debug!("__find_issue, GitLab path: {}", &path);
 
   let response = s.get(&path).send().await?;
 
@@ -45,7 +51,9 @@ pub async fn __find_user(s: &Gitlab, repo_id: &str, uuid: &str) -> Result<Option
   search_params.insert("search".to_string(), encode(uuid).to_string());
   search_params.insert("in".to_string(), "title".to_string());
 
-  let issues = __find_issue(s, repo_id, search_params).await?;
+  let issues = __find_issue(s, repo_id, search_params.clone()).await?;
+
+  // log::debug!("Gitlab __find_user, search_params: {:?} issues: {:?}", &search_params, &issues);
 
   if issues.len() > 0 {
     return Ok(Some(issues[0].clone()));

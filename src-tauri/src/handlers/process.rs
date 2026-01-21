@@ -1,13 +1,15 @@
+use anyhow::Result;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::configs::AppConfig::{AppConfig, LangType, RenderType, Version};
 use crate::configs::GameConfig::GameConfig;
-use crate::configs::{RunParams, TmpLtx, UserLtx};
+use crate::configs::{TmpLtx, UserLtx};
 use crate::consts::*;
+use crate::service::keybind_manager::KeybindManager;
 use crate::utils::errors::log_full_error;
 use crate::utils::resources::game_exe;
 use crate::utils::split_args::split_args;
@@ -29,6 +31,7 @@ pub fn spawn_external_process(path: String, args: Vec<String>) -> Result<u32, St
 #[tauri::command]
 pub async fn run_game(
   app: tauri::AppHandle,
+  keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
   user_ltx: tauri::State<'_, Arc<Mutex<UserLtx>>>,
   tmp_ltx: tauri::State<'_, Arc<Mutex<TmpLtx>>>,
   version: Version,
@@ -44,12 +47,16 @@ pub async fn run_game(
   let mut user_config = user_ltx.lock().await;
   let user_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX);
   user_config.0.set_file_path(&user_ltx_path);
-  update_ltx_config(&mut user_config.0, &config_guard.run_params);
+  update_ltx_config(&mut user_config.0, &config_guard, &keybind_manager)
+    .await
+    .map_err(|e| e.to_string())?;
 
   let mut tmp_config = tmp_ltx.lock().await;
   let tmp_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(TMP_LTX);
   tmp_config.0.set_file_path(&tmp_ltx_path);
-  update_ltx_config(&mut tmp_config.0, &config_guard.run_params);
+  update_ltx_config(&mut tmp_config.0, &config_guard, &keybind_manager)
+    .await
+    .map_err(|e| e.to_string())?;
 
   let fsgame_path = Path::new(&target_path).join(FSGAME_LTX);
   let mut run_params = vec![
@@ -118,31 +125,52 @@ pub fn is_process_alive(pid: u32) -> bool {
   system.processes().contains_key(&pid_sys)
 }
 
-fn update_ltx_config(ltx: &mut GameConfig, run_params: &RunParams) {
+async fn update_ltx_config(
+  ltx: &mut GameConfig,
+  config: &MutexGuard<'_, AppConfig>,
+  keybind_manager: &tauri::State<'_, Arc<KeybindManager>>,
+) -> Result<()> {
   ltx.load().ok();
 
-  ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
+  ltx.set("vid_mode".to_string(), config.run_params.vid_mode.clone());
 
-  let renderer = get_renderer(run_params.render.clone());
+  let renderer = get_renderer(config.run_params.render.clone());
   ltx.set("renderer".to_string(), renderer.clone());
 
-  let lang = get_lang(run_params.lang.clone());
+  let lang = get_lang(config.run_params.lang.clone());
   ltx.set("g_language".to_string(), lang.clone());
   ltx.set("g_language_ltx".to_string(), lang.clone());
 
-  ltx.set("fov".to_string(), run_params.fov.clone().to_string());
-  ltx.set("hud_fov".to_string(), run_params.hud_fov.clone().to_string());
+  ltx.set("fov".to_string(), config.run_params.fov.clone().to_string());
+  ltx.set("hud_fov".to_string(), config.run_params.hud_fov.clone().to_string());
 
   ltx.set(
     "keypress_on_start".to_string(),
-    if run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
+    if config.run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
   );
 
-  ltx.set("rs_v_sync".to_string(), if run_params.check_vsync { "1" } else { "0" }.to_string());
+  ltx.set("rs_v_sync".to_string(), if config.run_params.check_vsync { "1" } else { "0" }.to_string());
 
-  ltx.set("rs_fullscreen".to_string(), if run_params.windowed_mode { "0" } else { "1" }.to_string());
+  ltx.set(
+    "rs_fullscreen".to_string(),
+    if config.run_params.windowed_mode { "0" } else { "1" }.to_string(),
+  );
+
+  let profile = if let Some(profile_name) = &config.selected_profile {
+    log::debug!("find profile by name: {}", &profile_name);
+    keybind_manager.get_profile(&profile_name).await
+  } else {
+    log::debug!("profile by name: {:?} not found !", &config.selected_profile);
+    None
+  };
+  if let Some(exist_profile) = profile {
+    log::debug!("exist_profile: {:?} Do merge", &config.selected_profile);
+    ltx.merge(&exist_profile);
+  }
 
   ltx.save().ok();
+
+  Ok(())
 }
 
 fn get_lang(lng: LangType) -> String {

@@ -12,6 +12,9 @@
 
   import RestartApp from "./Dialogs/RestartApp.svelte";
   import RemoveVersion from "./Dialogs/RemoveVersion.svelte";
+  import RemoveProfile from "./Dialogs/RemoveProfile.svelte";
+  import CannotApplyProfile from "./Dialogs/CannotApplyProfile.svelte";
+  import ApplyProfileOk from "./Dialogs/ApplyProfileOk.svelte";
 
   import MainView from "./Views/Main.svelte";
   import SettingsView from "./Views/Settings.svelte";
@@ -19,6 +22,7 @@
   import UnpackView from "./Views/Unpack.svelte";
   import ReleasesView from "./Views/Releases.svelte";
   import RunParamsView from "./Views/RunParams.svelte";
+  import KeybindingsView from "./Views/Keybindings.svelte";
   import VersionsView from "./Views/Versions.svelte";
   import TokensView from "./Views/Tokens.svelte";
   import { onMount } from "svelte";
@@ -29,12 +33,13 @@
 
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
-  const VIEW_ORDER: string[] = ["home", "runParams", "versions", "pack", "unpack", "releases", "tokens", "settings"];
+  const VIEW_ORDER: string[] = ["home", "runParams", "keybindings", "versions", "pack", "unpack", "releases", "tokens", "settings"];
 
   // Маппинг view -> компонент
   const views: Record<string, any> = {
     home: MainView,
     runParams: RunParamsView,
+    keybindings: KeybindingsView,
     versions: VersionsView,
     pack: PackView,
     unpack: UnpackView,
@@ -117,6 +122,9 @@
 
   <RestartApp />
   <RemoveVersion />
+  <RemoveProfile />
+  <CannotApplyProfile />
+  <ApplyProfileOk />
 </main>
 
 <style>

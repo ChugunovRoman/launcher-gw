@@ -1,8 +1,8 @@
 <script lang="ts">
-  let { children, value } = $props();
+  let { children, value, style = "" } = $props();
 </script>
 
-<div class="scroll" style="height: calc(100vh - {value}px)">
+<div class="scroll" style="height: calc(100vh - {value}px); {style}">
   {@render children?.()}
 </div>
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Home, Settings, RunParams, Pack, Unpack, Releases, Versions, Tokens } from "../Icons";
+  import { Home, Settings, RunParams, Keybindings, Pack, Unpack, Releases, Versions, Tokens } from "../Icons";
   import { allowPackMod } from "../store/main";
   import { currentView } from "../store/menu";
 
@@ -19,6 +19,13 @@
       size={40}
       onclick={() => {
         onSelect("runParams");
+      }} />
+  </div>
+  <div class="baritem" class:active={$currentView === "keybindings"}>
+    <Keybindings
+      size={40}
+      onclick={() => {
+        onSelect("keybindings");
       }} />
   </div>
   <div class="baritem" class:active={$currentView === "versions"}>
@@ -63,22 +70,20 @@
     <div></div>
     <div></div>
   {/if}
-  <div></div>
-  <div class="baritem" class:active={$currentView === "settings"}>
+  <div class="baritem baritem__latest" class:active={$currentView === "settings"}>
     <Settings
       size={40}
       onclick={() => {
         onSelect("settings");
       }} />
   </div>
-  <div></div>
 </div>
 
 <style>
   .menubar {
     margin-top: 20px;
-    display: grid;
-    grid-template-rows: 80px 80px 80px 80px 80px 80px 80px 1fr 80px 40px;
+    display: flex;
+    flex-direction: column;
     align-items: center;
     background-color: rgba(0, 0, 0, 0);
     justify-items: anchor-center;
@@ -90,6 +95,7 @@
     display: flex;
     align-items: center;
     padding-left: 16px; /* отступ для места под кружок */
+    height: 72px;
   }
   .baritem.active::before {
     content: "";
@@ -99,5 +105,10 @@
     height: 8px;
     border-radius: 50%;
     background-color: white;
+  }
+
+  .baritem__latest {
+    margin-top: auto;
+    margin-bottom: 40px;
   }
 </style>

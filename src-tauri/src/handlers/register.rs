@@ -58,6 +58,16 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::upload::upload_release,
     handlers::upload_v2::upload_v2_release,
     handlers::continue_upload::continue_upload,
+    // Profiles
+    handlers::profiles::add_profile,
+    handlers::profiles::delete_profile,
+    handlers::profiles::save_key_profiles,
+    handlers::profiles::save_single_profile,
+    handlers::profiles::rename_profile,
+    handlers::profiles::set_apply_profile,
+    handlers::profiles::export_profile,
+    handlers::profiles::import_profile,
+    handlers::profiles::apply_profile_to_ltx,
     // compress
     handlers::compress::create_split_archives,
     // permissions
@@ -65,6 +75,8 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     // updater
     handlers::updater::update,
     handlers::updater::restart_app,
+    // system
+    handlers::system::check_file_exists,
     // logger
     handlers::logger::log_debug,
     handlers::logger::log_info,
