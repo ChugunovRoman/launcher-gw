@@ -26,5 +26,6 @@ git add .
 git commit -m "Release launcher v$NEW_VERSION"
 git tag -a $NEW_VERSION -m "Release launcher $NEW_VERSION"
 git push --tags origin master
+git push --tags github master
 
 echo "Готово! Все файлы обновлены."
