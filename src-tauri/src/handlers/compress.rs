@@ -3,7 +3,7 @@ use crate::handlers::dto::{CompressProgressPayload, ReleaseManifest, ReleaseMani
 use crate::utils::CountingWriter::CountingWriter;
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
-use std::fs::{self, File};
+use std::fs::{self, File, Metadata};
 use std::io::BufWriter;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
