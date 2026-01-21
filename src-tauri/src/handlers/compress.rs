@@ -5,7 +5,6 @@ use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
 use std::fs::{self, File, Metadata};
 use std::io::BufWriter;
-use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use tauri::Emitter;
@@ -113,7 +112,7 @@ pub async fn create_split_archives(
       let archive_name = format!("data{}.zip", part_number);
       let file_path = out_dir.join(&archive_name);
       let meta = file_path.metadata().map_err(|e| e.to_string())?;
-      let size = meta.file_size();
+      let size = meta.len();
       compressed_size += size;
 
       manifest.files.push(ReleaseManifestFile { name: archive_name, size });
@@ -157,7 +156,7 @@ pub async fn create_split_archives(
 
   let file_path = out_dir.join(format!("data{}.zip", part_number));
   let meta = file_path.metadata().map_err(|e| e.to_string())?;
-  let size = meta.file_size();
+  let size = meta.len();
   compressed_size += size;
 
   manifest.files.push(ReleaseManifestFile {
