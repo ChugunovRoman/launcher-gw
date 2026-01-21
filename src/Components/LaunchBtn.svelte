@@ -23,7 +23,7 @@
     if (!$mainVersion && !$selectedVersion) {
       currentView.select("versions");
     }
-    if (pid && pid > 0) return;
+    if (pid && pid > 0 && (await checkProcess())) return;
 
     try {
       const version = $localVersions.get($selectedVersion!);
@@ -36,7 +36,7 @@
   };
 
   const checkProcess = async () => {
-    if (!pid || pid === -1) return;
+    if (!pid || pid === -1) return false;
 
     isProcessAlive = await invoke<boolean>("is_process_alive", { pid });
 
@@ -44,6 +44,8 @@
       clearInterval(interval);
       pid = null;
     }
+
+    return isProcessAlive;
   };
 
   $effect(() => {

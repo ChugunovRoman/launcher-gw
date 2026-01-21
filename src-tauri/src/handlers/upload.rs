@@ -322,8 +322,18 @@ pub async fn upload_release(app: tauri::AppHandle, name: String, path: String, f
   {
     let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
     let service_guard = state.lock().await;
+    let api = service_guard.api_client.current_provider().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
 
-    service_guard.set_release_visibility(&release.name, true).await
+    let release_id = if api.is_suppot_subgroups() {
+      release.path.clone()
+    } else {
+      release.name.clone()
+    };
+
+    service_guard.set_release_visibility(&release_id, true).await
   }
   .map_err(|e| {
     log_full_error(&e);

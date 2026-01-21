@@ -201,7 +201,13 @@ pub async fn upload_v2_release(app: tauri::AppHandle, name: String, path: String
     upload_log(&app, format!("File {} uploaded successful !", &asset.file_name));
   }
 
-  service_guard.set_release_visibility(&release.name, true).await.map_err(|e| {
+  let release_id = if api.is_suppot_subgroups() {
+    release.path.clone()
+  } else {
+    release.name.clone()
+  };
+
+  service_guard.set_release_visibility(&release_id, true).await.map_err(|e| {
     log_full_error(&e);
     e.to_string()
   })?;
