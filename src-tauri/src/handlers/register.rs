@@ -53,6 +53,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::release::has_root_version,
     handlers::release::add_installed_version_from_config,
     handlers::release::add_installed_version_from_local_path,
+    handlers::release::add_installed_version_from_ui,
     handlers::release::clear_progress_version,
     handlers::release::emit_file_list_stats,
     handlers::upload::upload_release,

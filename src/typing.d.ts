@@ -47,6 +47,9 @@ declare interface Version {
   path: string;
   installed_path: string;
   download_path: string;
+  engine_path: string;
+  fsgame_path: string;
+  userltx_path: string;
   installed_updates: string[];
   is_local: boolean;
   manifest?: ReleaseManifest;

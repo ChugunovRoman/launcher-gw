@@ -6,7 +6,7 @@ use crate::{
   utils::{errors::log_full_error, git::grouping::group_files_by_size, resources::game_exe},
 };
 use anyhow::Context;
-use std::{cmp::Reverse, convert::TryFrom, fs, path::PathBuf};
+use std::{cmp::Reverse, fs, path::PathBuf};
 use std::{path::Path, sync::Arc};
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
@@ -153,6 +153,14 @@ pub async fn get_installed_versions(app_config: tauri::State<'_, Arc<Mutex<AppCo
       .iter()
       .filter_map(|(_, v)| {
         let path = Path::new(&v.installed_path);
+        let engine_path_exists = match &v.engine_path {
+          Some(value) => Path::new(value).exists(),
+          None => false,
+        };
+        let fsgame_path_exists = match &v.fsgame_path {
+          Some(value) => Path::new(value).exists(),
+          None => false,
+        };
         let path_bin = path.join(BIN_DIR);
         let path_exe = path_bin.join(game_exe());
         log::debug!(
@@ -161,7 +169,7 @@ pub async fn get_installed_versions(app_config: tauri::State<'_, Arc<Mutex<AppCo
           &v.installed_path,
           game_exe()
         );
-        if path.exists() && path_bin.exists() && path_exe.exists() && path.is_dir() {
+        if path.exists() && ((path_bin.exists() && path_exe.exists()) || (engine_path_exists && fsgame_path_exists)) && path.is_dir() {
           Some(v.clone())
         } else {
           None
@@ -238,6 +246,9 @@ pub async fn add_installed_version_from_config(app_config: tauri::State<'_, Arc<
         manifest: version.manifest.clone(),
         installed_path: version.installed_path.clone(),
         download_path: version.download_path.clone(),
+        engine_path: None,
+        fsgame_path: None,
+        userltx_path: None,
         installed_updates: vec![],
         is_local: false,
       },
@@ -271,6 +282,9 @@ pub async fn add_installed_version_from_local_path(app_config: tauri::State<'_, 
     manifest: None,
     installed_path: path.clone(),
     download_path: path.clone(),
+    engine_path: None,
+    fsgame_path: None,
+    userltx_path: None,
     installed_updates: vec![],
     is_local: true,
   };
@@ -287,6 +301,71 @@ pub async fn add_installed_version_from_local_path(app_config: tauri::State<'_, 
         manifest: version.manifest.clone(),
         installed_path: version.installed_path.clone(),
         download_path: version.download_path.clone(),
+        engine_path: version.engine_path.clone(),
+        fsgame_path: version.fsgame_path.clone(),
+        userltx_path: version.userltx_path.clone(),
+        installed_updates: vec![],
+        is_local: false,
+      },
+    );
+
+    if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
+      ver.is_downloaded = true;
+    }
+
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn add_installed_version_from_ui(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  name: String,
+  path: String,
+  enginePath: String,
+  fsgamePath: String,
+  userltxPath: String,
+) -> Result<(), String> {
+  let p = Path::new(&path);
+  let base_name = match p.file_name() {
+    Some(name) => name.to_string_lossy().to_string(),
+    None => path.clone(),
+  };
+
+  let version = Version {
+    id: 0,
+    name: name.clone(),
+    path: base_name,
+    manifest: None,
+    installed_path: path.clone(),
+    download_path: path.clone(),
+    engine_path: Some(enginePath),
+    fsgame_path: Some(fsgamePath),
+    userltx_path: Some(userltxPath),
+    installed_updates: vec![],
+    is_local: true,
+  };
+
+  {
+    let mut config_guard = app_config.lock().await;
+
+    config_guard.installed_versions.insert(
+      version.path.clone(),
+      Version {
+        id: version.id,
+        name: version.name.clone(),
+        path: version.path.clone(),
+        manifest: version.manifest.clone(),
+        installed_path: version.installed_path.clone(),
+        download_path: version.download_path.clone(),
+        engine_path: version.engine_path.clone(),
+        fsgame_path: version.fsgame_path.clone(),
+        userltx_path: version.userltx_path.clone(),
         installed_updates: vec![],
         is_local: false,
       },

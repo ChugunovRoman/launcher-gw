@@ -9,7 +9,7 @@
     removeVersionInProcess,
     showDlgRemoveVersion,
   } from "../store/main";
-  import Modal from "./index.svelte";
+  import Modal from "./Base.svelte";
   import Button from "../Components/Button.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { mainVersion, selectedVersion, versions } from "../store/upload";

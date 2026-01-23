@@ -25,12 +25,14 @@
     },
     "dlg": {
       "attention": "Attention!",
+      "addVersionTitle": "Adding a local version",
       "restartTxt1": "Global War Launcher has been updated to version",
       "restartTxt2": "Restart the application?",
       "cannotApplyProfile": "Failed to apply profile. File appdata/user.ltx not found.",
       "applyProfileOk": "Profile 'PROFILE' has been successfully applied",
       "removeVersion": "Are you sure you want to delete the version ",
       "removeProfile": "Remove profile ",
+      "add": "Add",
       "yes": "Yes",
       "ok": "Окак",
       "no": "No"
@@ -39,6 +41,9 @@
       "checks": {
         "space": "Not enough free space on the selected drive! Required: ",
         "profileExists": "A profile with this name already exists. Please enter a different name.",
+        "newVersionBinPathExists": "The engine file xrEngine.exe was not found. Please specify the path manually.",
+        "newVersionFsgamePathExists": "The file fsgame.ltx was not found. Please specify the path manually.",
+        "newVersionUserltxPathExists": "The file user.ltx was not found. Please specify the path manually.",
         "renameDefaultError": "The default profile cannot be renamed.",
         "badPath": "Warning: The folder path contains spaces or Cyrillic characters. This may cause errors. It is recommended to use only Latin letters and avoid spaces."
       }
@@ -79,6 +84,8 @@
       "export": "Export ",
       "import": "Import profile",
       "applyToOther": "Apply profile to another mod",
+      "addVersion": "Add a game",
+      "choose": "Choose",
       "rename": "Rename"
     },
     "keys": {
@@ -213,6 +220,11 @@
       "runparams_holder": "Enter additional launch arguments…",
       "profile_name_holder": "Enter a profile name…",
       "settings": "Launcher Settings",
+      "newVersionName": "Enter the game display name",
+      "newVersionPath": "Path to the game folder",
+      "newVersionBinPath": "Path to the engine .exe file (usually this is the xrEngine.exe file, located in the bin folder)",
+      "newVersionFsgamePath": "Path to the fsgame.ltx file",
+      "newVersionUserltxPath": "Path to the user.ltx file (usually located in the appdata folder in the game folder)",
       "pack": "Packing",
       "tokens": "Tokens",
       "releases": "Releases",

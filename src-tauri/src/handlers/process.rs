@@ -40,12 +40,30 @@ pub async fn run_game(
   let mut config_guard = state.lock().await;
 
   let target_path = version.installed_path.clone();
-  let bin_path = Path::new(&target_path).join(BIN_DIR).join(game_exe());
 
-  log::info!("run_game bin_path: {:?}", &bin_path);
+  let bin_path = match &version.engine_path {
+    Some(value) => Path::new(value).to_path_buf(),
+    None => Path::new(&target_path).join(BIN_DIR).join(game_exe()),
+  };
+  let fsgame_path = match &version.fsgame_path {
+    Some(value) => Path::new(value).to_path_buf(),
+    None => Path::new(&target_path).join(FSGAME_LTX),
+  };
+  let user_ltx_path = match &version.userltx_path {
+    Some(value) => Path::new(value).to_path_buf(),
+    None => Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX),
+  };
+
+  let bin_path_rel = bin_path
+    .strip_prefix(&target_path)
+    .map(|p| Path::new(".").join(p)) // Добавляем "./" для надежности
+    .unwrap_or(bin_path.clone());
+
+  let fsgame_path_rel = fsgame_path.strip_prefix(&target_path).unwrap_or(Path::new(&fsgame_path)).to_path_buf();
+
+  log::info!("run_game relative bin_path: {:?}", &bin_path_rel);
 
   let mut user_config = user_ltx.lock().await;
-  let user_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX);
   user_config.0.set_file_path(&user_ltx_path);
   update_ltx_config(&mut user_config.0, &config_guard, &keybind_manager)
     .await
@@ -58,10 +76,12 @@ pub async fn run_game(
     .await
     .map_err(|e| e.to_string())?;
 
-  let fsgame_path = Path::new(&target_path).join(FSGAME_LTX);
   let mut run_params = vec![
     String::from("-fsltx"),
-    fsgame_path.into_os_string().into_string().expect("Path to fsgame.ltx is not valid UTF-8"),
+    fsgame_path_rel
+      .into_os_string()
+      .into_string()
+      .expect("Path to fsgame.ltx is not valid UTF-8"),
   ];
 
   if config_guard.run_params.check_no_staging {

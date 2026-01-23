@@ -10,11 +10,7 @@
   import MenuBar from "./Components/MenuBar.svelte";
   import LinksBar from "./Components/LinksBar.svelte";
 
-  import RestartApp from "./Dialogs/RestartApp.svelte";
-  import RemoveVersion from "./Dialogs/RemoveVersion.svelte";
-  import RemoveProfile from "./Dialogs/RemoveProfile.svelte";
-  import CannotApplyProfile from "./Dialogs/CannotApplyProfile.svelte";
-  import ApplyProfileOk from "./Dialogs/ApplyProfileOk.svelte";
+  import Dialogs from "./Dialogs/index.svelte";
 
   import MainView from "./Views/Main.svelte";
   import SettingsView from "./Views/Settings.svelte";
@@ -120,11 +116,7 @@
     </div>
   </div>
 
-  <RestartApp />
-  <RemoveVersion />
-  <RemoveProfile />
-  <CannotApplyProfile />
-  <ApplyProfileOk />
+  <Dialogs />
 </main>
 
 <style>

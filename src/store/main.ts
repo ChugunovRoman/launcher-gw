@@ -25,6 +25,7 @@ export const showDlgRestartApp = writable(false);
 export const removeVersion = writable<Version | undefined>();
 export const removeVersionInProcess = writable(false);
 export const showDlgRemoveVersion = writable(false);
+export const showDlgAddVersion = writable(false);
 
 export const loadedTokens = writable(false);
 export const tokens = writable<Map<string, string>>(new Map());

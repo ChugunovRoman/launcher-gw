@@ -13,6 +13,7 @@
     removeVersionInProcess,
     moveProgress,
     updateLocalVersion,
+    showDlgAddVersion,
   } from "../store/main";
   import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
@@ -132,6 +133,9 @@
       inProgress: false,
       isStoped: true,
     }));
+  }
+  async function handleAddVersion() {
+    showDlgAddVersion.set(true);
   }
 
   async function handleStartDownload(event: Event, releaseName: string) {
@@ -729,6 +733,10 @@
       {/each}
     {/if}
   </div>
+
+  <div class="btn-bar">
+    <Button onclick={handleAddVersion}>{$_("app.btn.addVersion")}</Button>
+  </div>
 </div>
 
 <style>
@@ -743,7 +751,7 @@
     margin: 0 auto;
     font-family: system-ui, sans-serif;
     overflow: auto;
-    height: 86vh;
+    height: 77vh;
     -webkit-app-region: no-drag;
   }
   .releases-view::-webkit-scrollbar {
@@ -763,6 +771,13 @@
   }
   .releases-view::-webkit-scrollbar-button {
     display: none;
+  }
+
+  .btn-bar {
+    display: flex;
+    position: absolute;
+    bottom: 50px;
+    right: 40px;
   }
 
   .releases-scroll {

@@ -25,12 +25,14 @@
     },
     "dlg": {
       "attention": "Внимание!",
+      "addVersionTitle": "Добавление локальной версии",
       "restartTxt1": "Лаунчер Global War был обновлен до версии",
       "restartTxt2": "Перезапусить приложение?",
       "cannotApplyProfile": "Не удалось применить профиль. Файл appdata/user.ltx не найден.",
       "applyProfileOk": "Профиль 'PROFILE' успешно применен",
       "removeVersion": "Вы действительно хотите удалить версию ",
       "removeProfile": "Удалить профиль ",
+      "add": "Добавить",
       "yes": "Да",
       "ok": "Ok",
       "no": "нет"
@@ -39,6 +41,9 @@
       "checks": {
         "space": "Не достаточно свободного места на выбранном диске! Необходимо: ",
         "profileExists": "Профиль с таким именем уже существует. Введите другое название.",
+        "newVersionBinPathExists": "Файл движка xrEngine.exe не найден. Укажите путь к нему вручную.",
+        "newVersionFsgamePathExists": "Файл fsgame.ltx не найден. Укажите путь к нему вручную.",
+        "newVersionUserltxPathExists": "Файл user.ltx не найден. Укажите путь к нему вручную.",
         "renameDefaultError": "Профиль default нельзя переименовать.",
         "badPath": "Внимание: путь к папке содержит пробелы или кириллицу. Это может вызвать ошибки. Рекомендуется использовать только латинские символы и избегать пробелов."
       }
@@ -79,6 +84,8 @@
       "export": "Экспорт ",
       "import": "Импорт профиля",
       "applyToOther": "Применить профиль к другому моду",
+      "addVersion": "Добавить игру",
+      "choose": "Выбрать",
       "rename": "Переименовать"
     },
     "keys": {
@@ -213,6 +220,11 @@
       "runparams_holder": "Введите дополнительные аргументы запуска…",
       "profile_name_holder": "Введите название профиля…",
       "settings": "Настройки лаунчера",
+      "newVersionName": "Введите отображаемое имя игры",
+      "newVersionPath": "Путь к папке с игрой",
+      "newVersionBinPath": "Путь к .exe файлу движка (обычно это файл xrEngine.exe, находится в папке bin)",
+      "newVersionFsgamePath": "Путь к fsgame.ltx файлу",
+      "newVersionUserltxPath": "Путь к user.ltx файлу (обычно располагается в папке appdata в папке с игрой)",
       "pack": "Запаковка",
       "tokens": "Токены",
       "releases": "Релизы",

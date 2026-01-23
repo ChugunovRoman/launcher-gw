@@ -23,6 +23,9 @@ pub struct Version {
   pub path: String,
   #[serde(default)]
   pub installed_path: String,
+  pub engine_path: Option<String>,
+  pub fsgame_path: Option<String>,
+  pub userltx_path: Option<String>,
   #[serde(default)]
   pub download_path: String,
   #[serde(default)]

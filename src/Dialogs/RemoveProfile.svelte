@@ -1,6 +1,6 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
-  import Modal from "./index.svelte";
+  import Modal from "./Base.svelte";
   import Button from "../Components/Button.svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { profileKeyMap, profiles, removeProfileName, showDlgRemoveProfile, updateCurrentBindsMap } from "../store/profiles";
