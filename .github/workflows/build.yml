@@ -1,12 +1,7 @@
 name: CI Check
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
+  workflow_dispatch:
 
 env:
   APP_NAME: "Launcher"
