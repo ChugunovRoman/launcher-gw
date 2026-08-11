@@ -58,16 +58,11 @@
             $selectedVersion = config.selected_version;
           }
 
-          if (!$showUploading && !!config.progress_upload) {
+          if (!$showUploading && !!config.progress_upload && !!config.progress_upload.name && !config.progress_upload.is_completed) {
             $showUploading = true;
             $releaseName = config.progress_upload.name;
-
-            invoke<RepoSyncState | null>("get_upload_manifest").then((manifest) => {
-              if (manifest) {
-                $totalFiles = manifest.total_files_count;
-                $uploadedFiles = manifest.uploaded_files_count;
-              }
-            });
+            $totalFiles = config.progress_upload.total_files;
+            $uploadedFiles = config.progress_upload.uploaded_files.length;
           }
 
           refreshLocalVersion();

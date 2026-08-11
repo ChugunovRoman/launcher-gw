@@ -43,6 +43,15 @@ pub fn run() {
 
       Ok(())
     })
+    .on_window_event(|window, event| {
+      // Graceful shutdown on window close (X button) — cancel active downloads
+      // and persist config.json before the process dies. Without this, closing
+      // the window while a download is running would lose all in-memory progress.
+      if let tauri::WindowEvent::CloseRequested { .. } = event {
+        log::info!("Window close requested: running graceful shutdown");
+        tauri::async_runtime::block_on(handlers::window::graceful_shutdown(window.app_handle()));
+      }
+    })
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_window_state::Builder::default().build())

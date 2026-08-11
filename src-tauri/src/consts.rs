@@ -29,10 +29,15 @@ pub const NO_KEY: &str = "---";
 pub const DEFAULT_BIND_LTX: &str = "default.ltx";
 pub const CUSTOM_BIND_LTX: &str = "custom.ltx";
 
-pub const STATE_FILE_NAME: &str = ".git_sync_state";
-
 // Providers ids
 pub const GITLAB_PID: &str = "gitlab";
 pub const GITHUB_PID: &str = "github";
 
 pub const PULL_FILES_SIZE: u8 = 1;
+
+/// Default git branch used when uploading the manifest and creating a tag.
+/// TODO: this is a temporary crutch. The correct fix is to fetch the repo's
+/// default branch from the provider and thread it through `add_file_to_repo` /
+/// `create_tag` / `create_release` (which currently hardcode "master" on the
+/// provider side too — see Github::__create_release `target_commitish`).
+pub const DEFAULT_BRANCH: &str = "master";

@@ -2,9 +2,17 @@ use crate::{
   configs::AppConfig::{AppConfig, FileProgress, VersionProgress},
   consts::PULL_FILES_SIZE,
   handlers::dto::{DownloadProgress, DownloadStatus, UnzipTask},
-  service::{files::ServiceFiles, get_release::ServiceGetRelease, main::Service, unpack::ServiceUnpacker},
+  service::{
+    files::{DownloadOutcome, ServiceFiles},
+    get_release::ServiceGetRelease,
+    main::Service,
+    unpack::ServiceUnpacker,
+  },
   utils::errors::log_full_error,
 };
+
+/// Max download attempts per file before giving up.
+const MAX_DOWNLOAD_RETRIES: u32 = 5;
 use anyhow::Context;
 use std::{
   collections::HashMap,
@@ -13,7 +21,7 @@ use std::{
   sync::{Arc, Mutex as StdMutex},
 };
 use std::{
-  sync::atomic::{AtomicU16, Ordering},
+  sync::atomic::{AtomicU32, Ordering},
   time::Duration,
 };
 use tauri::Emitter;
@@ -31,6 +39,33 @@ pub async fn cancel_download_version(channel_map: tauri::State<'_, CancelMap>, r
   Ok(())
 }
 
+/// Cancels every active download, persists the config, then returns.
+/// Used as a graceful-shutdown hook on window close / app exit so that partial
+/// progress is saved instead of being lost by `process::exit`.
+#[tauri::command]
+pub async fn cancel_all_downloads_and_save(
+  channel_map: tauri::State<'_, CancelMap>,
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+) -> Result<(), String> {
+  let senders: Vec<broadcast::Sender<()>> = {
+    let map = channel_map.lock().unwrap();
+    map.iter().map(|(_, v)| v.clone()).collect()
+  };
+
+  // Signal every active download worker to stop (they persist .part + config on the way out).
+  for tx in senders {
+    let _ = tx.send(());
+  }
+
+  // Give workers a brief moment to flush their .part files and config updates.
+  tokio::time::sleep(Duration::from_millis(500)).await;
+
+  // Final defensive save of the whole config.
+  let mut config_guard = app_config.lock().await;
+  let _ = config_guard.save();
+  Ok(())
+}
+
 #[tauri::command]
 pub async fn start_download_version(
   app: tauri::AppHandle,
@@ -44,9 +79,15 @@ pub async fn start_download_version(
   versionName: String,
   versionId: Option<u32>,
 ) -> Result<(), String> {
-  let (tx, mut rx) = broadcast::channel::<()>(1);
+  // Bug C fix: single broadcast channel for the whole command. Previously there
+  // were two disconnected channels: `tx`/`rx` (registered first) and `cancel_tx`
+  // (created later and used by workers). Cancellation sent via `cancel_tx` never
+  // reached `rx`, so the early cancel checks were dead. Now one `cancel_tx` is
+  // created upfront, registered in the map, used for early checks AND subscribed
+  // to by the workers.
+  let (cancel_tx, mut rx) = broadcast::channel::<()>(1);
   {
-    channel_map.lock().unwrap().insert(versionName.clone(), tx.clone());
+    channel_map.lock().unwrap().insert(versionName.clone(), cancel_tx.clone());
   }
   // Удаляем запись после завершения (успешного или нет)
   scopeguard::defer! {
@@ -76,10 +117,10 @@ pub async fn start_download_version(
 
   log::info!("start_download_versions, selected_version: {:?}", &selected_version);
 
-  let mut total_file_count: u16 = 0;
+  let mut total_file_count: u32 = 0;
 
   if let Some(data) = &selected_version.manifest {
-    total_file_count = data.files.len() as u16;
+    total_file_count = data.files.len() as u32;
   };
 
   let mut version = VersionProgress {
@@ -132,7 +173,7 @@ pub async fn start_download_version(
     return Err("USER_CANCELLED".to_string());
   }
 
-  version.total_file_count = release.assets.len() as u16;
+  version.total_file_count = release.assets.len() as u32;
 
   let _ = app.emit(
     "download-version",
@@ -187,8 +228,8 @@ pub async fn start_download_version(
     },
   );
 
-  let total_file_count = release.assets.len() as u16;
-  let downloaded_cnt = Arc::new(AtomicU16::new(0));
+  let total_file_count = release.assets.len() as u32;
+  let downloaded_cnt = Arc::new(AtomicU32::new(0));
 
   // Создаем канал для очереди задач
   // Запас емкости берем с запасом, чтобы влезли все файлы + возможные ретраи
@@ -220,25 +261,36 @@ pub async fn start_download_version(
       let v_name = version_name_unzip.clone();
       let service_unpack_for_thread = service_unpack_arc.clone();
       let app_config_arc_for_thread = app_config_arc.clone();
+      let archive_path = data.archive_path.clone();
+      let file_name = data.file_name.clone();
+      let v_name_for_thread = v_name.clone();
 
-      // Используем spawn_blocking, так как распаковка — это CPU-intensive задача
-      tokio::task::spawn_blocking(move || {
-        let _ = service_unpack_for_thread.extract_zip(&v_name, &data.file_name, &data.archive_path, &data.destination_path);
-        let _ = app_inner.emit("file-unzipped", (&v_name, data.archive_path.to_str()));
-        // Для работы с async Mutex внутри синхронного spawn_blocking
-        // используем блокирующий вызов через текущий runtime
-        let mut config_guard = tokio::runtime::Handle::current().block_on(app_config_arc_for_thread.lock());
+      // Unpacking is CPU-intensive → run it in spawn_blocking, returning whether it
+      // succeeded so the config update happens in the async context (no block_on
+      // inside a blocking thread, which previously risked starving the pool).
+      let unpack_ok: bool = tokio::task::spawn_blocking(move || {
+        let res = service_unpack_for_thread.extract_zip(&v_name_for_thread, &data.file_name, &data.archive_path, &data.destination_path);
+        if let Err(e) = &res {
+          log::error!("Unpack of '{}' failed: {}", &data.file_name, e);
+        }
+        let _ = app_inner.emit("file-unzipped", (&v_name_for_thread, data.archive_path.to_str()));
+        res.is_ok()
+      })
+      .await
+      .unwrap_or(false);
 
+      // Config update + archive removal back in the async context.
+      if unpack_ok {
+        let mut config_guard = app_config_arc_for_thread.lock().await;
         if let Some(ver) = config_guard.progress_download.get_mut(&v_name) {
-          if let Some(file_progress) = ver.files.get_mut(&data.file_name) {
+          if let Some(file_progress) = ver.files.get_mut(&file_name) {
             file_progress.is_unpacked = true;
           }
         }
         let _ = config_guard.save();
-        fs::remove_file(&data.archive_path).ok();
-      })
-      .await
-      .ok();
+        drop(config_guard);
+        let _ = fs::remove_file(&archive_path);
+      }
 
       if data.is_latest {
         break;
@@ -248,18 +300,16 @@ pub async fn start_download_version(
   });
 
   let mut join_handles = Vec::new();
-  let (cancel_tx, _) = broadcast::channel::<()>(1); // Локальный сигнал для воркеров
-
-  // Вставляем основной tx в карту отмены
-  channel_map.lock().unwrap().insert(versionName.clone(), cancel_tx.clone());
+  // Bug C fix: reuse the single `cancel_tx` created at the top of the command.
+  // It is already registered in `channel_map`, so no second insert is needed.
 
   let rx_queue_arc = Arc::new(Mutex::new(rx_queue));
   let tx_queue_arc = Arc::new(Mutex::new(tx_queue));
   let tx_unzip_arc = Arc::new(tx_unzip);
   let cancel_tx_arc = Arc::new(cancel_tx);
 
-  // Запускаем фиксированное количество воркеров
-  for worker_id in 0..PULL_FILES_SIZE {
+  // Run a fixed number of download workers.
+  for _ in 0..PULL_FILES_SIZE {
     let app_c = app.clone();
     let app_config_c = app_config.inner().clone();
     let service_files_c = service_files.inner().clone();
@@ -271,22 +321,28 @@ pub async fn start_download_version(
 
     let tx_unzip_c = tx_unzip_arc.clone();
     let rx_queue_c = rx_queue_arc.clone();
-    let tx_queue_c = tx_queue_arc.clone();
     let cancel_tx_arc_c = cancel_tx_arc.clone();
     let mut stop_rx = cancel_tx_arc.subscribe();
 
-    // Переменная для rx очереди (нужен Mutex, так как mpsc::Receiver не Thread-safe)
-    // Но в данном случае мы просто передаем владение rx каждому воркеру через Arc/Mutex
-    // или используем подход с одним циклом.
+    // Variable for rx queue (needs Mutex, as mpsc::Receiver is not Thread-safe)
+    // But in this case we just pass ownership of rx to each worker via Arc/Mutex
+    // or use a single-loop approach.
     let handle = tokio::spawn(async move {
+      // Per-file retry counter so a persistently failing file does not loop forever.
+      let mut retries: u32 = 0;
+      let mut current_task: Option<_> = None;
+
       loop {
-        let file_task = {
+        // Take next task either from the previous failed attempt or from the queue.
+        let file_task = if let Some(t) = current_task.take() {
+          t
+        } else {
           let mut rx_lock = rx_queue_c.lock().await;
 
           tokio::select! {
-              // Остановка если пришла отмена
+              // Stop if cancellation arrived
               _ = stop_rx.recv() => break,
-              // Очередь пуста, воркер завершает работу
+              // Queue is empty, worker finishes
               task = rx_lock.recv() => {
                   match task {
                       Some(t) => t,
@@ -299,7 +355,7 @@ pub async fn start_download_version(
         let file_path = download_dir_c.join(&file_task.name);
         let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
 
-        // Читаем существующий прогресс для Range
+        // Read existing progress for Range header
         let seek_pos = if let Ok(content) = std::fs::read_to_string(&part_path) {
           content.trim().parse::<u64>().ok()
         } else {
@@ -320,8 +376,9 @@ pub async fn start_download_version(
           .await;
 
         match res {
-          Ok(_) => {
-            // Успешно скачано
+          Ok(DownloadOutcome::Completed) => {
+            // Successfully downloaded
+            retries = 0;
             let current = downloaded_cnt_c.fetch_add(1, Ordering::SeqCst) + 1;
             let _ = tx_unzip_c
               .send(UnzipTask {
@@ -338,12 +395,26 @@ pub async fn start_download_version(
               break;
             }
           }
+          Ok(DownloadOutcome::Interrupted) => {
+            // User pause / shutdown: persist partial progress to config and stop without
+            // counting this file as completed.
+            log::info!("Download of '{}' interrupted by cancel signal, saving progress", file_task.name);
+            persist_file_size(&app_config_c, &version_name_c, &file_task.name, &part_path).await;
+            break;
+          }
           Err(e) => {
-            log::error!("Error downloading {}: {}. Retrying...", file_task.name, e);
-            // Возвращаем в очередь
-            let channel = tx_queue_c.lock().await;
-            let _ = channel.send(file_task).await;
-            tokio::time::sleep(Duration::from_secs(2)).await; // Пауза перед ретраем
+            retries += 1;
+            if retries > MAX_DOWNLOAD_RETRIES {
+              log::error!("Download of '{}' failed after {} attempts: {}", file_task.name, MAX_DOWNLOAD_RETRIES, e);
+              persist_file_size(&app_config_c, &version_name_c, &file_task.name, &part_path).await;
+              break;
+            }
+            log::warn!("Error downloading '{}' (attempt {}/{}): {}. Retrying...", file_task.name, retries, MAX_DOWNLOAD_RETRIES, e);
+            // Persist partial size before retry so a subsequent kill keeps the resume point.
+            persist_file_size(&app_config_c, &version_name_c, &file_task.name, &part_path).await;
+            // Re-queue the same file for another attempt.
+            current_task = Some(file_task);
+            tokio::time::sleep(Duration::from_secs(2)).await; // pause before retry
           }
         }
       }
@@ -358,6 +429,12 @@ pub async fn start_download_version(
     let _ = h.await;
   }
 
+  // Determine whether the download completed fully. We only emit the completion
+  // event when every file finished; otherwise the frontend would start unpacking
+  // a partial download and wipe the saved progress.
+  let downloaded_total = downloaded_cnt.load(Ordering::SeqCst);
+  let fully_downloaded = downloaded_total >= total_file_count;
+
   // ВАЖНО: Закрываем передатчик очереди распаковки.
   // После этого rx_unzip.recv() вернет None, когда обработает ВСЕ задачи в очереди.
   drop(tx_unzip_arc);
@@ -365,9 +442,27 @@ pub async fn start_download_version(
   // Ждем, пока менеджер распаковки закончит последний файл
   let _ = unzip_manager_handle.await;
 
-  let _ = app.emit("download-unpack-version", &versionName);
+  if fully_downloaded {
+    // Bug B fix: mark the version as fully downloaded in config.
+    {
+      let mut config_guard = app_config.lock().await;
+      if let Some(ver) = config_guard.progress_download.get_mut(&versionName) {
+        ver.is_downloaded = true;
+      }
+      let _ = config_guard.save();
+    }
 
-  Ok(())
+    let _ = app.emit("download-unpack-version", &versionName);
+    Ok(())
+  } else {
+    log::info!(
+      "Download of '{}' did not complete (downloaded {}/{}); keeping progress, no unpack event",
+      &versionName,
+      downloaded_total,
+      total_file_count
+    );
+    Err("USER_CANCELLED".to_string())
+  }
 }
 
 // Вспомогательная функция для получения задач из очереди внутри select!
@@ -376,8 +471,8 @@ async fn update_config_and_emit(
   config: &Arc<Mutex<AppConfig>>,
   version_name: &str,
   file_name: &str,
-  current: u16,
-  total: u16,
+  current: u32,
+  total: u32,
 ) {
   let mut config_guard = config.lock().await;
   if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
@@ -388,7 +483,8 @@ async fn update_config_and_emit(
   }
   let _ = config_guard.save();
 
-  let progress = (current as f32 / total as f32) * 100.0;
+  // Bug E fix: guard against division by zero when total is 0 (e.g. empty manifest).
+  let progress = if total > 0 { (current as f32 / total as f32) * 100.0 } else { 0.0 };
   let _ = app.emit(
     "download-version",
     DownloadProgress {
@@ -400,4 +496,21 @@ async fn update_config_and_emit(
       total_file_count: total,
     },
   );
+}
+
+/// Reads the `.part` sidecar and persists its byte count into `FileProgress.size`,
+/// so the resume point survives an abrupt process kill. Called after interruptions/retries.
+async fn persist_file_size(config: &Arc<Mutex<AppConfig>>, version_name: &str, file_name: &str, part_path: &str) {
+  let size = match std::fs::read_to_string(part_path) {
+    Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
+    Err(_) => 0,
+  };
+
+  let mut config_guard = config.lock().await;
+  if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
+    if let Some(fp) = ver.files.get_mut(file_name) {
+      fp.size = size;
+    }
+  }
+  let _ = config_guard.save();
 }

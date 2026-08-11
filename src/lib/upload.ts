@@ -28,14 +28,17 @@ export async function initUploadListeners() {
     }
   }));
   unlisten.set('upload-progress', await listen('upload-progress', (event: Event<UploadProgressPayload>) => {
-    const { file_name, total_size, total_uploaded_size, speed } = event.payload;
+    const { file_name, file_uploaded_size, file_total_size, speed } = event.payload;
 
     const [speedValue, sfxValue] = formatSpeedBytesPerSec(speed);
 
+    // Per-file progress bar uses the INDIVIDUAL file counters (not the cumulative
+    // `total_uploaded_size` / `total_size`, which would show 17 GB on every active file).
+    const safeTotal = file_total_size > 0 ? file_total_size : 1;
     uploadFilesMap.setItem(file_name, {
-      file_uploaded_size: total_uploaded_size,
-      file_total_size: total_size,
-      progress: total_uploaded_size / total_size * 100,
+      file_uploaded_size,
+      file_total_size,
+      progress: file_uploaded_size / safeTotal * 100,
       speedValue,
       sfxValue,
     });

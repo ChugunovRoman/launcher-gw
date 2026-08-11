@@ -5,22 +5,23 @@ declare enum LogLevel {
   Error = "error",
 }
 
-declare enum UploadState {
-  InProgress = "InProgress",
-  Completed = "Completed",
-}
-
 declare interface Dict<T> {
   [ket: string]: T;
 }
 
 declare interface VersionProgressUpload {
   name: string;
-  path_dir: string;
-  path_repo: string;
-  files_per_commit: number;
-  total_groups: number;
-  uploaded_groups: number;
+  path: string;
+  tag_name: string;
+  project_id: string;
+  release_id: string;
+  upload_url: string;
+  manifest_uploaded: boolean;
+  tag_created: boolean;
+  release_created: boolean;
+  uploaded_files: string[];
+  total_files: number;
+  is_completed: boolean;
 }
 declare interface DownloadProgress {
   version_name: string;
@@ -147,16 +148,6 @@ declare interface ReleaseManifest {
   files: ReleaseManifestFile[];
 }
 
-declare interface CommitSyncState {
-  files: Dict<string>;
-  was_pushed: boolean;
-}
-declare interface RepoSyncState {
-  commits: Dics<CommitSyncState>;
-  state: UploadState;
-  total_files_count: number;
-  uploaded_files_count: number;
-}
 
 declare interface ProviderStatus {
   available: boolean;

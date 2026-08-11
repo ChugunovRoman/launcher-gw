@@ -7,7 +7,7 @@ use crate::{
   consts::MANIFEST_NAME,
   providers::dto::ProviderStatus,
   service::main::Service,
-  utils::{encoding::decode, git::state::RepoSyncState},
+  utils::encoding::decode,
 };
 
 #[tauri::command]
@@ -119,47 +119,6 @@ pub async fn set_current_game_version(app_config: tauri::State<'_, Arc<Mutex<App
   }
 
   Ok(())
-}
-
-#[tauri::command]
-pub async fn get_upload_manifest(app: tauri::AppHandle) -> Result<Option<RepoSyncState>, String> {
-  let progress_opt = {
-    let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
-    let config_guard = state.lock().await;
-
-    config_guard.progress_upload.clone()
-  };
-
-  let progress = match progress_opt {
-    Some(data) => data,
-    None => {
-      log::info!("get_upload_manifest(), progress_upload is empty in AppConfig, just return null");
-      return Ok(None);
-    }
-  };
-
-  let repo_path = Path::new(&progress.path_dir).join("main_1");
-
-  if !repo_path.exists() {
-    log::info!("get_upload_manifest(), repo path: {:?} doesn't exist, just return null", &repo_path);
-    return Ok(None);
-  }
-
-  let manifest_path = repo_path.join(MANIFEST_NAME);
-
-  if !repo_path.exists() {
-    log::info!(
-      "get_upload_manifest(), {} file doesn't exist by path: {:?}, just return null",
-      MANIFEST_NAME,
-      &manifest_path
-    );
-    return Ok(None);
-  }
-
-  let content = fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
-  let state: RepoSyncState = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-
-  Ok(Some(state))
 }
 
 #[tauri::command]

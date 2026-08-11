@@ -53,9 +53,9 @@ pub struct VersionProgress {
   #[serde(default)]
   pub is_downloaded: bool,
   #[serde(default)]
-  pub downloaded_files_cnt: u16,
+  pub downloaded_files_cnt: u32,
   #[serde(default)]
-  pub total_file_count: u16,
+  pub total_file_count: u32,
 
   pub manifest: Option<ReleaseManifest>,
 }
@@ -64,15 +64,27 @@ pub struct VersionProgressUpload {
   #[serde(default)]
   pub name: String,
   #[serde(default)]
-  pub path_dir: String,
+  pub path: String,
   #[serde(default)]
-  pub path_repo: String,
+  pub tag_name: String,
   #[serde(default)]
-  pub files_per_commit: usize,
+  pub project_id: String,
   #[serde(default)]
-  pub total_groups: usize,
+  pub release_id: String,
   #[serde(default)]
-  pub uploaded_groups: usize,
+  pub upload_url: String,
+  #[serde(default)]
+  pub manifest_uploaded: bool,
+  #[serde(default)]
+  pub tag_created: bool,
+  #[serde(default)]
+  pub release_created: bool,
+  #[serde(default)]
+  pub uploaded_files: Vec<String>,
+  #[serde(default)]
+  pub total_files: u32,
+  #[serde(default)]
+  pub is_completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,6 +396,16 @@ impl AppConfig {
     config.first_run = false;
     config.install_path = Self::get_path();
     config.path = path;
+
+    // Sanitize: drop a progress_upload that was left as an empty object `{}`
+    // (e.g. from a manual reset or an old config). An empty name means it is not
+    // a real in-progress upload, so treating it as `None` keeps the UI clean.
+    if let Some(ref p) = config.progress_upload {
+      if p.name.is_empty() {
+        config.progress_upload = None;
+      }
+    }
+
     config.save().context("Failed to save merged config")?;
 
     Ok(config)

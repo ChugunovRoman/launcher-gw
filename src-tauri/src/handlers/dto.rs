@@ -29,9 +29,9 @@ pub struct DownloadProgress {
   #[serde(default)]
   pub file: String,
   #[serde(default)]
-  pub downloaded_files_cnt: u16,
+  pub downloaded_files_cnt: u32,
   #[serde(default)]
-  pub total_file_count: u16,
+  pub total_file_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

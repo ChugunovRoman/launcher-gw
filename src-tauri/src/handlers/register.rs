@@ -24,7 +24,6 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_default_install_path,
     handlers::configs::set_default_download_path,
     handlers::configs::set_current_game_version,
-    handlers::configs::get_upload_manifest,
     handlers::configs::set_current_api_provider,
     handlers::configs::get_api_providers_stats,
     // user.ltx
@@ -42,6 +41,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     // releases
     handlers::start_download_version::start_download_version,
     handlers::start_download_version::cancel_download_version,
+    handlers::start_download_version::cancel_all_downloads_and_save,
     handlers::continue_download_version::continue_download_version,
     handlers::release::get_available_versions,
     handlers::release::create_release_repos,
@@ -56,9 +56,9 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::release::add_installed_version_from_ui,
     handlers::release::clear_progress_version,
     handlers::release::emit_file_list_stats,
-    handlers::upload::upload_release,
     handlers::upload_v2::upload_v2_release,
-    handlers::continue_upload::continue_upload,
+    handlers::upload_v2::cancel_upload,
+    handlers::upload_v2::continue_upload_v2,
     // Profiles
     handlers::profiles::add_profile,
     handlers::profiles::delete_profile,

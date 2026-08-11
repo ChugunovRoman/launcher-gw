@@ -12,6 +12,7 @@ use tauri::Manager;
 use tauri::{App, Emitter};
 
 use crate::handlers::start_download_version::CancelMap;
+use crate::handlers::upload_v2::UploadCancelMap;
 use crate::service::files::ServiceFiles;
 use crate::service::get_release::ServiceGetRelease;
 use crate::service::keybind_manager::KeybindManager;
@@ -123,6 +124,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(service_unpack_arc);
   app.manage(service_updater_arc);
   app.manage(Arc::new(StdMutex::new(HashMap::new())) as CancelMap);
+  app.manage(Arc::new(StdMutex::new(HashMap::new())) as UploadCancelMap);
 
   log::info!("init App State Completed");
 

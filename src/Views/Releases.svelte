@@ -44,24 +44,32 @@
       newReleasePath: $releasePath,
     });
 
-    await invoke<void>("create_release_repos", {
-      name: $releaseName,
-      path: $releasePath,
-    });
+    try {
+      await invoke<void>("create_release_repos", {
+        name: $releaseName,
+        path: $releasePath,
+      });
 
-    await startUploadingRelease();
-
-    setTimeout(() => {
+      await startUploadingRelease();
+    } catch (e) {
+      console.error("handleCreateRelease failed:", e);
       showUploading.set(false);
-      inProcess.set(false);
-    }, 2000);
+    } finally {
+      setTimeout(() => {
+        inProcess.set(false);
+      }, 2000);
+    }
   }
 
   async function startUploadingRelease() {
-    await invoke<void>("upload_v2_release", {
-      name: $releaseName,
-      path: $releasePath,
-    });
+    try {
+      await invoke<void>("upload_v2_release", {
+        name: $releaseName,
+        path: $releasePath,
+      });
+    } catch (e) {
+      console.error("startUploadingRelease failed:", e);
+    }
 
     await fetchVersions();
   }
@@ -75,26 +83,43 @@
   async function handleContinueUploading() {
     inProcess.set(true);
 
-    updateFilesCounts();
+    // Read counts from config directly (get_upload_manifest was removed).
+    try {
+      const cfg = await invoke<AppConfig>("get_config");
+      if (cfg.progress_upload) {
+        totalFiles.set(cfg.progress_upload.total_files);
+        uploadedFiles.set(cfg.progress_upload.uploaded_files.length);
+      }
+    } catch (e) {
+      console.error("Failed to read upload progress:", e);
+    }
 
-    await invoke<void>("continue_upload");
-
-    setTimeout(() => {
-      showUploading.set(false);
+    let uploadCompleted = false;
+    try {
+      await invoke<void>("continue_upload_v2", { name: $releaseName });
+      uploadCompleted = true;
+    } catch (e) {
+      console.error("handleContinueUploading failed:", e);
+    } finally {
+      // Only hide the upload item if the upload actually finished (progress_upload cleared).
+      // If resume failed, progress_upload is still in config and the UI item must stay visible.
       inProcess.set(false);
       expandedIndex = null;
-    }, 2000);
-
-    await fetchVersions();
+      if (uploadCompleted) {
+        setTimeout(() => {
+          showUploading.set(false);
+        }, 2000);
+        await fetchVersions();
+      }
+    }
   }
 
-  function updateFilesCounts() {
-    invoke<RepoSyncState | null>("get_upload_manifest").then((manifest) => {
-      if (manifest) {
-        totalFiles.set(manifest.total_files_count);
-        uploadedFiles.set(manifest.uploaded_files_count);
-      }
-    });
+  async function handleCancelUploading() {
+    try {
+      await invoke<void>("cancel_upload", { name: $releaseName });
+    } catch (e) {
+      console.error("handleCancelUploading failed:", e);
+    }
   }
 
   function toggleExpand(index: number) {
@@ -102,18 +127,22 @@
   }
 
   $effect(() => {
-    if ($providersWasInited) {
+    // Re-check saved upload progress whenever providers init or the upload UI is hidden.
+    // If progress_upload still exists in config (interrupted upload), restore the item.
+    if ($providersWasInited && !$showUploading) {
       invoke<AppConfig>("get_config").then((config) => {
-        if (!$showUploading && !!config.progress_upload) {
+        // Guard: only restore if progress_upload is a real in-progress upload
+        // (name non-empty and not completed). An empty {} object from an old
+        // config or a manual reset must NOT be treated as an active upload.
+        if (
+          !!config.progress_upload &&
+          !!config.progress_upload.name &&
+          !config.progress_upload.is_completed
+        ) {
           showUploading.set(true);
           releaseName.set(config.progress_upload.name);
-
-          invoke<RepoSyncState | null>("get_upload_manifest").then((manifest) => {
-            if (manifest) {
-              totalFiles.set(manifest.total_files_count);
-              uploadedFiles.set(manifest.uploaded_files_count);
-            }
-          });
+          totalFiles.set(config.progress_upload.total_files);
+          uploadedFiles.set(config.progress_upload.uploaded_files.length);
         }
       });
     }
@@ -178,6 +207,9 @@
             <span class="placeholder-text">{$_("app.releases.stoped")} ({$releaseName})</span>
           {/if}
           {#if !$inProcess}
+            <button type="button" onclick={handleCancelUploading} class="continue-btn" style="margin-right: 0.5rem;">
+              {$_("app.releases.stop")}
+            </button>
             <button type="button" onclick={handleContinueUploading} class="continue-btn">
               {$_("app.releases.continue")}
             </button>

@@ -14,6 +14,15 @@ use tokio::sync::broadcast::Receiver;
 
 pub type NetSpeedCallback = Box<dyn Fn(&str, &str, u64, u64, f64) + Send + Sync>;
 
+/// Result of a single file download attempt.
+/// `Completed`  — file fully downloaded, `.part` removed.
+/// `Interrupted` — cancelled by the user / shutdown; `.part` saved, must NOT be treated as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadOutcome {
+  Completed,
+  Interrupted,
+}
+
 pub struct ServiceFiles {
   callback: Arc<NetSpeedCallback>,
 }
@@ -43,33 +52,46 @@ impl ServiceFiles {
     output_path: impl AsRef<Path>,
     seek: &Option<u64>,
     mut rx: Receiver<()>,
-  ) -> Result<()> {
+  ) -> Result<DownloadOutcome> {
     let api = api_client.current_provider()?;
-    let mut stream = api.get_blob_by_url_stream(&direct_url, seek).await?;
+    let mut stream = api.get_blob_by_url_stream(direct_url, seek).await?;
 
     let file_name = get_file_name(&output_path).unwrap();
     let part_file_path = format!("{}.part", output_path.as_ref().to_str().unwrap());
 
-    // 1. Открываем основной файл правильно
+    // Open the target file for writing (append mode for resume)
     let mut file = OpenOptions::new().write(true).create(true).open(&output_path).await?;
 
-    // Если мы докачиваем, перемещаем указатель в конец
+    // If resuming, seek to the end of already-downloaded bytes
+    let seek_start = seek.unwrap_or(0);
     let mut downloaded: u64 = 0;
-    if let Some(seek_pos) = seek {
-      file.seek(SeekFrom::Start(*seek_pos)).await?;
-      downloaded = *seek_pos;
+    if seek_start > 0 {
+      file.seek(SeekFrom::Start(seek_start)).await?;
+      downloaded = seek_start;
     }
 
     let start_time = Instant::now();
     let mut last_callback = Instant::now();
+    // Save .part at least every SAVE_INTERVAL to survive abrupt termination.
+    const SAVE_INTERVAL: Duration = Duration::from_millis(100);
+    let mut was_interrupted = false;
 
     while let Some(chunk) = stream.next().await {
-      // Проверка прерывания
-      if let Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Closed) = rx.try_recv() {
+      // Check for cancellation signal
+      let cancelled = match rx.try_recv() {
+        Ok(_) => true,
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty) => false,
+        Err(tokio::sync::broadcast::error::TryRecvError::Closed) => false, // sender gone — keep going, not a cancel
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => true,
+      };
+
+      if cancelled {
         log::info!("Download interrupted for file: {}", file_name);
-        // Сохраняем прогресс перед выходом
+        was_interrupted = true;
+        // Flush whatever we have so far, then persist `.part` and the partial file.
+        let _ = file.flush().await;
         Self::save_part_file(&part_file_path, downloaded).await?;
-        return Ok(());
+        break;
       }
 
       let chunk = chunk.context("Error reading chunk from response stream")?;
@@ -79,13 +101,13 @@ impl ServiceFiles {
       downloaded += chunk_len;
 
       let now = Instant::now();
-      if now.duration_since(last_callback) >= Duration::from_millis(100) {
-        // 2. Периодически сохраняем прогресс в .part файл
+      if now.duration_since(last_callback) >= SAVE_INTERVAL {
+        // Persist progress periodically so an abrupt process kill keeps the resume point.
         Self::save_part_file(&part_file_path, downloaded).await?;
 
         let elapsed = now.duration_since(start_time).as_secs_f64();
         let speed = if elapsed > 0.0 {
-          (downloaded - seek.unwrap_or(0)) as f64 / elapsed
+          (downloaded - seek_start) as f64 / elapsed
         } else {
           0.0
         };
@@ -95,18 +117,24 @@ impl ServiceFiles {
       }
     }
 
+    if was_interrupted {
+      // Final progress callback so the UI reflects the persisted partial size.
+      (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.0);
+      return Ok(DownloadOutcome::Interrupted);
+    }
+
     file.flush().await?;
 
-    // 3. После успешного завершения удаляем .part файл
+    // Download finished successfully — remove `.part`.
     let _ = tokio::fs::remove_file(&part_file_path).await;
 
-    (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.);
-    Ok(())
+    (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.0);
+    Ok(DownloadOutcome::Completed)
   }
 
-  // Вспомогательная функция для записи прогресса
+  // Persist the current downloaded byte count into a `.part` sidecar file.
   async fn save_part_file(path: &str, downloaded: u64) -> Result<()> {
-    // Записываем число как строку, это надежнее и проще для отладки
+    // Write number as string — robust and easy to debug.
     tokio::fs::write(path, downloaded.to_string().as_bytes()).await?;
     Ok(())
   }
