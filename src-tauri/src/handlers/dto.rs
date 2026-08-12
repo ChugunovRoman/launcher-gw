@@ -61,6 +61,8 @@ pub struct ReleaseManifest {
   pub compressed_size: u64,
   #[serde(default)]
   pub files: Vec<ReleaseManifestFile>,
+  #[serde(default)]
+  pub exe_path: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

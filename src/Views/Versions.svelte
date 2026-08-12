@@ -32,8 +32,6 @@
   let input1Needed = $state<number>(0);
   let input2Needed = $state<number>(0);
   let addVersionName = $state<boolean>(true);
-  let badPath1 = $state<boolean>(false);
-  let badPath2 = $state<boolean>(false);
 
   async function fetchVersionManifest(releaseName: string) {
     const found = $versions.find((v) => v.name === releaseName);
@@ -154,14 +152,8 @@
       return;
     }
 
-    if (/[\sА-Яа-я]/.test(version.download_path)) {
-      badPath1 = true;
-      return;
-    }
-    if (/[\sА-Яа-я]/.test(version.installed_path)) {
-      badPath2 = true;
-      return;
-    }
+    // Any install/download path is now allowed (Cyrillic/spacesincl.): the launcher handles non-ASCII via a subst virtual drive, so the old
+    // [\sА-Яа-я] path guards are removed.
 
     if (version.download_path === version.installed_path) {
       input1Needed = manifest.compressed_size + manifest.total_size * COFF_FROM_COMPRESSED_SIZE;
@@ -242,13 +234,6 @@
     await choosePath(async (selected) => {
       let path = selected;
 
-      badPath1 = false;
-      badPath2 = false;
-      if (/[\sА-Яа-я]/.test(selected)) {
-        badPath1 = true;
-        return;
-      }
-
       if (addVersionName) {
         path = await join(path, version.path);
       }
@@ -261,14 +246,7 @@
   }
   async function chooseDownloadDataPath(event: Event, version: Version) {
     event.stopPropagation();
-
-    badPath1 = false;
-    badPath2 = false;
     await choosePath((selected) => {
-      if (/[\sА-Яа-я]/.test(selected)) {
-        badPath2 = true;
-        return;
-      }
       updateVersion(version.name, () => ({
         download_path: selected,
       }));
@@ -296,10 +274,6 @@
     const selected = await choosePath(() => {});
 
     if (!selected) {
-      return;
-    }
-    if (/[\sА-Яа-я]/.test(selected)) {
-      badPath1 = true;
       return;
     }
 
@@ -365,8 +339,6 @@
   $effect(() => {
     $selectedVersion = $selectedVersion;
     $expandedIndex = $expandedIndex;
-    badPath1 = false;
-    badPath2 = false;
   });
 
   onMount(() => {
@@ -428,11 +400,6 @@
                 {/if}
               </button>
             </div>
-            {#if badPath1}
-              <div class="input-group">
-                <label class="input-label-2">{$_("app.input.checks.badPath")}</label>
-              </div>
-            {/if}
             <div class="input-group">
               <div class="input-buttons">
                 <Button size="slim" onclick={() => handleMoveVerson(version)}>
@@ -595,9 +562,6 @@
                         {$_("app.releases.browse")}
                       </button>
                     </div>
-                    {#if badPath1}
-                      <label class="input-label-2">{$_("app.input.checks.badPath")}</label>
-                    {/if}
                     {#if input1Checks}
                       <label class="input-label-2">{$_(`app.input.checks.${input1Checks}`)} {getInGb(input1Needed)}{$_("app.common.sfx")}</label>
                     {/if}
@@ -616,9 +580,6 @@
                         {$_("app.releases.browse")}
                       </button>
                     </div>
-                    {#if badPath2}
-                      <label class="input-label-2">{$_("app.input.checks.badPath")}</label>
-                    {/if}
                     {#if input2Checks}
                       <label class="input-label-2">{$_(`app.input.checks.${input2Checks}`)} {getInGb(input2Needed)}{$_("app.common.sfx")}</label>
                     {/if}

@@ -19,6 +19,7 @@ pub async fn create_split_archives(
   targetPath: String,
   chunkSize: u64,
   excludePatterns: Vec<String>,
+  exePath: Option<String>,
 ) -> Result<(), String> {
   let src_dir = Path::new(&sourceDir);
   let out_dir = Path::new(&targetPath);
@@ -71,7 +72,22 @@ pub async fn create_split_archives(
     total_size,
     compressed_size: 0,
     files: vec![],
+    exe_path: None,
   };
+
+  // Optional launcher exe (e.g. Stalker-CoC.exe) recorded in the manifest as a
+  // path RELATIVE to sourceDir (packPath). The launcher uses it to start the
+  // game directly, bypassing -fsltx / CWD workarounds.
+  manifest.exe_path = exePath.as_ref().filter(|s| !s.is_empty()).and_then(|abs| {
+    let p = Path::new(abs);
+    match p.strip_prefix(Path::new(&sourceDir)) {
+      Ok(rel) => Some(rel.to_string_lossy().replace('\\', "/")),
+      Err(_) => {
+        log::warn!("exe_path '{abs}' is not under packPath '{sourceDir}'; using basename");
+        p.file_name().map(|n| n.to_string_lossy().into_owned())
+      }
+    }
+  });
 
   // 2. Процесс упаковки
   let mut processed_size = 0;

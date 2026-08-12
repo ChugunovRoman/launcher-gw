@@ -27,6 +27,8 @@ pub struct Version {
   pub fsgame_path: Option<String>,
   pub userltx_path: Option<String>,
   #[serde(default)]
+  pub exe_path: Option<String>,
+  #[serde(default)]
   pub download_path: String,
   #[serde(default)]
   pub installed_updates: Vec<String>,

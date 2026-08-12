@@ -5,7 +5,7 @@
 
   import { progress, isInProcess, finish, completed, currentFile, processedSize, totalSize, status } from "../store/pack";
   import { providersWasInited } from "../store/main";
-  import { choosePath } from "../utils/path";
+  import { choosePath, chooseFilePath } from "../utils/path";
 
   import Progress from "../Components/Progress.svelte";
   import Spin from "../Components/Spin.svelte";
@@ -14,12 +14,16 @@
   let packPath = $state("");
   let targetPath = $state("");
   let chunkSize = $state(2000);
+  let exePath = $state("");
 
   async function chooseSrcPath() {
     await choosePath((selected) => (packPath = selected));
   }
   async function chooseTargetPath() {
     await choosePath((selected) => (targetPath = selected));
+  }
+  async function chooseExePath() {
+    await chooseFilePath((selected) => (exePath = selected));
   }
   async function startPack() {
     console.log("startPack");
@@ -37,6 +41,7 @@
       sourceDir: packPath,
       targetPath: targetPath,
       chunkSize,
+      exePath: exePath && exePath.length ? exePath : null,
       excludePatterns: [
         "*.git",
         "*.git/**",
@@ -147,6 +152,16 @@
       <input type="text" readonly bind:value={targetPath} placeholder={$_("app.pack.target.placeholder")} class="uuid-input" />
       <button type="button" onclick={chooseTargetPath} class="choose-btn">
         {$_("app.pack.target.btn")}
+      </button>
+    </div>
+  </div>
+
+  <div class="input-group">
+    <label class="input-label">{$_("app.pack.exePath")}</label>
+    <div class="input-row">
+      <input type="text" readonly bind:value={exePath} placeholder={$_("app.pack.exePath")} class="uuid-input" />
+      <button type="button" onclick={chooseExePath} class="choose-btn">
+        {$_("app.pack.source.btn")}
       </button>
     </div>
   </div>

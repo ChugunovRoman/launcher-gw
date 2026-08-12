@@ -252,6 +252,7 @@
       "size": "Size: ",
       "file": "File: ",
       "chunkSize": "The size limit for one archive in MB",
+      "exePath": "Game launcher exe path (optional)",
       "source": {
         "placeholder": "Path to game folder",
         "btn": "Browse"

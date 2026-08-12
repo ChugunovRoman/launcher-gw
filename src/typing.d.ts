@@ -51,6 +51,7 @@ declare interface Version {
   engine_path: string;
   fsgame_path: string;
   userltx_path: string;
+  exe_path?: string;
   installed_updates: string[];
   is_local: boolean;
   manifest?: ReleaseManifest;
@@ -146,6 +147,7 @@ declare interface ReleaseManifest {
   total_size: number;
   compressed_size: number;
   files: ReleaseManifestFile[];
+  exe_path?: string;
 }
 
 
