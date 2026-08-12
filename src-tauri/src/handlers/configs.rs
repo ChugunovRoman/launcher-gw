@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use crate::{
   configs::{AppConfig::AppConfig, RunParams},
   consts::MANIFEST_NAME,
+  handlers,
   providers::dto::ProviderStatus,
   service::main::Service,
   utils::encoding::decode,
@@ -29,7 +30,9 @@ pub async fn update_run_params(app: tauri::AppHandle, run_params: RunParams) -> 
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let mut config_guard = state.lock().await;
   config_guard.run_params = run_params;
-  config_guard.save().map_err(|e| e.to_string())
+  config_guard.save().map_err(|e| e.to_string())?;
+  // Also patch active version user.ltx (launch will patch again for the selected game).
+  handlers::user_ltx::apply_run_params_to_version_ltx(&config_guard)
 }
 
 #[tauri::command]

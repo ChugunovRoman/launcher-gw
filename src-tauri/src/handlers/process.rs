@@ -1,13 +1,11 @@
-use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-use tokio::sync::{Mutex, MutexGuard};
+use std::time::Duration;
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use tokio::sync::Mutex;
 
-use crate::configs::AppConfig::{AppConfig, LangType, RenderType, Version};
-use crate::configs::GameConfig::GameConfig;
-use crate::configs::{TmpLtx, UserLtx};
+use crate::configs::AppConfig::{AppConfig, Version};
 use crate::consts::*;
 use crate::service::keybind_manager::KeybindManager;
 use crate::utils::errors::log_full_error;
@@ -119,12 +117,73 @@ fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, 
   (exe, installed_path.to_path_buf(), true)
 }
 
+/// Find xrEngine PID after spawning a Stalker-* wrapper (exits quickly).
+/// Prefer child of `wrapper_pid`; else match exe under game roots.
+fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, installed_path: &Path) -> u32 {
+  if is_xray_engine {
+    return wrapper_pid;
+  }
+
+  let engine_name = game_exe();
+  let expected_under_cwd = cwd.join(BIN_DIR).join(&engine_name);
+  let expected_under_install = installed_path.join(BIN_DIR).join(&engine_name);
+  let wrapper = Pid::from(wrapper_pid as usize);
+
+  let refresh = ProcessRefreshKind::nothing()
+    .with_exe(UpdateKind::OnlyIfNotSet)
+    .with_cmd(UpdateKind::OnlyIfNotSet);
+
+  for _ in 0..40 {
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+
+    let mut path_matches: Vec<u32> = Vec::new();
+
+    for (pid, proc) in system.processes() {
+      let name = proc.name().to_string_lossy();
+      if !name.eq_ignore_ascii_case(&engine_name) {
+        continue;
+      }
+
+      if proc.parent() == Some(wrapper) {
+        log::info!("resolve_engine_pid: child of wrapper {} -> {}", wrapper_pid, pid.as_u32());
+        return pid.as_u32();
+      }
+
+      if let Some(exe) = proc.exe() {
+        if exe == expected_under_cwd.as_path()
+          || exe == expected_under_install.as_path()
+          || exe.file_name().is_some_and(|f| f.eq_ignore_ascii_case(std::ffi::OsStr::new(&engine_name)))
+        {
+          // Prefer exact path match; name-only matches collected as fallback.
+          if exe == expected_under_cwd.as_path() || exe == expected_under_install.as_path() {
+            log::info!("resolve_engine_pid: matched by path -> {}", pid.as_u32());
+            return pid.as_u32();
+          }
+          path_matches.push(pid.as_u32());
+        }
+      }
+    }
+
+    if let Some(pid) = path_matches.into_iter().max() {
+      log::info!("resolve_engine_pid: matched by name fallback -> {}", pid);
+      return pid;
+    }
+
+    std::thread::sleep(Duration::from_millis(50));
+  }
+
+  log::warn!(
+    "resolve_engine_pid: engine not found; falling back to wrapper pid {}",
+    wrapper_pid
+  );
+  wrapper_pid
+}
+
 #[tauri::command]
 pub async fn run_game(
   app: tauri::AppHandle,
   keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
-  user_ltx: tauri::State<'_, Arc<Mutex<UserLtx>>>,
-  tmp_ltx: tauri::State<'_, Arc<Mutex<TmpLtx>>>,
   version: Version,
 ) -> Result<u32, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
@@ -138,19 +197,18 @@ pub async fn run_game(
     Some(value) => Path::new(value).to_path_buf(),
     None => Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX),
   };
-
-  let mut user_config = user_ltx.lock().await;
-  user_config.0.set_file_path(&user_ltx_path);
-  update_ltx_config(&mut user_config.0, &config_guard, &keybind_manager)
-    .await
-    .map_err(|e| e.to_string())?;
-
-  let mut tmp_config = tmp_ltx.lock().await;
   let tmp_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(TMP_LTX);
-  tmp_config.0.set_file_path(&tmp_ltx_path);
-  update_ltx_config(&mut tmp_config.0, &config_guard, &keybind_manager)
-    .await
-    .map_err(|e| e.to_string())?;
+
+  // Pre-launch only: patch launcher settings into the selected game's user.ltx.
+  // Do NOT rewrite user.ltx after the game exits (engine owns saves during/after session).
+  crate::handlers::user_ltx::prepare_ltx_for_launch(
+    &user_ltx_path,
+    &tmp_ltx_path,
+    &config_guard.run_params,
+    &keybind_manager,
+    config_guard.selected_profile.as_deref(),
+  )
+  .await?;
 
   // Do NOT pass -fsltx: the engine resolves fsgame.ltx relative to the current
   // working directory (current_dir = game root below). That works with Cyrillic
@@ -256,31 +314,57 @@ pub async fn run_game(
     .spawn()
     .map_err(|e| e.to_string())?;
 
-  let pid = child.id();
-  config_guard.latest_pid = i64::from(pid);
+  let wrapper_pid = child.id();
+  // Keep handle only when we need to wait (subst cleanup); otherwise drop so
+  // the process is fully detached from the launcher.
+  #[cfg(target_os = "windows")]
+  let child_for_subst = if subst_drive.is_some() { Some(child) } else { None };
+  #[cfg(not(target_os = "windows"))]
+  drop(child);
+
+  let installed_for_pid = installed_path.clone();
+  let cwd_for_pid = effective_cwd.clone();
+  let engine_pid = tokio::task::spawn_blocking(move || {
+    resolve_engine_pid(wrapper_pid, is_xray_engine, &cwd_for_pid, &installed_for_pid)
+  })
+  .await
+  .map_err(|e| e.to_string())?;
+
+  config_guard.latest_pid = i64::from(engine_pid);
   config_guard.save().map_err(|e| {
     log_full_error(&e);
     e.to_string()
   })?;
 
-  // If we created a subst drive, unmount it after the engine exits. Keep the
-  // Child handle in a blocking task so we can detect exit; the PID captured
-  // above is what the frontend uses via is_process_alive().
+  // If we created a subst drive, unmount it after the engine exits.
+  // Wait on engine PID (wrapper may already be gone). Do not rewrite user.ltx.
   #[cfg(target_os = "windows")]
   {
     if let Some(drive) = subst_drive {
+      let wait_pid = engine_pid;
+      let _child = child_for_subst;
       tokio::task::spawn_blocking(move || {
-        let mut child = child;
-        match child.wait() {
-          Ok(status) => log::info!("Engine exited (status {:?}); removing subst {}:", status, drive),
-          Err(e) => log::warn!("Failed to wait on engine ({}); removing subst {} anyway", e, drive),
+        drop(_child);
+        let mut system = System::new();
+        let pid_sys = Pid::from(wait_pid as usize);
+        loop {
+          system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid_sys]),
+            true,
+            ProcessRefreshKind::nothing(),
+          );
+          if !system.processes().contains_key(&pid_sys) {
+            break;
+          }
+          std::thread::sleep(Duration::from_millis(500));
         }
+        log::info!("Engine exited (pid {}); removing subst {}:", wait_pid, drive);
         subst_workaround::remove(drive);
       });
     }
   }
 
-  Ok(pid)
+  Ok(engine_pid)
 }
 
 #[tauri::command]
@@ -296,70 +380,6 @@ pub fn is_process_alive(pid: u32) -> bool {
   let pid_sys = Pid::from(pid as usize);
   system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid_sys]), true, ProcessRefreshKind::nothing());
   system.processes().contains_key(&pid_sys)
-}
-
-async fn update_ltx_config(
-  ltx: &mut GameConfig,
-  config: &MutexGuard<'_, AppConfig>,
-  keybind_manager: &tauri::State<'_, Arc<KeybindManager>>,
-) -> Result<()> {
-  ltx.load().ok();
-
-  ltx.set("vid_mode".to_string(), config.run_params.vid_mode.clone());
-
-  let renderer = get_renderer(config.run_params.render.clone());
-  ltx.set("renderer".to_string(), renderer.clone());
-
-  let lang = get_lang(config.run_params.lang.clone());
-  ltx.set("g_language".to_string(), lang.clone());
-  ltx.set("g_language_ltx".to_string(), lang.clone());
-
-  ltx.set("fov".to_string(), config.run_params.fov.clone().to_string());
-  ltx.set("hud_fov".to_string(), config.run_params.hud_fov.clone().to_string());
-
-  ltx.set(
-    "keypress_on_start".to_string(),
-    if config.run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
-  );
-
-  ltx.set("rs_v_sync".to_string(), if config.run_params.check_vsync { "1" } else { "0" }.to_string());
-
-  ltx.set(
-    "rs_fullscreen".to_string(),
-    if config.run_params.windowed_mode { "0" } else { "1" }.to_string(),
-  );
-
-  let profile = if let Some(profile_name) = &config.selected_profile {
-    log::debug!("find profile by name: {}", &profile_name);
-    keybind_manager.get_profile(&profile_name).await
-  } else {
-    log::debug!("profile by name: {:?} not found !", &config.selected_profile);
-    None
-  };
-  if let Some(exist_profile) = profile {
-    log::debug!("exist_profile: {:?} Do merge", &config.selected_profile);
-    ltx.merge(&exist_profile);
-  }
-
-  ltx.save().ok();
-
-  Ok(())
-}
-
-fn get_lang(lng: LangType) -> String {
-  match lng {
-    LangType::Rus => "rus".to_string(),
-    LangType::Eng => "eng".to_string(),
-  }
-}
-fn get_renderer(renderer: RenderType) -> String {
-  match renderer {
-    RenderType::RendererR2 => "renderer_r2".to_string(),
-    RenderType::RendererR25 => "renderer_r2.5".to_string(),
-    RenderType::RendererR3 => "renderer_r3".to_string(),
-    RenderType::RendererR4 => "renderer_r4".to_string(),
-    RenderType::RendererRgl => "renderer_rgl".to_string(),
-  }
 }
 
 #[tauri::command]

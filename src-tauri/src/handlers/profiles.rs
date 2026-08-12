@@ -40,29 +40,60 @@ pub async fn rename_profile(keybind_manager: tauri::State<'_, Arc<KeybindManager
 }
 
 #[tauri::command]
-pub async fn set_apply_profile(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, profileName: String, apply: bool) -> Result<(), String> {
+pub async fn set_apply_profile(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
+  profileName: String,
+  apply: bool,
+) -> Result<(), String> {
   log::debug!("set_apply_profile, profileName: {}, apply: {}", &profileName, &apply);
-  {
+  let cfg_snapshot = {
     let mut cfg_guard = app_config.lock().await;
-    cfg_guard.selected_profile = if apply { Some(profileName) } else { None };
+    cfg_guard.selected_profile = if apply { Some(profileName.clone()) } else { None };
     cfg_guard.save().map_err(|e| e.to_string())?;
+    cfg_guard.clone()
   };
+
+  if apply {
+    crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg_snapshot, &keybind_manager, &profileName).await?;
+  }
 
   Ok(())
 }
 
 #[tauri::command]
-pub async fn save_key_profiles(keybind_manager: tauri::State<'_, Arc<KeybindManager>>, profiles: Vec<ProfileItem>) -> Result<(), String> {
+pub async fn save_key_profiles(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
+  profiles: Vec<ProfileItem>,
+) -> Result<(), String> {
   log::debug!("save_key_profiles: Saving {} profiles", profiles.len());
 
   keybind_manager.save_all_profiles(profiles).await.map_err(|e| e.to_string())?;
 
+  let cfg = app_config.lock().await.clone();
+  if let Some(profile_name) = cfg.selected_profile.clone() {
+    crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg, &keybind_manager, &profile_name).await?;
+  }
+
   Ok(())
 }
 
 #[tauri::command]
-pub async fn save_single_profile(keybind_manager: tauri::State<'_, Arc<KeybindManager>>, profile: ProfileItem) -> Result<(), String> {
-  keybind_manager.save_all_profiles(vec![profile]).await.map_err(|e| e.to_string())
+pub async fn save_single_profile(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
+  profile: ProfileItem,
+) -> Result<(), String> {
+  let name = profile.name.clone();
+  keybind_manager.save_all_profiles(vec![profile]).await.map_err(|e| e.to_string())?;
+
+  let cfg = app_config.lock().await.clone();
+  if cfg.selected_profile.as_deref() == Some(name.as_str()) {
+    crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg, &keybind_manager, &name).await?;
+  }
+
+  Ok(())
 }
 
 #[tauri::command]
