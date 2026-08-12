@@ -9,9 +9,16 @@ use crate::{
   utils::{encoding::read_cp1251_file, resources::game_exe},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use futures_util::future::join_all;
 use regex::Regex;
+
+/// Identifies the primary ("main_1") repository of a release.
+/// Works for both providers: Gitlab names repos "main_1" (bare),
+/// while Github names them "<prefix>_main_1". Both forms match here.
+fn is_main_repo(name: &str) -> bool {
+  name.starts_with("main_1") || name.ends_with("main_1")
+}
 
 pub trait ServiceGetRelease {
   async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>>;
@@ -62,8 +69,8 @@ impl ServiceGetRelease for Service {
 
     let project = repos
       .iter()
-      .find(|r| r.name.starts_with("main_1") || r.name.ends_with("main_1"))
-      .expect(&format!("Repo main_1 not found for release: {}", &release_name));
+      .find(|r| is_main_repo(&r.name))
+      .ok_or_else(|| anyhow!("Repo main_1 not found for release: {}", &release_name))?;
 
     let project_id = if api.is_suppot_subgroups() {
       project.id.to_string()
@@ -87,8 +94,17 @@ impl ServiceGetRelease for Service {
 
     let main_repo = repos
       .iter()
-      .find(|r| r.name.contains("_main_1"))
-      .expect(&format!("Repo main_1 not found for release: {}", &release_name));
+      .find(|r| is_main_repo(&r.name))
+      .ok_or_else(|| {
+        // Log available repo names so a naming mismatch is diagnosable instead of a bare panic.
+        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        log::error!(
+          "main_1 repo not found for release '{}'. Available repos: {:?}",
+          &release_name,
+          names
+        );
+        anyhow!("Repo main_1 not found for release: {}", &release_name)
+      })?;
 
     let project_id = if api.is_suppot_subgroups() {
       main_repo.id.to_string()
