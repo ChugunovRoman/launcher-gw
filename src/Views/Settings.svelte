@@ -66,14 +66,38 @@
       });
     }
   });
+  // Versions are already loaded at app startup (versions-loaded event). This
+  // effect must NOT re-fetch on every Settings mount — otherwise it overwrites
+  // the live download state (inProgress/filesProgress/downloadSpeed) of a
+  // version that is currently downloading. Skip the initial run; only refresh
+  // when the user actually changes the server.
+  let providerInitialized = false;
   $effect(() => {
     const provider = $radioApiProvider;
+    if (!providerInitialized) {
+      providerInitialized = true;
+      return;
+    }
     const timer = setTimeout(() => {
       invoke("set_current_api_provider", { provider });
 
       invoke<Version[]>("get_available_versions").then(async (data) => {
         const separ = await sep();
-        versions.set(data.map((version) => prepareVersionItem($appConfig, version, separ)).filter((v) => !hasLocalVersion(v)));
+        // Preserve the live download/pause state: prepareVersionItem always sets
+        // inProgress=false and resets filesProgress/downloadSpeed, which would
+        // wipe the UI of a version currently downloading or paused.
+        const existing = new Map($versions.map((v) => [v.name, v]));
+        versions.set(
+          data
+            .map((version) => {
+              const live = existing.get(version.name);
+              if (live && (live.inProgress || live.isStoped)) {
+                return live;
+              }
+              return prepareVersionItem($appConfig, version, separ);
+            })
+            .filter((v) => !hasLocalVersion(v))
+        );
       });
     }, 200);
 

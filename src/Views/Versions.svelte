@@ -344,7 +344,13 @@
   });
 
   onMount(() => {
-    $expandedIndex = null;
+    // Versions.svelte is destroyed and remounted on every view switch (App.svelte
+    // uses a keyed each block). Don't blindly collapse the panel on mount: if a
+    // version is actively downloading or paused, re-expand it so the progress UI
+    // survives navigation away and back. Otherwise (nothing in progress) keep the
+    // default collapsed state.
+    const inProgressIdx = $versions.findIndex((v) => v.inProgress || v.isStoped);
+    $expandedIndex = inProgressIdx >= 0 ? inProgressIdx + $localVersions.size : null;
   });
 </script>
 
