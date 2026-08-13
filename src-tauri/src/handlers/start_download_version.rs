@@ -291,10 +291,6 @@ pub async fn start_download_version(
         drop(config_guard);
         let _ = fs::remove_file(&archive_path);
       }
-
-      if data.is_latest {
-        break;
-      }
     }
     log::info!("Unzip queue finished");
   });
@@ -385,7 +381,6 @@ pub async fn start_download_version(
                 file_name: file_task.name.clone(),
                 archive_path: file_path.clone(),
                 destination_path: PathBuf::from(&version_install_path_c),
-                is_latest: current >= total_file_count,
               })
               .await;
 

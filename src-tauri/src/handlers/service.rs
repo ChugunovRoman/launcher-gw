@@ -135,7 +135,17 @@ pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppC
       .clone()
   };
 
-  let _ = fs::remove_dir_all(Path::new(&version.download_path)).map_err(|e| e.to_string())?;
+  // The download dir may already be absent (already removed in a prior run, or
+  // cleared by the user/OS). Cleanup is best-effort: treat NotFound as success
+  // instead of bubbling os error 3 up to the frontend, which previously aborted
+  // the post-unpack sequence (clear_progress_version never ran, UI hung).
+  match fs::remove_dir_all(Path::new(&version.download_path)) {
+    Ok(_) => {}
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+      log::warn!("remove_download_version: dir already absent: {}", &version.download_path);
+    }
+    Err(e) => return Err(e.to_string()),
+  }
 
   Ok(())
 }

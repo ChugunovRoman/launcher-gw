@@ -43,6 +43,22 @@ pub async fn continue_download_version(
   let mut file_sizes: Vec<DownlaodFileStat> = vec![];
   let (version, mut files_to_download, files_to_unpack) = {
     let mut cfg_guard = app_config.lock().await;
+
+    // Ensure the download dir exists on resume: start_download_version creates it,
+    // but continue_download_version previously did NOT, so a post-restart resume
+    // could finish "successfully" with no real files on disk, then fail downstream
+    // when removing an already-absent download dir (os error 3).
+    {
+      let version_data = cfg_guard
+        .progress_download
+        .get(&versionName)
+        .ok_or_else(|| "Version not found".to_string())?;
+      let download_dir = Path::new(&version_data.download_path);
+      if !download_dir.exists() {
+        std::fs::create_dir_all(download_dir).map_err(|e| e.to_string())?;
+      }
+    }
+
     let mut to_download = Vec::new();
     let mut to_unpack = Vec::new();
     let version_data = {
@@ -180,10 +196,6 @@ pub async fn continue_download_version(
         drop(config_guard);
         let _ = fs::remove_file(&archive_path);
       }
-
-      if data.is_latest {
-        break;
-      }
     }
     log::info!("Unzip queue finished");
   });
@@ -200,10 +212,6 @@ pub async fn continue_download_version(
         file_name: file.name.clone(),
         archive_path: file_path,
         destination_path: PathBuf::from(&version.installed_path),
-        // NOTE: do NOT increment downloaded_cnt here — these files are already
-        // counted in version.downloaded_files_cnt. is_latest is computed by the
-        // download workers based on the real total after they finish their files.
-        is_latest: false,
       })
       .await;
   }
@@ -279,7 +287,6 @@ pub async fn continue_download_version(
                 file_name: file_task.name.clone(),
                 archive_path: file_path.clone(),
                 destination_path: PathBuf::from(&version_install_path_c),
-                is_latest: current >= total_file_count,
               })
               .await;
 

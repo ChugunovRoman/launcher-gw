@@ -89,5 +89,4 @@ pub struct UnzipTask {
   pub file_name: String,
   pub archive_path: PathBuf,
   pub destination_path: PathBuf,
-  pub is_latest: bool,
 }

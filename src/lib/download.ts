@@ -113,11 +113,26 @@ export async function initDownloadListeners() {
   unlisten.set('download-unpack-version', await listen('download-unpack-version', async (event: Event<string>) => {
     const versionName = event.payload;
 
-    await invoke<void>("add_installed_version_from_config", { versionName });
+    // Each post-unpack step is independent cleanup. A failure in one must not
+    // abort the others — otherwise clear_progress_version never runs and the UI
+    // hangs in the "in progress" state (see remove_download_version NotFound bug).
+    try {
+      await invoke<void>("add_installed_version_from_config", { versionName });
+    } catch (e) {
+      console.error("add_installed_version_from_config failed:", e);
+    }
 
-    await invoke<void>("remove_download_version", { versionName });
+    try {
+      await invoke<void>("remove_download_version", { versionName });
+    } catch (e) {
+      console.error("remove_download_version failed:", e);
+    }
 
-    await invoke<void>("clear_progress_version", { versionName });
+    try {
+      await invoke<void>("clear_progress_version", { versionName });
+    } catch (e) {
+      console.error("clear_progress_version failed:", e);
+    }
 
     if (localVersions.size() === 0) {
       selectedVersion.set(undefined);
@@ -127,7 +142,11 @@ export async function initDownloadListeners() {
 
     if (!get(selectedVersion)) {
       selectedVersion.set([...get(localVersions).keys()][0]);
-      await invoke<void>("set_current_game_version", { versionName: get(selectedVersion) });
+      try {
+        await invoke<void>("set_current_game_version", { versionName: get(selectedVersion) });
+      } catch (e) {
+        console.error("set_current_game_version failed:", e);
+      }
     }
 
     expandedIndex.set(null);
