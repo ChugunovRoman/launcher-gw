@@ -1,7 +1,7 @@
 use crate::{
   configs::AppConfig::{AppConfig, FileProgress, VersionProgress},
   consts::PULL_FILES_SIZE,
-  handlers::dto::{DownloadProgress, DownloadStatus, UnzipTask},
+  handlers::dto::{DownlaodFileStat, DownloadProgress, DownloadStatus, UnzipTask},
   service::{
     files::{DownloadOutcome, ServiceFiles},
     get_release::ServiceGetRelease,
@@ -220,6 +220,18 @@ pub async fn start_download_version(
       e.to_string()
     })?;
   }
+
+  let mut file_sizes: Vec<DownlaodFileStat> = version
+    .files
+    .values()
+    .map(|f| DownlaodFileStat {
+      name: f.name.clone(),
+      unpacked: false,
+      size: Some(0),
+    })
+    .collect();
+  file_sizes.sort_by(|a, b| a.name.cmp(&b.name));
+  let _ = app.emit("download-version-files", (&versionName, &file_sizes));
 
   let _ = app.emit(
     "download-version",

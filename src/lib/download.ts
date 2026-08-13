@@ -33,7 +33,7 @@ export async function initDownloadListeners() {
     const [speedValue, sfxValue] = formatSpeedBytesPerSec(speed);
 
     updateVersion(versionName, (version) => {
-      const map = version.filesProgress;
+      const map = new Map(version.filesProgress);
       let totalSpeed = 0;
       let downloadFilesTotalBytes = 0;
 
@@ -84,20 +84,38 @@ export async function initDownloadListeners() {
     const [versionName, fileSizesMap] = event.payload;
 
     updateVersion(versionName, (version) => {
-      const map = new Map();
+      const map = new Map(version.filesProgress);
+      const totals = new Map((version.manifest?.files || []).map((f) => [f.name, f.size]));
 
       for (const item of fileSizesMap) {
-        const old = version.filesProgress.get(item.name);
+        const old = map.get(item.name);
+        const totalFileBytes = old?.totalFileBytes || totals.get(item.name) || 0;
+        const downloadedFileBytes = item.size || 0;
         map.set(item.name, {
-          downloadProgress: old ? (old.downloadedFileBytes / old?.totalFileBytes || 0) * 100 : 0,
-          downloadedFileBytes: item.size || 0,
-          totalFileBytes: old?.totalFileBytes || 0,
-          unpackProgress: item.unpacked ? 100 : 0,
-          downloadSpeed: 0,
-          speedValue: 0,
-          sfxValue: "",
-          status: item.unpacked ? 3 : 0,
+          downloadProgress: totalFileBytes > 0 ? (downloadedFileBytes / totalFileBytes) * 100 : 0,
+          downloadedFileBytes,
+          totalFileBytes,
+          unpackProgress: item.unpacked ? 100 : (old?.unpackProgress || 0),
+          downloadSpeed: old?.downloadSpeed || 0,
+          speedValue: old?.speedValue || 0,
+          sfxValue: old?.sfxValue || "",
+          status: item.unpacked ? 3 : (old?.status || 0),
         });
+      }
+
+      for (const file of version.manifest?.files || []) {
+        if (!map.has(file.name)) {
+          map.set(file.name, {
+            downloadProgress: 0,
+            downloadedFileBytes: 0,
+            totalFileBytes: file.size,
+            unpackProgress: 0,
+            downloadSpeed: 0,
+            speedValue: 0,
+            sfxValue: "",
+            status: 0,
+          });
+        }
       }
 
       return {

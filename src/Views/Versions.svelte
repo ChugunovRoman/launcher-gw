@@ -34,36 +34,41 @@
   let input2Needed = $state<number>(0);
   let addVersionName = $state<boolean>(true);
 
+  function filesProgressFromManifest(manifest: ReleaseManifest, old?: Map<string, VersionFileDownload>) {
+    const map = new Map<string, VersionFileDownload>();
+    for (const file of manifest.files) {
+      const prev = old?.get(file.name);
+      map.set(file.name, {
+        downloadProgress: prev && file.size > 0 ? (prev.downloadedFileBytes / file.size) * 100 : 0,
+        downloadedFileBytes: prev?.downloadedFileBytes || 0,
+        totalFileBytes: file.size,
+        unpackProgress: prev?.unpackProgress || 0,
+        downloadSpeed: 0,
+        speedValue: 0,
+        sfxValue: "",
+        status: prev?.status || 0,
+      });
+    }
+    return map;
+  }
+
   async function fetchVersionManifest(releaseName: string) {
     const found = $versions.find((v) => v.name === releaseName);
-    if (found && found.manifest) {
+    if (found?.manifest) {
+      if (!found.filesProgress || found.filesProgress.size === 0) {
+        updateVersion(releaseName, (version) => ({
+          filesProgress: filesProgressFromManifest(found.manifest!, version.filesProgress),
+        }));
+      }
       return;
     }
 
     const manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
 
-    updateVersion(releaseName, (version) => {
-      let map = new Map<string, VersionFileDownload>();
-      for (const file of manifest.files) {
-        const old = version.filesProgress && version.filesProgress.get(file.name);
-
-        map.set(file.name, {
-          downloadProgress: old ? (old.downloadedFileBytes / file.size) * 100 : 0,
-          downloadedFileBytes: old?.downloadedFileBytes || 0,
-          totalFileBytes: file.size,
-          unpackProgress: 0,
-          downloadSpeed: 0,
-          speedValue: 0,
-          sfxValue: "",
-          status: old?.status || 0,
-        });
-      }
-
-      return {
-        manifest,
-        filesProgress: map,
-      };
-    });
+    updateVersion(releaseName, (version) => ({
+      manifest,
+      filesProgress: filesProgressFromManifest(manifest, version.filesProgress),
+    }));
   }
 
   async function handleContinueDownload(
@@ -217,6 +222,9 @@
     updateVersion(releaseName, () => ({
       inProgress: true,
       isStoped: false,
+      wasCanceled: false,
+      filesProgress: filesProgressFromManifest(manifest),
+      status: DownloadStatus.DownloadFiles,
     }));
 
     try {
