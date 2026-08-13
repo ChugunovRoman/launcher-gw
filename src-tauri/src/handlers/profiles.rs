@@ -7,8 +7,35 @@ use tokio::sync::Mutex;
 
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig},
+  consts::DEFAULT_BIND_LTX,
   service::{dto::ProfileItem, keybind_manager::KeybindManager},
 };
+
+pub async fn sync_selected_profile(cfg: &mut AppConfig, keybind_manager: &KeybindManager) -> bool {
+  let profiles = keybind_manager.get_profiles().await;
+  let resolved = match cfg.selected_profile.as_deref() {
+    Some(name) if profiles.contains_key(name) => name.to_string(),
+    _ => {
+      if profiles.contains_key(DEFAULT_BIND_LTX) {
+        DEFAULT_BIND_LTX.to_string()
+      } else {
+        profiles.keys().next().cloned().unwrap_or_else(|| DEFAULT_BIND_LTX.to_string())
+      }
+    }
+  };
+
+  if cfg.selected_profile.as_deref() != Some(resolved.as_str()) {
+    log::warn!(
+      "selected_profile {:?} missing; falling back to {}",
+      cfg.selected_profile,
+      resolved
+    );
+    cfg.selected_profile = Some(resolved);
+    true
+  } else {
+    false
+  }
+}
 
 #[tauri::command]
 pub async fn add_profile(keybind_manager: tauri::State<'_, Arc<KeybindManager>>, name: String, basedOnProfile: String) -> Result<(), String> {
@@ -23,18 +50,43 @@ pub async fn add_profile(keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
 }
 
 #[tauri::command]
-pub async fn delete_profile(keybind_manager: tauri::State<'_, Arc<KeybindManager>>, name: String) -> Result<(), String> {
+pub async fn delete_profile(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
+  name: String,
+) -> Result<(), String> {
   log::debug!("delete_profile, name: {}", &name);
 
   keybind_manager.delete_profile(&name).await.map_err(|e| e.to_string())?;
+
+  {
+    let mut cfg = app_config.lock().await;
+    if cfg.selected_profile.as_deref() == Some(name.as_str()) {
+      cfg.selected_profile = Some(DEFAULT_BIND_LTX.to_string());
+      cfg.save().map_err(|e| e.to_string())?;
+    }
+  }
 
   Ok(())
 }
 
 #[tauri::command]
-pub async fn rename_profile(keybind_manager: tauri::State<'_, Arc<KeybindManager>>, oldName: String, newName: String) -> Result<(), String> {
+pub async fn rename_profile(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
+  oldName: String,
+  newName: String,
+) -> Result<(), String> {
   log::debug!("rename_profile, oldName: {}, newName: {}", &oldName, &newName);
   keybind_manager.rename_profile(&oldName, &newName).await.map_err(|e| e.to_string())?;
+
+  {
+    let mut cfg = app_config.lock().await;
+    if cfg.selected_profile.as_deref() == Some(oldName.as_str()) {
+      cfg.selected_profile = Some(newName);
+      cfg.save().map_err(|e| e.to_string())?;
+    }
+  }
 
   Ok(())
 }
@@ -49,7 +101,10 @@ pub async fn set_apply_profile(
   log::debug!("set_apply_profile, profileName: {}, apply: {}", &profileName, &apply);
   let cfg_snapshot = {
     let mut cfg_guard = app_config.lock().await;
-    cfg_guard.selected_profile = if apply { Some(profileName.clone()) } else { None };
+    if !profileName.is_empty() {
+      cfg_guard.selected_profile = Some(profileName.clone());
+    }
+    cfg_guard.apply_key_profile = Some(apply);
     cfg_guard.save().map_err(|e| e.to_string())?;
     cfg_guard.clone()
   };
@@ -72,8 +127,10 @@ pub async fn save_key_profiles(
   keybind_manager.save_all_profiles(profiles).await.map_err(|e| e.to_string())?;
 
   let cfg = app_config.lock().await.clone();
-  if let Some(profile_name) = cfg.selected_profile.clone() {
-    crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg, &keybind_manager, &profile_name).await?;
+  if cfg.should_apply_key_profile() {
+    if let Some(profile_name) = cfg.selected_profile.clone() {
+      crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg, &keybind_manager, &profile_name).await?;
+    }
   }
 
   Ok(())
@@ -89,7 +146,7 @@ pub async fn save_single_profile(
   keybind_manager.save_all_profiles(vec![profile]).await.map_err(|e| e.to_string())?;
 
   let cfg = app_config.lock().await.clone();
-  if cfg.selected_profile.as_deref() == Some(name.as_str()) {
+  if cfg.should_apply_key_profile() && cfg.selected_profile.as_deref() == Some(name.as_str()) {
     crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg, &keybind_manager, &name).await?;
   }
 

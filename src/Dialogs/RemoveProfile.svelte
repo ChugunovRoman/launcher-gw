@@ -3,16 +3,24 @@
   import Modal from "./Base.svelte";
   import Button from "../Components/Button.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { profileKeyMap, profiles, removeProfileName, showDlgRemoveProfile, updateCurrentBindsMap } from "../store/profiles";
+  import { profileKeyMap, profiles, removeProfileName, selectedProfile, showDlgRemoveProfile, updateCurrentBindsMap, applyKeyProfile } from "../store/profiles";
+  import { persistProfileSelection } from "../lib/profiles";
+  import { DEFAULT_BIND_LTX } from "../consts";
 
   function handleClose() {
     console.log("Dlg was closed");
   }
   async function yesHandler() {
-    await invoke<void>("delete_profile", { name: $removeProfileName });
+    const removed = $removeProfileName!;
+    await invoke<void>("delete_profile", { name: removed });
 
-    profileKeyMap.delItem($removeProfileName!);
-    profiles.set($profiles.filter((p) => p.value !== $removeProfileName));
+    profileKeyMap.delItem(removed);
+    profiles.set($profiles.filter((p) => p.value !== removed));
+
+    if ($selectedProfile === removed) {
+      selectedProfile.set(DEFAULT_BIND_LTX);
+      await persistProfileSelection(DEFAULT_BIND_LTX, $applyKeyProfile);
+    }
 
     updateCurrentBindsMap();
 

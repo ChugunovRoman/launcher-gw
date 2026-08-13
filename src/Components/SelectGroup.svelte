@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Trash2 } from "lucide-svelte";
 
-  let { options = [] as Option[], value = $bindable(), name = "radio-group", ondelete = () => {}, excludeDeleteFor = [] } = $props();
+  let { options = [] as Option[], value = $bindable(), name = "radio-group", ondelete = () => {}, onchange = (_v: string) => {}, excludeDeleteFor = [] } = $props();
 </script>
 
 <div class="select-group">
@@ -9,7 +9,7 @@
     <div class="item">
       <label class="item-label">
         <div class="radio-wrapper">
-          <input type="radio" {name} value={option.value} bind:group={value} />
+          <input type="radio" {name} value={option.value} bind:group={value} onchange={() => onchange(option.value)} />
         </div>
         <span class="label-text">{option.label}</span>
       </label>

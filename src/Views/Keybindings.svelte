@@ -23,7 +23,7 @@
   import Button from "../Components/Button.svelte";
   import Bg from "../Components/Bg.svelte";
   import Checkbox from "../Components/Checkbox.svelte";
-  import { sortOptions, transformToKeymapArray } from "../lib/profiles";
+  import { sortOptions, transformToKeymapArray, persistProfileSelection } from "../lib/profiles";
 
   let nameExist = $state(false);
   let renameDefaultError = $state(false);
@@ -31,30 +31,40 @@
   let saving2 = $state(false);
   let selectedProfileName = $state("");
 
-  function addProfileHandler() {
+  async function addProfileHandler() {
     nameExist = false;
 
+    if (!$selectedProfile) return;
     if ($profiles.find((p) => p.label === selectedProfileName || p.value === selectedProfileName)) {
       nameExist = true;
       return;
     }
 
     const name = `${selectedProfileName}.ltx`;
-    profileKeyMap.setItem(name, $profileKeyMap.get($selectedProfile!)!);
+    try {
+      await invoke<void>("add_profile", { name, basedOnProfile: $selectedProfile });
+    } catch (e) {
+      console.error("add_profile failed:", e);
+      return;
+    }
+
+    profileKeyMap.setItem(name, $profileKeyMap.get($selectedProfile)!);
     profiles.push({
       label: selectedProfileName.replace(".ltx", ""),
       value: name,
     });
+    selectedProfile.set(name);
     updateCurrentBindsMap();
     sortOptions();
-
-    invoke<void>("add_profile", { name, basedOnProfile: $selectedProfile });
+    await persistProfileSelection(name, $applyKeyProfile);
   }
 
   function handleCheckApply() {
-    invoke<void>("set_apply_profile", { profileName: $selectedProfile || "", apply: $applyKeyProfile });
+    if ($selectedProfile) {
+      persistProfileSelection($selectedProfile, $applyKeyProfile);
+    }
   }
-  function renameHandler() {
+  async function renameHandler() {
     nameExist = false;
 
     const oldName = $selectedProfile!;
@@ -71,6 +81,13 @@
     }
 
     const name = `${selectedProfileName.replace(".ltx", "")}.ltx`;
+    try {
+      await invoke<void>("rename_profile", { oldName, newName: name });
+    } catch (e) {
+      console.error("rename_profile failed:", e);
+      return;
+    }
+
     const oldValue = $profileKeyMap.get(oldName)!;
     profileKeyMap.delItem(oldName);
     profileKeyMap.setItem(name, oldValue);
@@ -82,8 +99,7 @@
     selectedProfile.set(name);
     updateCurrentBindsMap();
     sortOptions();
-
-    invoke<void>("rename_profile", { oldName, newName: name });
+    await persistProfileSelection(name, $applyKeyProfile);
   }
 
   async function handleSave() {
@@ -191,6 +207,9 @@
       console.error("Ошибка при экспорте:", err);
     }
   }
+  async function handleSelectProfile(name: string) {
+    await persistProfileSelection(name, $applyKeyProfile);
+  }
   async function handleRemove(option: Option) {
     removeProfileName.set(option.value);
     showDlgRemoveProfile.set(true);
@@ -240,16 +259,16 @@
     const currentMap = $profileKeyMap.get(currentProfileName);
 
     if (currentMap) {
-      let bindingIndex = currentMap.findIndex((b) => b.action === action);
+      const nextMap = currentMap.map((b) => ({ ...b }));
+      let bindingIndex = nextMap.findIndex((b) => b.action === action);
       if (bindingIndex === -1) {
-        bindingIndex = currentMap.push({ action, key: index === 0 ? newKey : NO_KEY, altkey: index === 1 ? newKey : NO_KEY });
+        nextMap.push({ action, key: index === 0 ? newKey : NO_KEY, altkey: index === 1 ? newKey : NO_KEY });
       } else {
-        if (index === 0) currentMap[bindingIndex].key = newKey;
-        else currentMap[bindingIndex].altkey = newKey;
+        if (index === 0) nextMap[bindingIndex].key = newKey;
+        else nextMap[bindingIndex].altkey = newKey;
       }
 
-      // Сохраняем в store (предполагая, что это Svelte store с методом setItem или через обновление значения)
-      profileKeyMap.setItem(currentProfileName, currentMap);
+      profileKeyMap.setItem(currentProfileName, nextMap);
       updateCurrentBindsMap();
     }
   }
@@ -350,6 +369,7 @@
         <SelectGroup
           options={$profiles}
           bind:value={$selectedProfile}
+          onchange={handleSelectProfile}
           ondelete={handleRemove}
           excludeDeleteFor={[DEFAULT_BIND_LTX]}
           name="key-profiles" />

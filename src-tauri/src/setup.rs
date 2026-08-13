@@ -153,6 +153,12 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
       {
         keybind_manager_arc_clone.load_profiles().await?;
+        {
+          let mut cfg = config_arc_clone.lock().await;
+          if crate::handlers::profiles::sync_selected_profile(&mut cfg, &keybind_manager_arc_clone).await {
+            cfg.save()?;
+          }
+        }
         let profiles = keybind_manager_arc_clone.get_profiles_str().await;
         let _ = app_handle_bg.emit("load-key-profiles", profiles);
       }

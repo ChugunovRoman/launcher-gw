@@ -7,7 +7,6 @@ import { selectedVersion, versions } from '../store/upload';
 import { get } from 'svelte/store';
 import { sep } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
-import { selectedProfile } from '../store/profiles';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -56,9 +55,6 @@ export async function initMainListeners() {
     }
     if (event.payload.selected_version) {
       selectedVersion.set(event.payload.selected_version);
-    }
-    if (event.payload.selected_profile) {
-      selectedProfile.set(event.payload.selected_profile);
     }
     invoke<[string, ProviderStatus][]>('get_api_providers_stats').then(result => {
       result.sort((a, b) => (a[1].latency_ms ?? Number.MAX_SAFE_INTEGER) - (b[1].latency_ms ?? Number.MAX_SAFE_INTEGER));

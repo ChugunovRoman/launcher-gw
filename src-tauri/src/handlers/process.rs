@@ -218,12 +218,17 @@ pub async fn run_game(
 
   // Pre-launch only: patch launcher settings into the selected game's user.ltx.
   // Do NOT rewrite user.ltx after the game exits (engine owns saves during/after session).
+  let profile_for_launch = if config_guard.should_apply_key_profile() {
+    config_guard.selected_profile.as_deref()
+  } else {
+    None
+  };
   crate::handlers::user_ltx::prepare_ltx_for_launch(
     &user_ltx_path,
     &tmp_ltx_path,
     &config_guard.run_params,
     &keybind_manager,
-    config_guard.selected_profile.as_deref(),
+    profile_for_launch,
   )
   .await?;
 

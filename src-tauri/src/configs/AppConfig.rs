@@ -199,6 +199,9 @@ pub struct AppConfig {
   pub selected_version: Option<String>,
   #[serde(default)]
   pub selected_profile: Option<String>,
+  /// None = legacy configs: apply iff `selected_profile` is Some.
+  #[serde(default)]
+  pub apply_key_profile: Option<bool>,
   #[serde(default)]
   pub installed_versions: HashMap<String, Version>,
   #[serde(default)]
@@ -259,6 +262,7 @@ impl Default for AppConfig {
       selected_provider_id: None,
       selected_version: None,
       selected_profile: Some(CUSTOM_BIND_LTX.to_owned()),
+      apply_key_profile: Some(true),
       versions: vec![],
       progress_download: HashMap::new(),
       tokens: HashMap::new(),
@@ -269,6 +273,10 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+  pub fn should_apply_key_profile(&self) -> bool {
+    self.apply_key_profile.unwrap_or(self.selected_profile.is_some())
+  }
+
   /// Загружает конфиг из файла. Если файла нет — создаёт новый с first_run = true.
   pub fn load_or_create(app_handle: &tauri::AppHandle) -> Result<Self> {
     let config_dir = app_handle

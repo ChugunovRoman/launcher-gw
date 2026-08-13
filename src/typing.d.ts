@@ -125,6 +125,7 @@ declare interface AppConfig {
   unpack_target_dir: string;
   selected_version?: string;
   selected_profile?: string;
+  apply_key_profile?: boolean | null;
   selected_provider_id?: string;
   installed_versions: Dict<Version>;
   tokens: Dict<string>;

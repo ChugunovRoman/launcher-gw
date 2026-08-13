@@ -205,9 +205,11 @@ impl KeybindManager {
       self.map.lock().await.insert(name, config);
     }
 
-    if self.map.lock().await.len() == 0 {
+    if self.map.lock().await.is_empty() {
       log::debug!("create_and_load_default_profile");
       self.create_and_load_default_profile().await?;
+    } else {
+      self.ensure_default_profile().await?;
     }
 
     Ok(())
@@ -251,6 +253,30 @@ impl KeybindManager {
 
   pub async fn create_and_load_default_profile(&self) -> Result<()> {
     let mut config = GameConfig::new(self.path.join(DEFAULT_BIND_LTX));
+    Self::fill_default_binds(&mut config);
+    config.save()?;
+    self.map.lock().await.insert(DEFAULT_BIND_LTX.to_string(), config.clone());
+
+    config.set_file_path(self.path.join(CUSTOM_BIND_LTX));
+    config.save()?;
+    self.map.lock().await.insert(CUSTOM_BIND_LTX.to_string(), config);
+
+    Ok(())
+  }
+
+  pub async fn ensure_default_profile(&self) -> Result<()> {
+    if self.map.lock().await.contains_key(DEFAULT_BIND_LTX) {
+      return Ok(());
+    }
+    log::warn!("default.ltx missing; recreating");
+    let mut config = GameConfig::new(self.path.join(DEFAULT_BIND_LTX));
+    Self::fill_default_binds(&mut config);
+    config.save()?;
+    self.map.lock().await.insert(DEFAULT_BIND_LTX.to_string(), config);
+    Ok(())
+  }
+
+  fn fill_default_binds(config: &mut GameConfig) {
 
     config.set2("bind".to_owned(), "left".to_owned(), "kLEFT".to_owned());
     config.set2("bind".to_owned(), "right".to_owned(), "kRIGHT".to_owned());
@@ -356,16 +382,6 @@ impl KeybindManager {
     config.set2("bind_sec".to_owned(), "pda_map_show_legend".to_owned(), "kMULTIPLY".to_owned());
     config.set2("bind_sec".to_owned(), "talk_log_scroll_up".to_owned(), "kPGUP".to_owned());
     config.set2("bind_sec".to_owned(), "talk_log_scroll_down".to_owned(), "kPGDN".to_owned());
-
-    config.save()?;
-    self.map.lock().await.insert(DEFAULT_BIND_LTX.to_string(), config.clone());
-
-    config.set_file_path(self.path.join(CUSTOM_BIND_LTX));
-    config.save()?;
-
-    self.map.lock().await.insert(CUSTOM_BIND_LTX.to_string(), config);
-
-    Ok(())
   }
 
   /// Экспорт: копирует файл профиля из внутренней папки в путь, выбранный пользователем
