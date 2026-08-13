@@ -35,70 +35,77 @@
     $isInProcess = true;
     $finish = false;
 
-    await invoke<AppConfig>("set_pack_paths", { source: packPath, target: targetPath });
+    try {
+      await invoke<AppConfig>("set_pack_paths", { source: packPath, target: targetPath });
 
-    const result = await invoke<string>("create_split_archives", {
-      sourceDir: packPath,
-      targetPath: targetPath,
-      chunkSize,
-      exePath: exePath && exePath.length ? exePath : null,
-      excludePatterns: [
-        "*.git",
-        "*.git/**",
-        ".gitlab-ci.yml",
-        "*/.gitlab-ci.yml",
-        ".editorconfig",
-        "*/.editorconfig",
-        ".gitignore",
-        "*/.gitignore",
-        ".gitmodules",
-        "*/.gitmodules",
-        ".gitconfig",
-        "*/.gitconfig",
-        ".gitattributes",
-        "*/.gitattributes",
-        "*.pl",
-        "*.sh",
-        "utils/**",
-        "utils",
-        "*.rar",
-        ".vscode",
-        ".vscode/**",
-        "*/.vscode/**",
-        "xrLost.exe",
-        "xrPlay.ini",
-        "packer.exe",
-        "gamedata/helpers",
-        "gamedata/helpers/**",
-        "appdata/logs",
-        "appdata/logs/**",
-        "appdata/savedgames",
-        "appdata/savedgames/**",
-        "appdata/screenshots",
-        "appdata/screenshots/**",
-        "appdata/shaders_cache",
-        "appdata/shaders_cache/**",
-        "appdata/shaders_cache_oxr",
-        "appdata/shaders_cache_oxr/**",
-        "appdata/launcherdata",
-        "appdata/launcherdata/**",
-        "appdata/cdb_cache",
-        "appdata/cdb_cache/**",
-        "appdata/reports",
-        "appdata/reports/**",
-        "gamedata/configs/misc/armament/custom",
-        "gamedata/configs/misc/armament/custom/**",
-        "*JSGME*",
-        "*.lnk",
-        "*.txt",
-        "installer",
-        "Compressor",
-      ],
-    });
+      const result = await invoke<string>("create_split_archives", {
+        sourceDir: packPath,
+        targetPath: targetPath,
+        chunkSize,
+        exePath: exePath && exePath.length ? exePath : null,
+        excludePatterns: [
+          "*.git",
+          "*.git/**",
+          ".gitlab-ci.yml",
+          "*/.gitlab-ci.yml",
+          ".editorconfig",
+          "*/.editorconfig",
+          ".gitignore",
+          "*/.gitignore",
+          ".gitmodules",
+          "*/.gitmodules",
+          ".gitconfig",
+          "*/.gitconfig",
+          ".gitattributes",
+          "*/.gitattributes",
+          "*.pl",
+          "*.sh",
+          "utils/**",
+          "utils",
+          "*.rar",
+          ".vscode",
+          ".vscode/**",
+          "*/.vscode/**",
+          "xrLost.exe",
+          "xrPlay.ini",
+          "packer.exe",
+          "gamedata/helpers",
+          "gamedata/helpers/**",
+          "appdata/logs",
+          "appdata/logs/**",
+          "appdata/savedgames",
+          "appdata/savedgames/**",
+          "appdata/screenshots",
+          "appdata/screenshots/**",
+          "appdata/shaders_cache",
+          "appdata/shaders_cache/**",
+          "appdata/shaders_cache_oxr",
+          "appdata/shaders_cache_oxr/**",
+          "appdata/launcherdata",
+          "appdata/launcherdata/**",
+          "appdata/cdb_cache",
+          "appdata/cdb_cache/**",
+          "appdata/reports",
+          "appdata/reports/**",
+          "gamedata/configs/misc/armament/custom",
+          "gamedata/configs/misc/armament/custom/**",
+          "*JSGME*",
+          "*.lnk",
+          "*.txt",
+          "installer",
+          "Compressor",
+        ],
+      });
 
-    $progress = 100;
-    $completed = true;
-    console.log("pack result: ", result);
+      $progress = 100;
+      $completed = true;
+      console.log("pack result: ", result);
+    } finally {
+      // completed effect still animates finish; ensure process flag can clear on error
+      if (!$completed) {
+        $isInProcess = false;
+      }
+    }
   }
 
   function getStatusStr(st: number) {
@@ -110,6 +117,8 @@
     }
   }
 
+  let finishTimers: ReturnType<typeof setTimeout>[] = [];
+
   $effect(() => {
     if ($providersWasInited) {
       invoke<AppConfig>("get_config").then((config) => {
@@ -120,16 +129,17 @@
     if ($completed) {
       $completed = false;
 
-      const timeout1 = setTimeout(() => ($finish = true), 500);
-      const timeout2 = setTimeout(() => ($isInProcess = false), 1000);
-      const timeout3 = setTimeout(() => ($finish = false), 1500);
-
-      onDestroy(() => {
-        clearTimeout(timeout1);
-        clearTimeout(timeout2);
-        clearTimeout(timeout3);
-      });
+      for (const t of finishTimers) clearTimeout(t);
+      finishTimers = [
+        setTimeout(() => ($finish = true), 500),
+        setTimeout(() => ($isInProcess = false), 1000),
+        setTimeout(() => ($finish = false), 1500),
+      ];
     }
+  });
+
+  onDestroy(() => {
+    for (const t of finishTimers) clearTimeout(t);
   });
 </script>
 

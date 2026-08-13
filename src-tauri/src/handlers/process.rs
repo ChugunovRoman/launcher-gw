@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::configs::AppConfig::{AppConfig, Version};
 use crate::consts::*;
+use crate::service::get_release::ServiceGetRelease;
 use crate::service::keybind_manager::KeybindManager;
 use crate::utils::errors::log_full_error;
 use crate::utils::resources::game_exe;
@@ -53,19 +54,6 @@ mod subst_workaround {
       .arg("/D")
       .output();
   }
-}
-
-#[tauri::command]
-pub fn spawn_external_process(path: String, args: Vec<String>) -> Result<u32, String> {
-  let child = Command::new(path)
-    .args(args)
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()
-    .map_err(|e| e.to_string())?;
-
-  Ok(child.id())
 }
 
 // Resolve the launch target (exe, working dir, is_xray_engine) by priority tiers:
@@ -117,6 +105,40 @@ fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, 
   (exe, installed_path.to_path_buf(), true)
 }
 
+/// Resolve launch target on the backend — never trust a full Version from IPC.
+async fn resolve_version_for_launch(
+  app: &tauri::AppHandle,
+  config: &AppConfig,
+  version_name: Option<&str>,
+  use_main: bool,
+) -> Result<Version, String> {
+  if use_main || version_name.is_none() {
+    let service = app
+      .try_state::<Arc<Mutex<crate::service::main::Service>>>()
+      .ok_or("Service not initialized")?;
+    let service_guard = service.lock().await;
+    return service_guard
+      .get_main_version()
+      .await
+      .ok_or_else(|| "Main game version not found next to launcher".to_string());
+  }
+
+  let name = version_name.unwrap();
+  if let Some(v) = config.installed_versions.values().find(|v| v.name == name || v.path == name) {
+    return Ok(v.clone());
+  }
+  if let Some(v) = config.installed_versions.get(name) {
+    return Ok(v.clone());
+  }
+  if let Some(v) = config.versions.iter().find(|v| v.name == name || v.path == name) {
+    if !v.installed_path.is_empty() {
+      return Ok(v.clone());
+    }
+  }
+
+  Err(format!("Installed version not found: {}", name))
+}
+
 /// Find xrEngine PID after spawning a Stalker-* wrapper (exits quickly).
 /// Prefer child of `wrapper_pid`; else match exe under game roots.
 fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, installed_path: &Path) -> u32 {
@@ -151,22 +173,14 @@ fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, instal
       }
 
       if let Some(exe) = proc.exe() {
-        if exe == expected_under_cwd.as_path()
-          || exe == expected_under_install.as_path()
-          || exe.file_name().is_some_and(|f| f.eq_ignore_ascii_case(std::ffi::OsStr::new(&engine_name)))
-        {
-          // Prefer exact path match; name-only matches collected as fallback.
-          if exe == expected_under_cwd.as_path() || exe == expected_under_install.as_path() {
-            log::info!("resolve_engine_pid: matched by path -> {}", pid.as_u32());
-            return pid.as_u32();
-          }
+        if exe == expected_under_cwd.as_path() || exe == expected_under_install.as_path() {
           path_matches.push(pid.as_u32());
         }
       }
     }
 
-    if let Some(pid) = path_matches.into_iter().max() {
-      log::info!("resolve_engine_pid: matched by name fallback -> {}", pid);
+    if let Some(pid) = path_matches.into_iter().next() {
+      log::info!("resolve_engine_pid: matched by exact path -> {}", pid);
       return pid;
     }
 
@@ -184,10 +198,13 @@ fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, instal
 pub async fn run_game(
   app: tauri::AppHandle,
   keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
-  version: Version,
+  versionName: Option<String>,
+  useMain: Option<bool>,
 ) -> Result<u32, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let mut config_guard = state.lock().await;
+
+  let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false)).await?;
 
   let target_path = version.installed_path.clone();
 
@@ -383,19 +400,32 @@ pub fn is_process_alive(pid: u32) -> bool {
 }
 
 #[tauri::command]
-pub fn open_explorer(path: String) {
+pub fn open_explorer(path: String) -> Result<(), String> {
+  let p = Path::new(&path);
+  if !p.exists() {
+    return Err(format!("Path does not exist: {}", path));
+  }
+
   #[cfg(target_os = "windows")]
   {
-    Command::new("explorer").arg(path).spawn().unwrap();
+    Command::new("explorer")
+      .arg(path)
+      .spawn()
+      .map_err(|e| e.to_string())?;
   }
 
   #[cfg(target_os = "macos")]
   {
-    Command::new("open").arg(path).spawn().unwrap();
+    Command::new("open").arg(path).spawn().map_err(|e| e.to_string())?;
   }
 
   #[cfg(target_os = "linux")]
   {
-    Command::new("xdg-open").arg(path).spawn().unwrap();
+    Command::new("xdg-open")
+      .arg(path)
+      .spawn()
+      .map_err(|e| e.to_string())?;
   }
+
+  Ok(())
 }

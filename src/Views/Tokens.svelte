@@ -10,10 +10,10 @@
   }
 
   function updateToken(id: string, newValue: string) {
-    $tokens.set(id, newValue);
     tokens.update((m) => {
-      m.set(id, newValue);
-      return m;
+      const next = new Map(m);
+      next.set(id, newValue);
+      return next;
     });
   }
   async function saveToken(id: string) {

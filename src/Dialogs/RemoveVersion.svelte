@@ -32,41 +32,43 @@
     $showDlgRemoveVersion = false;
     $removeVersionInProcess = true;
 
-    const version = $removeVersion!;
-    const separ = await sep();
-    await invoke<void>("delete_installed_version", { versionName: version.path });
+    try {
+      const version = $removeVersion!;
+      const separ = await sep();
+      await invoke<void>("delete_installed_version", { versionName: version.path });
 
-    removeLocalVersion(version.name);
+      removeLocalVersion(version.name);
 
-    if ($localVersions.size) {
-      const name = [...$localVersions.keys()][0];
-      await invoke<void>("set_current_game_version", { versionName: name });
-      selectedVersion.set(name);
-    } else if ($mainVersion) {
-      await invoke<void>("set_current_game_version", { versionName: $mainVersion.name });
-      selectedVersion.set($mainVersion.name);
-    } else {
-      await invoke<void>("set_current_game_version");
-      selectedVersion.set(undefined);
-    }
+      if ($localVersions.size) {
+        const name = [...$localVersions.keys()][0];
+        await invoke<void>("set_current_game_version", { versionName: name });
+        selectedVersion.set(name);
+      } else if ($mainVersion) {
+        await invoke<void>("set_current_game_version", { versionName: $mainVersion.name });
+        selectedVersion.set($mainVersion.name);
+      } else {
+        await invoke<void>("set_current_game_version");
+        selectedVersion.set(undefined);
+      }
 
-    setTimeout(() => {
-      invoke<Version[]>("get_available_versions").then((data) => {
-        versions.clear();
+      setTimeout(() => {
+        invoke<Version[]>("get_available_versions").then((data) => {
+          versions.clear();
 
-        for (const item of data) {
-          const found = $versions.find((v) => v.name === item.name);
-          const hasLocal = hasLocalVersion(item);
-          if (!found && !hasLocal) {
-            $versions.push(prepareVersionItem($appConfig, item, separ));
+          for (const item of data) {
+            const found = $versions.find((v) => v.name === item.name);
+            const hasLocal = hasLocalVersion(item);
+            if (!found && !hasLocal) {
+              $versions.push(prepareVersionItem($appConfig, item, separ));
+            }
           }
-        }
-      });
-    }, 200);
+        });
+      }, 200);
 
-    $removeVersionInProcess = false;
-
-    $expandedIndex = null;
+      $expandedIndex = null;
+    } finally {
+      $removeVersionInProcess = false;
+    }
   }
 </script>
 

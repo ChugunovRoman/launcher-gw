@@ -16,7 +16,9 @@ pub async fn __create_repo(s: &Gitlab, name: &str, parent_id: &str) -> Result<Cr
     path: Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string(),
     lfs_enabled: true,
     visibility: Visibility::Private,
-    namespace_id: parent_id.parse().unwrap(),
+  namespace_id: parent_id
+      .parse()
+      .map_err(|e| anyhow::anyhow!("invalid parent_id '{}': {}", parent_id, e))?,
   };
 
   let resp = s.post(&url).json(&data).send().await.context(format!(

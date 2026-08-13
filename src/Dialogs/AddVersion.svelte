@@ -29,15 +29,17 @@
     newVersionName = "";
   }
   async function handleAdd() {
-    await invoke("add_installed_version_from_ui", {
-      name: newVersionName,
-      path: newVersionPath,
-      enginePath: newVersionBinPath,
-      fsgamePath: newVersionFsgamePath,
-      userltxPath: newVersionUserltxPath,
-    });
+    if (!newVersionName.trim() || !newVersionPath.trim()) return;
 
-    setTimeout(async () => {
+    try {
+      await invoke("add_installed_version_from_ui", {
+        name: newVersionName,
+        path: newVersionPath,
+        enginePath: newVersionBinPath,
+        fsgamePath: newVersionFsgamePath,
+        userltxPath: newVersionUserltxPath,
+      });
+
       if (localVersions.size() === 0) {
         selectedVersion.set(undefined);
       }
@@ -50,7 +52,9 @@
       }
 
       $showDlgAddVersion = false;
-    }, 150);
+    } catch (e) {
+      console.error("handleAdd failed:", e);
+    }
   }
   async function choosePathHandler() {
     const selected = await open({

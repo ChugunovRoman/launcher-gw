@@ -50,7 +50,9 @@ pub async fn create_release_repos(app: tauri::AppHandle, name: String, path: Str
     log_full_error(&e);
     e.to_string()
   })?;
-  let parent_id = manifest.root_id.expect(&format!("root_id is not set for {} provider", api.id()));
+  let parent_id = manifest
+    .root_id
+    .ok_or_else(|| format!("root_id is not set for {} provider", api.id()))?;
   let base_dir = Path::new(&path);
   let groups = group_files_by_size(base_dir, manifest.max_size).map_err(|e| {
     log_full_error(&e);
@@ -230,8 +232,8 @@ pub async fn add_installed_version_from_config(app_config: tauri::State<'_, Arc<
     cfg
       .progress_download
       .get(&versionName)
-      .expect(&format!("add_installed_version_from_config() version not found: {} !", &versionName))
-      .clone()
+      .cloned()
+      .ok_or_else(|| format!("add_installed_version_from_config() version not found: {} !", &versionName))?
   };
 
   {
@@ -294,25 +296,10 @@ pub async fn add_installed_version_from_local_path(app_config: tauri::State<'_, 
   {
     let mut config_guard = app_config.lock().await;
 
-    config_guard.installed_versions.insert(
-      version.path.clone(),
-      Version {
-        id: version.id,
-        name: version.name.clone(),
-        path: version.path.clone(),
-        manifest: version.manifest.clone(),
-        installed_path: version.installed_path.clone(),
-        download_path: version.download_path.clone(),
-        engine_path: version.engine_path.clone(),
-        fsgame_path: version.fsgame_path.clone(),
-        userltx_path: version.userltx_path.clone(),
-        exe_path: version.exe_path.clone(),
-        installed_updates: vec![],
-        is_local: false,
-      },
-    );
+    let version_name = version.name.clone();
+    config_guard.installed_versions.insert(version.path.clone(), version);
 
-    if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
+    if let Some(ver) = config_guard.progress_download.get_mut(&version_name) {
       ver.is_downloaded = true;
     }
 
@@ -358,25 +345,10 @@ pub async fn add_installed_version_from_ui(
   {
     let mut config_guard = app_config.lock().await;
 
-    config_guard.installed_versions.insert(
-      version.path.clone(),
-      Version {
-        id: version.id,
-        name: version.name.clone(),
-        path: version.path.clone(),
-        manifest: version.manifest.clone(),
-        installed_path: version.installed_path.clone(),
-        download_path: version.download_path.clone(),
-        engine_path: version.engine_path.clone(),
-        fsgame_path: version.fsgame_path.clone(),
-        userltx_path: version.userltx_path.clone(),
-        exe_path: version.exe_path.clone(),
-        installed_updates: vec![],
-        is_local: false,
-      },
-    );
+    let version_name = version.name.clone();
+    config_guard.installed_versions.insert(version.path.clone(), version);
 
-    if let Some(ver) = config_guard.progress_download.get_mut(&version.name) {
+    if let Some(ver) = config_guard.progress_download.get_mut(&version_name) {
       ver.is_downloaded = true;
     }
 
@@ -423,9 +395,17 @@ pub async fn emit_file_list_stats(
       let file_part_path = Path::new(&version.download_path).join(format!("{}.part", &file.1.name));
 
       if file_path.exists() {
-        let size = match tokio::fs::read_to_string(file_part_path).await {
-          Ok(content) => content.trim().parse::<u64>().unwrap_or(0),
-          Err(_) => file.1.total_size,
+        let size = if file_part_path.exists() {
+          match tokio::fs::read_to_string(&file_part_path).await {
+            Ok(content) => content.trim().parse::<u64>().unwrap_or(0),
+            Err(_) => 0,
+          }
+        } else {
+          // No .part → treat as finished download; prefer on-disk size.
+          match tokio::fs::metadata(&file_path).await {
+            Ok(meta) => meta.len(),
+            Err(_) => file.1.total_size,
+          }
         };
 
         file_sizes.push(DownlaodFileStat {

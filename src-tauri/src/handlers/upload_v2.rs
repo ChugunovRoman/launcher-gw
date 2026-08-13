@@ -341,11 +341,6 @@ pub async fn upload_v2_release(
   name: String,
   path: String,
 ) -> Result<(), String> {
-  // Cancel setup.
-  let (cancel_tx, _) = broadcast::channel::<()>(1);
-  { cancel_map.lock().unwrap().insert(name.clone(), cancel_tx.clone()); }
-  scopeguard::defer! { cancel_map.lock().unwrap().remove(&name); };
-
   // Guard: refuse to start if an incomplete upload for this name already exists.
   {
     let cfg = app_config.lock().await;
@@ -356,11 +351,16 @@ pub async fn upload_v2_release(
     }
   }
 
-  // Guard: refuse if another upload command is already running for this name
-  // (cancel_map entry is inserted below; presence means an active session).
+  // Guard before insert — otherwise contains_key always sees our own entry.
   if cancel_map.lock().unwrap().contains_key(&name) {
     return Err("UPLOAD_ALREADY_RUNNING".to_string());
   }
+
+  let (cancel_tx, _) = broadcast::channel::<()>(1);
+  {
+    cancel_map.lock().unwrap().insert(name.clone(), cancel_tx.clone());
+  }
+  scopeguard::defer! { cancel_map.lock().unwrap().remove(&name); };
 
   let base_dir = Path::new(&path);
   let manifest_path = base_dir.join(MANIFEST_NAME);

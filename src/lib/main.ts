@@ -61,7 +61,7 @@ export async function initMainListeners() {
       selectedProfile.set(event.payload.selected_profile);
     }
     invoke<[string, ProviderStatus][]>('get_api_providers_stats').then(result => {
-      result.sort((a, b) => a[1].latency_ms > b[1].latency_ms ? 1 : 0);
+      result.sort((a, b) => (a[1].latency_ms ?? Number.MAX_SAFE_INTEGER) - (b[1].latency_ms ?? Number.MAX_SAFE_INTEGER));
       providers.set(result)
     });
 

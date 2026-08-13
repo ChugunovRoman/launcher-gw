@@ -13,7 +13,9 @@ use crate::handlers::upload_v2::UploadCancelMap;
 pub fn app_exit(app: tauri::AppHandle) {
   log::info!("app_exit: starting graceful shutdown");
 
-  app.save_window_state(StateFlags::all()).expect("Cannot save the window state");
+  app.save_window_state(StateFlags::all()).unwrap_or_else(|e| {
+    log::error!("app_exit: failed to save window state: {:?}", e);
+  });
 
   // Run the async graceful shutdown on the runtime and block until it completes,
   // so the process does not exit before the config is flushed.
@@ -54,12 +56,25 @@ pub async fn graceful_shutdown(app: &tauri::AppHandle) {
     }
   }
 
-  // Give workers a brief moment to persist .part files and config updates.
-  tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+  // Wait until cancel maps are empty (workers finished) or timeout.
+  for _ in 0..20 {
+    let downloads_busy = app
+      .try_state::<CancelMap>()
+      .map(|m| !m.lock().unwrap().is_empty())
+      .unwrap_or(false);
+    let uploads_busy = app
+      .try_state::<UploadCancelMap>()
+      .map(|m| !m.lock().unwrap().is_empty())
+      .unwrap_or(false);
+    if !downloads_busy && !uploads_busy {
+      break;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+  }
 
   // Final defensive save of the whole config.
   if let Some(config_arc) = app.try_state::<std::sync::Arc<tokio::sync::Mutex<AppConfig>>>() {
-    let mut config_guard = config_arc.lock().await;
+    let config_guard = config_arc.lock().await;
     if let Err(e) = config_guard.save() {
       log::error!("graceful_shutdown: failed to save config: {:?}", e);
     }

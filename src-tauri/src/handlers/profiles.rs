@@ -116,9 +116,7 @@ pub async fn apply_profile_to_ltx(
 ) -> Result<(), String> {
   // 1. Проверяем существование ltx файла
   let path = Path::new(&ltxPath);
-  if !path.exists() {
-    return Err(format!("Файл не найден по пути: {}", ltxPath));
-  }
+  crate::utils::paths::assert_user_ltx_path(path)?;
 
   // 2. Ищем профиль в менеджере
   let profiles = keybind_manager.get_profiles().await;

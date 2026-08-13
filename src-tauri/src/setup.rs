@@ -195,25 +195,25 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn restart_app(app_handle: &tauri::AppHandle) {
-  // 1. Закрываем все окна (опционально, но вежливо)
+  // Flush downloads/uploads before dying so progress is not lost.
+  tauri::async_runtime::block_on(crate::handlers::window::graceful_shutdown(app_handle));
+
   let _ = app_handle.webview_windows().iter().for_each(|(_, window)| {
     let _ = window.close();
   });
 
-  // 2. Получаем путь к текущему бинарнику
-  let exe_path = env::current_exe().expect("Failed to get executable path");
-
-  // 3. Запускаем новый экземпляр
-  match Command::new(exe_path).spawn() {
-    Ok(_) => {
-      println!("✅ Запущен новый экземпляр приложения");
-    }
+  let exe_path = match env::current_exe() {
+    Ok(p) => p,
     Err(e) => {
-      eprintln!("❌ Не удалось запустить новый экземпляр: {}", e);
-      // Даже если не удалось — всё равно выходим
+      log::error!("restart_app: cannot get exe path: {}", e);
+      process::exit(1);
     }
+  };
+
+  match Command::new(exe_path).spawn() {
+    Ok(_) => log::info!("restart_app: spawned new instance"),
+    Err(e) => log::error!("restart_app: failed to spawn new instance: {}", e),
   }
 
-  // 4. Завершаем текущий процесс
   process::exit(0);
 }

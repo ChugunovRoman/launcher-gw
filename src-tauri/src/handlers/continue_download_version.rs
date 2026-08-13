@@ -30,6 +30,10 @@ pub async fn continue_download_version(
 ) -> Result<(), String> {
   log::info!("Start continue_download_version, version: {:?}", &versionName);
 
+  if channel_map.lock().unwrap().contains_key(&versionName) {
+    return Err("DOWNLOAD_ALREADY_RUNNING".to_string());
+  }
+
   // 1. Инициализация каналов отмены
   let (cancel_tx, _) = broadcast::channel::<()>(1);
   {
@@ -206,7 +210,7 @@ pub async fn continue_download_version(
 
   for file in files_to_unpack {
     let download_dir_c = Path::new(&version.download_path).to_path_buf();
-    let file_path = download_dir_c.join(&file.name);
+    let file_path = crate::utils::paths::safe_download_join(&download_dir_c, &file.name)?;
     let _ = tx_unzip_arc
       .send(UnzipTask {
         file_name: file.name.clone(),
@@ -255,7 +259,13 @@ pub async fn continue_download_version(
           }
         };
 
-        let file_path = download_dir_c.join(&file_task.name);
+        let file_path = match crate::utils::paths::safe_download_join(&download_dir_c, &file_task.name) {
+          Ok(p) => p,
+          Err(e) => {
+            log::error!("safe_download_join failed: {}", e);
+            continue;
+          }
+        };
         let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
 
         // Actual seek before each attempt

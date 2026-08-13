@@ -18,30 +18,40 @@
     await choosePath((selected) => (targetPath = selected));
   }
   async function startUnpack() {
-    console.log("startPack");
-    console.log("startPack, sourcePath: ", sourcePath);
-    console.log("startPack, targetPath: ", targetPath);
     if (sourcePath === "" || targetPath === "" || $isInProcess) return;
 
     $isInProcess = true;
     $progress = 0;
     $finish = false;
 
-    await invoke<AppConfig>("set_unpack_paths", { source: sourcePath, target: targetPath });
+    try {
+      await invoke("set_unpack_paths", { source: sourcePath, target: targetPath });
 
-    const result = await invoke<string>("extract_archive", {
-      versionName: "",
-      archivePath: await join(sourcePath, "game.7z.001"),
-      outputDir: targetPath,
-    });
+      // Prefer Pack output (data1.zip); fall back to any .zip in the source folder.
+      let archivePath = await join(sourcePath, "data1.zip");
+      const data1Exists = await invoke<boolean>("check_file_exists", { path: archivePath });
+      if (!data1Exists) {
+        archivePath = await join(sourcePath, "game.zip");
+        const gameZipExists = await invoke<boolean>("check_file_exists", { path: archivePath });
+        if (!gameZipExists) {
+          throw new Error("No data1.zip / game.zip found in source folder");
+        }
+      }
 
-    $progress = 100;
+      await invoke("extract_archive", {
+        versionName: "manual-unpack",
+        archivePath,
+        outputDir: targetPath,
+      });
 
-    console.log("pack result: ", result);
-
-    setTimeout(() => ($finish = true), 500);
-    setTimeout(() => ($isInProcess = false), 1000);
-    setTimeout(() => ($finish = false), 1500);
+      $progress = 100;
+      $finish = true;
+    } catch (err) {
+      console.error("Unpack failed:", err);
+    } finally {
+      setTimeout(() => ($isInProcess = false), 500);
+      setTimeout(() => ($finish = false), 1500);
+    }
   }
 
   $effect(() => {

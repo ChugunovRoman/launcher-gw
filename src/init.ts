@@ -9,12 +9,14 @@ import { initDownloadListeners } from "./lib/download";
 import { initProfilesListeners } from './lib/profiles';
 
 export async function init() {
-  initProfilesListeners();
-  initMainListeners();
-  initPackListener();
-  initUnpackListener();
-  initUploadListeners();
-  initDownloadListeners();
+  await Promise.all([
+    initProfilesListeners(),
+    initMainListeners(),
+    initPackListener(),
+    initUnpackListener(),
+    initUploadListeners(),
+    initDownloadListeners(),
+  ]);
 
   register(Lang.En, () => import('./locales/en.json'));
   register(Lang.Ru, () => import('./locales/ru.json'));

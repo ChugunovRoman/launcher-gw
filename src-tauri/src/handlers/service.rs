@@ -91,7 +91,7 @@ pub async fn set_token_for_provider(app: tauri::AppHandle, token: String, provid
   }
 
   let encoded_token = encode(&token);
-  log::info!("set_token_for_provider: id: {} encoded_token: {}", &providerId, &encoded_token);
+  log::info!("set_token_for_provider: id: {}", &providerId);
   {
     let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("AppConfig not initialized")?;
     let mut service_guard = state.lock().await;
@@ -131,8 +131,8 @@ pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppC
     cfg
       .progress_download
       .get(&versionName)
-      .expect(&format!("remove_download_version() version not found: {} !", &versionName))
-      .clone()
+      .cloned()
+      .ok_or_else(|| format!("remove_download_version() version not found: {} !", &versionName))?
   };
 
   // The download dir may already be absent (already removed in a prior run, or
@@ -145,6 +145,12 @@ pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppC
       log::warn!("remove_download_version: dir already absent: {}", &version.download_path);
     }
     Err(e) => return Err(e.to_string()),
+  }
+
+  {
+    let mut cfg = app_config.lock().await;
+    cfg.progress_download.remove(&versionName);
+    cfg.save().map_err(|e| e.to_string())?;
   }
 
   Ok(())

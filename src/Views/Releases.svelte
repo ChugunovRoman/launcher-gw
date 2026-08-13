@@ -10,7 +10,6 @@
     logText,
     releaseName,
     releasePath,
-    filesPerCommit,
     totalFiles,
     uploadedFiles,
     uploadFilesMap,
@@ -165,10 +164,6 @@
             <div class="input-group">
               <label class="input-label">{$_("app.releases.name")}</label>
               <input type="text" bind:value={$releaseName} placeholder={$_("app.releases.name")} class="release-input" />
-            </div>
-            <div class="input-group">
-              <label class="input-label">{$_("app.releases.filespc")}</label>
-              <input type="text" bind:value={$filesPerCommit} placeholder={$_("app.releases.filespc")} class="release-input" />
             </div>
           </div>
           <div class="input-group">

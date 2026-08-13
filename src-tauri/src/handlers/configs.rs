@@ -15,7 +15,10 @@ use crate::{
 pub async fn get_config(app: tauri::AppHandle) -> Result<AppConfig, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let config_guard = state.lock().await;
-  Ok(config_guard.clone())
+  // Never send provider tokens to the webview via get_config.
+  let mut cfg = config_guard.clone();
+  cfg.tokens.clear();
+  Ok(cfg)
 }
 
 #[tauri::command]
@@ -140,9 +143,7 @@ pub async fn set_current_api_provider(
   {
     let mut service_guard = service.lock().await;
     let api_client = &mut service_guard.api_client;
-    let static_id: &'static str = Box::leak(provider.into_boxed_str());
-
-    api_client.set_current_provider(static_id).map_err(|e| e.to_string())?;
+    api_client.set_current_provider(&provider).map_err(|e| e.to_string())?;
   };
 
   Ok(())

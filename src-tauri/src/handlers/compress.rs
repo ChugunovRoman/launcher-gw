@@ -23,6 +23,7 @@ pub async fn create_split_archives(
 ) -> Result<(), String> {
   let src_dir = Path::new(&sourceDir);
   let out_dir = Path::new(&targetPath);
+  fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
   let max_size = chunkSize * 1024 * 1024;
 
   let mut builder = GlobSetBuilder::new();
@@ -170,14 +171,17 @@ pub async fn create_split_archives(
     current_group_size += size;
   }
 
-  let file_path = out_dir.join(format!("data{}.zip", part_number));
+  zip.finish().map_err(|e| e.to_string())?;
+
+  let archive_name = format!("data{}.zip", part_number);
+  let file_path = out_dir.join(&archive_name);
   let meta = file_path.metadata().map_err(|e| e.to_string())?;
   let size = meta.len();
   compressed_size += size;
 
   manifest.files.push(ReleaseManifestFile {
-    name: format!("data{}.zip", part_number),
-    size: *current_archive_size_ref.lock().unwrap(),
+    name: archive_name,
+    size,
   });
 
   manifest.compressed_size = compressed_size;
@@ -197,6 +201,49 @@ pub async fn create_split_archives(
     },
   );
 
-  zip.finish().map_err(|e| e.to_string())?;
   Ok(())
+}
+
+/// Unpack a single `.zip` archive into `outputDir`.
+/// Multi-volume `.7z` is not supported — use Pack's `dataN.zip` archives.
+#[tauri::command]
+pub async fn extract_archive(
+  service_unpack: tauri::State<'_, Arc<crate::service::unpack::ServiceUnpacker>>,
+  versionName: String,
+  archivePath: String,
+  outputDir: String,
+) -> Result<(), String> {
+  let archive = PathBuf::from(&archivePath);
+  let output = PathBuf::from(&outputDir);
+
+  if !archive.is_file() {
+    return Err(format!("Archive not found: {}", archivePath));
+  }
+
+  let name_lower = archive
+    .file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("")
+    .to_ascii_lowercase();
+  if name_lower.contains(".7z") {
+    return Err("7z archives are not supported. Use .zip (e.g. data1.zip from Pack).".to_string());
+  }
+  if !name_lower.ends_with(".zip") {
+    return Err(format!("Unsupported archive type (expected .zip): {}", archivePath));
+  }
+
+  let file_label = archive
+    .file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("archive.zip")
+    .to_string();
+
+  let unpacker = service_unpack.inner().clone();
+  tokio::task::spawn_blocking(move || {
+    unpacker
+      .extract_zip(&versionName, &file_label, &archive, &output)
+      .map_err(|e| e.to_string())
+  })
+  .await
+  .map_err(|e| e.to_string())?
 }

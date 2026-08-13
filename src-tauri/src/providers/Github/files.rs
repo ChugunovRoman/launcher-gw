@@ -47,6 +47,8 @@ pub async fn __get_blob_direct_url(s: &Github, project_id: &str, file_path: &str
 }
 
 pub async fn __get_blob_by_url_stream(s: &Github, url: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+  crate::utils::paths::assert_download_url_allowed(url)?;
+
   let response = match seek {
     Some(bytes) => s
       .get(url)
@@ -56,6 +58,8 @@ pub async fn __get_blob_by_url_stream(s: &Github, url: &str, seek: &Option<u64>)
       .context("Failed to send blob download request")?,
     None => s.get(url).send().await.context("Failed to send blob download request")?,
   };
+
+  crate::utils::paths::assert_download_url_allowed(response.url().as_str())?;
 
   if !response.status().is_success() {
     let status = response.status();

@@ -10,7 +10,6 @@ export const showUploading = writable(false);
 export const inProcess = writable(false);
 export const releaseName = writable("");
 export const releasePath = writable("");
-export const filesPerCommit = writable("10");
 export const versions = createArrayStore<Version>();
 export const logText = createArrayStore<string>();
 

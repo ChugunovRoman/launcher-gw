@@ -36,7 +36,7 @@
     updateEachVersion((version) => {
       return {
         ...version,
-        download_path: `${$appConfig?.default_download_path}${s}${version.path}`,
+        download_path: `${$appConfig?.default_download_path}${s}${version.path}_data`,
       };
     });
   }
@@ -67,15 +67,17 @@
     }
   });
   $effect(() => {
-    invoke("set_current_api_provider", { provider: $radioApiProvider });
+    const provider = $radioApiProvider;
+    const timer = setTimeout(() => {
+      invoke("set_current_api_provider", { provider });
 
-    setTimeout(() => {
       invoke<Version[]>("get_available_versions").then(async (data) => {
         const separ = await sep();
-
         versions.set(data.map((version) => prepareVersionItem($appConfig, version, separ)).filter((v) => !hasLocalVersion(v)));
       });
     }, 200);
+
+    return () => clearTimeout(timer);
   });
 </script>
 

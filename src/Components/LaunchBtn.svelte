@@ -2,7 +2,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { localVersions, providersWasInited, refreshLocalVersion } from "../store/main";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { currentView } from "../store/menu";
   import {
     hasAnyLocalVersion,
@@ -19,15 +19,34 @@
   let isProcessAlive = $state(false);
   let interval: number | undefined = undefined;
 
+  const clearPidInterval = () => {
+    if (interval !== undefined) {
+      clearInterval(interval);
+      interval = undefined;
+    }
+  };
+
   const launchApp = async () => {
     if (!$mainVersion && !$selectedVersion) {
       currentView.select("versions");
+      return;
     }
     if (pid && pid > 0 && (await checkProcess())) return;
 
+    const useMain = !!$mainVersion;
+    const versionName = useMain ? null : $selectedVersion;
+    if (!useMain && !versionName) {
+      currentView.select("versions");
+      return;
+    }
+    if (!useMain && versionName && !$localVersions.get(versionName)) {
+      console.error("Selected version not found in localVersions:", versionName);
+      return;
+    }
+
     try {
-      const version = $localVersions.get($selectedVersion!);
-      pid = await invoke<number>("run_game", { version: $mainVersion || version });
+      clearPidInterval();
+      pid = await invoke<number>("run_game", { versionName, useMain });
       await checkProcess();
       interval = setInterval(checkProcess, 1000);
     } catch (err) {
@@ -40,8 +59,8 @@
 
     isProcessAlive = await invoke<boolean>("is_process_alive", { pid });
 
-    if (interval && !isProcessAlive) {
-      clearInterval(interval);
+    if (interval !== undefined && !isProcessAlive) {
+      clearPidInterval();
       pid = null;
     }
 
@@ -49,33 +68,45 @@
   };
 
   $effect(() => {
-    if ($providersWasInited) {
-      invoke<AppConfig>("get_config")
-        .then((config) => {
-          pid = config.latest_pid;
+    if (!$providersWasInited) return;
 
-          if (config.selected_version) {
-            $selectedVersion = config.selected_version;
-          }
+    let cancelled = false;
 
-          if (!$showUploading && !!config.progress_upload && !!config.progress_upload.name && !config.progress_upload.is_completed) {
-            $showUploading = true;
-            $releaseName = config.progress_upload.name;
-            $totalFiles = config.progress_upload.total_files;
-            $uploadedFiles = config.progress_upload.uploaded_files.length;
-          }
+    invoke<AppConfig>("get_config")
+      .then(async (config) => {
+        if (cancelled) return;
 
-          refreshLocalVersion();
-          refreshVersions();
+        pid = config.latest_pid;
 
-          if (pid < 0) return;
+        if (config.selected_version) {
+          $selectedVersion = config.selected_version;
+        }
 
-          return checkProcess();
-        })
-        .then(() => {
+        if (!$showUploading && !!config.progress_upload && !!config.progress_upload.name && !config.progress_upload.is_completed) {
+          $showUploading = true;
+          $releaseName = config.progress_upload.name;
+          $totalFiles = config.progress_upload.total_files;
+          $uploadedFiles = config.progress_upload.uploaded_files.length;
+        }
+
+        refreshLocalVersion();
+        refreshVersions();
+
+        if (pid != null && pid >= 0) {
+          await checkProcess();
+        }
+
+        if (!cancelled) {
+          clearPidInterval();
           interval = setInterval(checkProcess, 1000);
-        });
-    }
+        }
+      })
+      .catch((err) => console.error("LaunchBtn get_config failed:", err));
+
+    return () => {
+      cancelled = true;
+      clearPidInterval();
+    };
   });
 
   onMount(async () => {
@@ -85,6 +116,10 @@
       selectedVersion.set($mainVersion.name);
       hasAnyLocalVersion.set(true);
     }
+  });
+
+  onDestroy(() => {
+    clearPidInterval();
   });
 </script>
 

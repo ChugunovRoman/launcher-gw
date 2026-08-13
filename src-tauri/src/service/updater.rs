@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use crate::providers::ApiClient::ApiClient::ApiClient;
 use crate::providers::dto::{ReleaseGit, ReleasePlatform};
 use crate::utils::paths::get_exe_name;
 use crate::utils::resources::launcher_exe;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures_util::stream::StreamExt;
 use semver::Version;
 use tauri::Manager;
@@ -108,6 +107,16 @@ impl ServiceUpdater {
         (self.callback)(&release.version, downloaded, target.size);
       }
 
+      file.flush().await.context("Failed to flush launcher download")?;
+
+      if target.size > 0 && downloaded != target.size {
+        bail!(
+          "Launcher download size mismatch: got {} bytes, expected {}",
+          downloaded,
+          target.size
+        );
+      }
+
       log::debug!("ServiceUpdater.download, finish download file: {:?}", &target.download_link);
 
       return Ok(Some(file_path));
@@ -119,13 +128,8 @@ impl ServiceUpdater {
   }
 
   pub async fn install(&self, file_path: PathBuf) -> Result<()> {
-    let exe_path = std::env::current_exe().context("Cannot get current exe path")?;
-    let bytes = fs::read(&file_path)?;
-
-    let _ = self_replace::self_replace(&exe_path).context("self_replace error");
-
-    fs::write(&exe_path, bytes).context("Cannot write launcher binary file!")?;
-
+    // Replace the running binary with the downloaded file (atomic where supported).
+    self_replace::self_replace(&file_path).context("self_replace error")?;
     Ok(())
   }
 

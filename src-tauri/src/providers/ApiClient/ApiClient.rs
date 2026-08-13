@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 pub struct ApiClient {
   providers: HashMap<&'static str, Box<dyn ApiProvider + Send + Sync>>,
-  current_provider_id: Option<&'static str>,
+  current_provider_id: Option<String>,
   pub logger: LogCallback,
 }
 
@@ -27,10 +27,10 @@ impl ApiClient {
     self.providers.insert(id, Box::new(provider));
   }
 
-  pub fn set_current_provider(&mut self, id: &'static str) -> anyhow::Result<()> {
+  pub fn set_current_provider(&mut self, id: &str) -> anyhow::Result<()> {
     log::info!("set_current_provider, id: {}", &id);
     if self.providers.contains_key(id) {
-      self.current_provider_id = Some(id);
+      self.current_provider_id = Some(id.to_string());
       Ok(())
     } else {
       Err(anyhow::anyhow!("Provider '{}' not registered", id))
@@ -38,7 +38,10 @@ impl ApiClient {
   }
 
   pub fn current_provider(&self) -> anyhow::Result<&(dyn ApiProvider + Send + Sync)> {
-    let id = self.current_provider_id.ok_or_else(|| anyhow::anyhow!("No current provider set"))?;
+    let id = self
+      .current_provider_id
+      .as_deref()
+      .ok_or_else(|| anyhow::anyhow!("No current provider set"))?;
     self.get_provider(id)
   }
 
@@ -120,7 +123,7 @@ impl Clone for ApiClient {
 
     Self {
       providers: cloned_providers,
-      current_provider_id: self.current_provider_id,
+      current_provider_id: self.current_provider_id.clone(),
       logger: self.logger.clone(),
     }
   }

@@ -49,8 +49,7 @@ impl Service {
       cfg.selected_provider_id.clone()
     } {
       Some(id) => {
-        let static_id: &'static str = Box::leak(id.into_boxed_str());
-        self.api_client.set_current_provider(static_id)?;
+        self.api_client.set_current_provider(&id)?;
       }
       None => {
         self.api_client.set_current_provider(self.stats[0].0)?;

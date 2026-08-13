@@ -38,7 +38,7 @@ export async function initDownloadListeners() {
       let downloadFilesTotalBytes = 0;
 
       map.set(fileName, {
-        downloadProgress: bytes / totalBytes * 100,
+        downloadProgress: totalBytes > 0 ? (bytes / totalBytes) * 100 : 0,
         unpackProgress: 0,
         downloadedFileBytes: bytes,
         totalFileBytes: totalBytes,
@@ -57,8 +57,8 @@ export async function initDownloadListeners() {
 
       let downloadProgressVersion = version.downloadProgress;
 
-      if (version.manifest) {
-        downloadProgressVersion = downloadFilesTotalBytes / version.manifest.compressed_size * 100;
+      if (version.manifest && version.manifest.compressed_size > 0) {
+        downloadProgressVersion = (downloadFilesTotalBytes / version.manifest.compressed_size) * 100;
       }
 
       return {
@@ -78,7 +78,7 @@ export async function initDownloadListeners() {
     launcherDwnVersion.set(versionName);
     launcherDwnBytes.set(bytes);
     launcherDwnTotalBytes.set(totalSize);
-    launcherDwnProgress.set(bytes / totalSize * 100);
+    launcherDwnProgress.set(totalSize > 0 ? (bytes / totalSize) * 100 : 0);
   }));
   unlisten.set('download-version-files', await listen('download-version-files', (event: Event<[string, { name: string; unpacked: boolean; size: number }[]]>) => {
     const [versionName, fileSizesMap] = event.payload;

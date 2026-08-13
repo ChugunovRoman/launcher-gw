@@ -79,6 +79,11 @@ pub async fn start_download_version(
   versionName: String,
   versionId: Option<u32>,
 ) -> Result<(), String> {
+  // Guard before insert so a second start cannot orphan the first cancel channel.
+  if channel_map.lock().unwrap().contains_key(&versionName) {
+    return Err("DOWNLOAD_ALREADY_RUNNING".to_string());
+  }
+
   // Bug C fix: single broadcast channel for the whole command. Previously there
   // were two disconnected channels: `tx`/`rx` (registered first) and `cancel_tx`
   // (created later and used by workers). Cancellation sent via `cancel_tx` never
@@ -348,7 +353,13 @@ pub async fn start_download_version(
           }
         };
 
-        let file_path = download_dir_c.join(&file_task.name);
+        let file_path = match crate::utils::paths::safe_download_join(&download_dir_c, &file_task.name) {
+          Ok(p) => p,
+          Err(e) => {
+            log::error!("safe_download_join failed: {}", e);
+            continue;
+          }
+        };
         let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
 
         // Read existing progress for Range header

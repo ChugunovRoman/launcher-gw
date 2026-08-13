@@ -56,8 +56,14 @@ impl ServiceFiles {
     let api = api_client.current_provider()?;
     let mut stream = api.get_blob_by_url_stream(direct_url, seek).await?;
 
-    let file_name = get_file_name(&output_path).unwrap();
-    let part_file_path = format!("{}.part", output_path.as_ref().to_str().unwrap());
+    let file_name = get_file_name(&output_path).ok_or_else(|| anyhow::anyhow!("download path has no file name"))?;
+    let part_file_path = format!(
+      "{}.part",
+      output_path
+        .as_ref()
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("download path is not valid UTF-8"))?
+    );
 
     // Open the target file for writing (append mode for resume)
     let mut file = OpenOptions::new().write(true).create(true).open(&output_path).await?;
@@ -119,6 +125,20 @@ impl ServiceFiles {
 
     if was_interrupted {
       // Final progress callback so the UI reflects the persisted partial size.
+      (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.0);
+      return Ok(DownloadOutcome::Interrupted);
+    }
+
+    // Stream ended without cancel — must have the full payload or treat as interrupt.
+    if downloaded < *total_bytes {
+      log::warn!(
+        "Download short-read for {}: got {} of {} bytes; keeping .part for resume",
+        file_name,
+        downloaded,
+        total_bytes
+      );
+      let _ = file.flush().await;
+      Self::save_part_file(&part_file_path, downloaded).await?;
       (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.0);
       return Ok(DownloadOutcome::Interrupted);
     }

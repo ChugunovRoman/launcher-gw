@@ -92,7 +92,8 @@
         versionName: version.name,
       });
     } catch (error: any) {
-      if (error === "USER_CANCELLED" && !version.wasCanceled) {
+      const msg = typeof error === "string" ? error : String(error?.message ?? error);
+      if (msg.includes("USER_CANCELLED") && !version.wasCanceled) {
         updateVersion(version.name, () => ({
           inProgress: false,
           isStoped: true,
@@ -197,7 +198,8 @@
       });
     } catch (error: any) {
       const updatedVersion = $versions.find((v) => v.name === releaseName);
-      if (error === "USER_CANCELLED" && !updatedVersion!.wasCanceled) {
+      const msg = typeof error === "string" ? error : String(error?.message ?? error);
+      if (msg.includes("USER_CANCELLED") && !updatedVersion!.wasCanceled) {
         updateVersion(releaseName, () => ({
           inProgress: false,
           isStoped: true,
@@ -262,7 +264,7 @@
   async function runVersion(event: Event, version: Version) {
     event.stopPropagation();
 
-    await invoke<number>("run_game", { version });
+    await invoke<number>("run_game", { versionName: version.name, useMain: false });
   }
   async function deleteVersion(event: Event, version: Version) {
     event.stopPropagation();

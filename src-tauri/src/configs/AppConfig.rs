@@ -299,19 +299,40 @@ impl AppConfig {
     let content = match fs::read_to_string(&config_path) {
       Ok(c) => c,
       Err(e) => {
-        log::warn!("Cannot read {} file, return default config, error: {:?}", CONFIG_NAME, e);
-        let mut config = AppConfig::default();
-        config.first_run = true;
-        config.install_path = Self::get_path();
-        config.path = path;
-        config.save()?;
-        return Ok(config);
+        // Do not overwrite a potentially good file we cannot read (permissions, lock).
+        log::error!("Cannot read {} file: {:?}", CONFIG_NAME, e);
+        bail!("Cannot read {}: {}. Fix permissions or restore a backup.", CONFIG_NAME, e);
       }
     };
     let mut json_value: Value = match serde_json::from_str(&content) {
       Ok(c) => c,
       Err(e) => {
-        log::warn!("Cannot parse JSON from {} file, return default config, error: {:?}", CONFIG_NAME, e);
+        let bak_path = config_dir.join(format!(
+          "{}.bak.{}",
+          CONFIG_NAME,
+          chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ));
+        if let Err(copy_err) = fs::copy(&config_path, &bak_path) {
+          log::error!(
+            "Cannot parse {} ({:?}) and failed to backup to {:?}: {}",
+            CONFIG_NAME,
+            e,
+            bak_path,
+            copy_err
+          );
+          bail!(
+            "Cannot parse {}: {}. Backup also failed: {}",
+            CONFIG_NAME,
+            e,
+            copy_err
+          );
+        }
+        log::error!(
+          "Cannot parse {} ({:?}); backed up to {:?} and creating a fresh default",
+          CONFIG_NAME,
+          e,
+          bak_path
+        );
         let mut config = AppConfig::default();
         config.first_run = true;
         config.install_path = Self::get_path();
@@ -325,13 +346,9 @@ impl AppConfig {
     let default_value: Value = match serde_json::to_value(&default) {
       Ok(c) => c,
       Err(e) => {
-        log::warn!("Failed to serialize config {} file, return default config, error: {:?}", CONFIG_NAME, e);
-        let mut config = AppConfig::default();
-        config.first_run = true;
-        config.install_path = Self::get_path();
-        config.path = path;
-        config.save()?;
-        return Ok(config);
+        // Serialization of defaults must not wipe disk config.
+        log::error!("Failed to serialize default config: {:?}", e);
+        bail!("Failed to serialize default config: {}", e);
       }
     };
 
@@ -374,8 +391,29 @@ impl AppConfig {
     let mut config = match serde_json::from_value::<AppConfig>(json_value.clone()) {
       Ok(cfg) => cfg,
       Err(e) => {
-        log::error!("⚠️ Failed to parse config.json (possibly outdated schema): {}", e);
-        log::error!("   Replacing with default config.");
+        let bak_path = config_dir.join(format!(
+          "{}.bak.{}",
+          CONFIG_NAME,
+          chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ));
+        if let Err(copy_err) = fs::copy(&config_path, &bak_path) {
+          log::error!(
+            "Failed to parse config.json ({}); backup to {:?} also failed: {}",
+            e,
+            bak_path,
+            copy_err
+          );
+          bail!(
+            "Failed to parse config.json (outdated schema?): {}. Backup failed: {}",
+            e,
+            copy_err
+          );
+        }
+        log::error!(
+          "Failed to parse config.json (outdated schema?): {}; backed up to {:?}",
+          e,
+          bak_path
+        );
 
         let preserved_uuid = if let Value::Object(map) = &json_value {
           match map.get("client_uuid") {
