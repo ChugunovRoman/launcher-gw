@@ -156,6 +156,34 @@ pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppC
   Ok(())
 }
 
+// Cancel-only cleanup of the partial install dir (where archives were being
+// unpacked). Reads installed_path from progress_download, so it must be called
+// BEFORE remove_download_version/clear_progress_version (which delete that
+// entry). Best-effort: tolerate NotFound. NOTE: remove_download_version must
+// NOT remove the install dir — it is also called after a successful unpack,
+// where the install dir is the installed game.
+#[tauri::command]
+pub async fn remove_install_dir(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: String) -> Result<(), String> {
+  let install_path = {
+    let cfg = app_config.lock().await;
+    cfg
+      .progress_download
+      .get(&versionName)
+      .map(|v| v.installed_path.clone())
+      .ok_or_else(|| format!("remove_install_dir: version not found: {}", &versionName))?
+  };
+
+  match fs::remove_dir_all(Path::new(&install_path)) {
+    Ok(_) => {}
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+      log::warn!("remove_install_dir: dir already absent: {}", &install_path);
+    }
+    Err(e) => return Err(e.to_string()),
+  }
+
+  Ok(())
+}
+
 #[tauri::command]
 pub async fn move_version(
   app: tauri::AppHandle,

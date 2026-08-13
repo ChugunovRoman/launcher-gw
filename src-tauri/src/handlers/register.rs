@@ -36,6 +36,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::service::get_provider_ids,
     handlers::service::check_available_disk_space,
     handlers::service::remove_download_version,
+    handlers::service::remove_install_dir,
     handlers::service::move_version,
     // releases
     handlers::start_download_version::start_download_version,

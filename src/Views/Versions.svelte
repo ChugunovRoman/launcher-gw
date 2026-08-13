@@ -14,6 +14,7 @@
     moveProgress,
     updateLocalVersion,
     showDlgAddVersion,
+    appConfig,
   } from "../store/main";
   import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
@@ -116,15 +117,43 @@
   }
   async function handleCancelDownload(event: Event, releaseName: string) {
     await cancelDownload(event, releaseName);
+    // Reset to a fresh state (not just inProgress/isStoped) so no stale progress
+    // fields linger on the version in the store after cancel.
     updateVersion(releaseName, () => ({
       inProgress: false,
       isStoped: false,
       wasCanceled: true,
+      downloadProgress: 0,
+      downloadedFilesCnt: 0,
+      totalFileCount: 0,
+      downloadSpeed: 0,
+      speedValue: 0,
+      sfxValue: "",
+      downloadCurrentFile: "",
+      downloadedFileBytes: 0,
+      filesProgress: new Map(),
+      status: DownloadStatus.Init,
     }));
+    // remove_install_dir reads progress_download, so it must run BEFORE
+    // remove_download_version/clear_progress_version (which delete that entry).
+    try {
+      await invoke<void>("remove_install_dir", { versionName: releaseName });
+    } catch (e) {
+      console.error("remove_install_dir failed:", e);
+    }
     await invoke<void>("remove_download_version", {
       versionName: releaseName,
     });
     await invoke<void>("clear_progress_version", { versionName: releaseName });
+    // Refresh the frontend appConfig copy so progress_download is in sync.
+    // prepareVersionItem reads $appConfig; without this, a later list refresh
+    // would see the stale entry and mark the version as paused (isStoped=true).
+    try {
+      const cfg = await invoke<AppConfig>("get_config");
+      appConfig.set(cfg);
+    } catch (e) {
+      console.error("appConfig refresh after cancel failed:", e);
+    }
   }
   async function handlePauseDownload(event: Event, releaseName: string) {
     await cancelDownload(event, releaseName);
