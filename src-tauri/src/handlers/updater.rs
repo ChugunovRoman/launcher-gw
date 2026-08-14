@@ -40,8 +40,10 @@ pub async fn update(
 }
 
 #[tauri::command]
-pub async fn restart_app(service_updater: tauri::State<'_, Arc<ServiceUpdater>>) -> Result<(), String> {
-  service_updater.restart().await.map_err(|e| {
+pub async fn restart_app(app: tauri::AppHandle, service_updater: tauri::State<'_, Arc<ServiceUpdater>>) -> Result<(), String> {
+  // ServiceUpdater::restart performs a graceful shutdown first, then spawns
+  // the replacement behind the restart-lock handshake and exits.
+  service_updater.restart(&app).await.map_err(|e| {
     log_full_error(&e);
     e.to_string()
   })?;

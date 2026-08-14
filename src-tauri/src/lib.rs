@@ -25,6 +25,11 @@ fn create_tauri_app() -> Builder<Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // When spawned by a restarting launcher instance, wait until the previous
+  // instance is fully dead before touching shared resources (launcher.log,
+  // config.json, WebView2 user-data). No-op for regular launches.
+  utils::restart::wait_for_previous_instance();
+
   let logger = Logger::new(logger::LogLevel::Debug).unwrap();
   let logger_arc = Arc::new(Mutex::new(logger));
 

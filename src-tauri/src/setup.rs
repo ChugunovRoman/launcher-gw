@@ -1,7 +1,5 @@
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
-use std::process::Command;
-use std::{env, process};
 use std::{
   panic,
   sync::{Arc, Mutex as StdMutex},
@@ -208,18 +206,7 @@ fn restart_app(app_handle: &tauri::AppHandle) {
     let _ = window.close();
   });
 
-  let exe_path = match env::current_exe() {
-    Ok(p) => p,
-    Err(e) => {
-      log::error!("restart_app: cannot get exe path: {}", e);
-      process::exit(1);
-    }
-  };
-
-  match Command::new(exe_path).spawn() {
-    Ok(_) => log::info!("restart_app: spawned new instance"),
-    Err(e) => log::error!("restart_app: failed to spawn new instance: {}", e),
-  }
-
-  process::exit(0);
+  // Spawns the replacement behind the restart-lock handshake and exits.
+  // No self_replace happened on the wake path, so no original_exe override.
+  crate::utils::restart::restart_launcher(app_handle, None);
 }

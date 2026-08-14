@@ -1,6 +1,5 @@
 use std::path::PathBuf;
-use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::consts::{BASE_DIR, GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME, REPO_LAUNCGER_ID_2};
 use crate::providers::ApiClient::ApiClient::ApiClient;
@@ -19,6 +18,11 @@ pub type DownloadProgressCallback = Box<dyn Fn(&str, u64, u64) + Send + Sync>;
 
 pub struct ServiceUpdater {
   callback: Arc<DownloadProgressCallback>,
+  /// Exe path captured BEFORE self_replace renamed the running binary.
+  /// `current_exe()` is unreliable after an update: on Windows the running exe
+  /// is renamed to a temp name by self_replace, so restarting via
+  /// `current_exe()` would spawn the old renamed binary again.
+  original_exe: Mutex<Option<PathBuf>>,
 }
 
 impl ServiceUpdater {
@@ -28,7 +32,13 @@ impl ServiceUpdater {
   {
     Self {
       callback: Arc::new(Box::new(callback)),
+      original_exe: Mutex::new(None),
     }
+  }
+
+  /// Path of the binary captured before the self-update replaced it.
+  pub fn original_exe(&self) -> Option<PathBuf> {
+    self.original_exe.lock().unwrap().clone()
   }
 
   pub async fn check(&self, api_client: &ApiClient, current_version: String) -> Result<Option<ReleaseGit>> {
@@ -135,6 +145,10 @@ impl ServiceUpdater {
 
   pub async fn download_and_install(&self, api_client: &ApiClient, app_handle: &tauri::AppHandle, release: ReleaseGit) -> Result<bool> {
     if let Some(target) = self.download(api_client, app_handle, release).await? {
+      // Capture the exe path BEFORE install(): self_replace renames the
+      // running binary, making current_exe() point to the temp old file.
+      *self.original_exe.lock().unwrap() = std::env::current_exe().ok();
+
       self.install(target).await?;
 
       return Ok(true);
@@ -143,11 +157,13 @@ impl ServiceUpdater {
     Ok(false)
   }
 
-  pub async fn restart(&self) -> Result<()> {
-    let exe_path = std::env::current_exe().context("Cannot get current exe path")?;
+  pub async fn restart(&self, app_handle: &tauri::AppHandle) -> Result<()> {
+    // Graceful shutdown first (cancel downloads/uploads, flush config.json)
+    // so the new instance does not race us for shared files.
+    crate::handlers::window::graceful_shutdown(app_handle).await;
 
-    Command::new(exe_path).spawn().context("Cannot restart the app")?;
-
-    std::process::exit(0);
+    // Never returns: spawns the replacement with the restart lock handshake
+    // and exits the current process.
+    crate::utils::restart::restart_launcher(app_handle, self.original_exe());
   }
 }

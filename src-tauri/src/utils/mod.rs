@@ -5,6 +5,7 @@ pub mod git;
 pub mod parse_strings;
 pub mod paths;
 pub mod resources;
+pub mod restart;
 pub mod split_args;
 pub mod url;
 pub mod video;
