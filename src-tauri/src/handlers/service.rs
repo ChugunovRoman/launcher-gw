@@ -15,27 +15,74 @@ use crate::{
 #[tauri::command]
 pub async fn ping_all_providers(app: tauri::AppHandle) -> Result<Vec<(String, ProviderStatus)>, String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
 
-  let results = service_guard
-    .api_client
+  // Clone api_client under a short lock — network I/O happens outside the mutex.
+  let api_client = {
+    let service_guard = state.lock().await;
+    service_guard.api_client.clone()
+  };
+
+  let results: Vec<(String, ProviderStatus)> = api_client
     .ping_all()
     .await
     .into_iter()
     .map(|(id, status)| (id.to_string(), status))
     .collect();
+
+  // Update service.stats so get_api_providers_stats returns fresh data.
+  // Provider statuses are already updated inside ping() above;
+  // we just rebuild the stats vec from live provider objects.
+  {
+    let mut service_guard = state.lock().await;
+    let fresh: Vec<_> = service_guard
+      .api_client
+      .get_provider_ids()
+      .iter()
+      .filter_map(|id| {
+        service_guard
+          .api_client
+          .get_provider(id)
+          .ok()
+          .map(|p| (p.id(), p.status()))
+      })
+      .collect();
+    service_guard.stats = fresh;
+  }
+
   Ok(results)
 }
 #[tauri::command]
 pub async fn ping_current_provider(app: tauri::AppHandle) -> Result<(String, ProviderStatus), String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
 
-  let api = service_guard.api_client.current_provider().map_err(|e| e.to_string())?;
+  let (api_client, provider_id) = {
+    let service_guard = state.lock().await;
+    let api = service_guard.api_client.current_provider().map_err(|e| e.to_string())?;
+    (service_guard.api_client.clone(), api.id().to_owned())
+  };
 
+  let api = api_client.get_provider(&provider_id).map_err(|e| e.to_string())?;
   let status = api.ping().await;
 
-  Ok((api.id().to_owned(), status))
+  // Update service.stats from live provider statuses.
+  {
+    let mut service_guard = state.lock().await;
+    let fresh: Vec<_> = service_guard
+      .api_client
+      .get_provider_ids()
+      .iter()
+      .filter_map(|id| {
+        service_guard
+          .api_client
+          .get_provider(id)
+          .ok()
+          .map(|p| (p.id(), p.status()))
+      })
+      .collect();
+    service_guard.stats = fresh;
+  }
+
+  Ok((provider_id, status))
 }
 
 #[tauri::command]
@@ -44,6 +91,40 @@ pub async fn get_fastest_provider(app: tauri::AppHandle) -> Result<Option<String
   let service_guard = state.lock().await;
   let fastest = service_guard.api_client.fastest_available();
   Ok(fastest.first().map(|(id, _)| id.to_string()))
+}
+
+/// Ping a single provider by id. Updates its live status and service.stats.
+#[tauri::command]
+pub async fn ping_api_provider(app: tauri::AppHandle, providerId: String) -> Result<(String, ProviderStatus), String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+
+  let api_client = {
+    let service_guard = state.lock().await;
+    service_guard.api_client.clone()
+  };
+
+  let api = api_client.get_provider(&providerId).map_err(|e| e.to_string())?;
+  let status = api.ping().await;
+
+  // Update service.stats from live provider statuses.
+  {
+    let mut service_guard = state.lock().await;
+    let fresh: Vec<_> = service_guard
+      .api_client
+      .get_provider_ids()
+      .iter()
+      .filter_map(|id| {
+        service_guard
+          .api_client
+          .get_provider(id)
+          .ok()
+          .map(|p| (p.id(), p.status()))
+      })
+      .collect();
+    service_guard.stats = fresh;
+  }
+
+  Ok((providerId, status))
 }
 
 #[tauri::command]

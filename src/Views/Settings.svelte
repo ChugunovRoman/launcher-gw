@@ -10,11 +10,16 @@
   import Scroll from "../Components/Scroll.svelte";
   import Bg from "../Components/Bg.svelte";
   import Radio from "../Components/Radio.svelte";
+  import Spin from "../Components/Spin.svelte";
+  import { RefreshCw } from "lucide-svelte";
   import { prepareVersionItem } from "../lib/main";
+  import { switchProvider, pingProvider } from "../lib/providers";
 
   let coping = $state(false);
   let coping2 = $state(false);
   let uuid = $state("");
+  let providerSwitchError = $state("");
+  let pingingProvider = $state<string | null>(null);
 
   async function selectInstallPath(e: Event) {
     await choosePath((selected) => updateConfig("default_installed_path", selected));
@@ -66,11 +71,9 @@
       });
     }
   });
-  // Versions are already loaded at app startup (versions-loaded event). This
-  // effect must NOT re-fetch on every Settings mount — otherwise it overwrites
-  // the live download state (inProgress/filesProgress/downloadSpeed) of a
-  // version that is currently downloading. Skip the initial run; only refresh
-  // when the user actually changes the server.
+
+  // React to provider radio changes — centralized switch via lib/providers.ts.
+  // Skip the initial run to avoid refetching on Settings mount.
   let providerInitialized = false;
   $effect(() => {
     const provider = $radioApiProvider;
@@ -78,31 +81,23 @@
       providerInitialized = true;
       return;
     }
-    const timer = setTimeout(() => {
-      invoke("set_current_api_provider", { provider });
-
-      invoke<Version[]>("get_available_versions").then(async (data) => {
-        const separ = await sep();
-        // Preserve the live download/pause state: prepareVersionItem always sets
-        // inProgress=false and resets filesProgress/downloadSpeed, which would
-        // wipe the UI of a version currently downloading or paused.
-        const existing = new Map($versions.map((v) => [v.name, v]));
-        versions.set(
-          data
-            .map((version) => {
-              const live = existing.get(version.name);
-              if (live && (live.inProgress || live.isStoped)) {
-                return live;
-              }
-              return prepareVersionItem($appConfig, version, separ);
-            })
-            .filter((v) => !hasLocalVersion(v))
-        );
-      });
-    }, 200);
-
-    return () => clearTimeout(timer);
+    providerSwitchError = "";
+    switchProvider(provider).catch(() => {
+      providerSwitchError = $_("app.settings.providerSwitchError");
+    });
   });
+
+  async function handlePingProvider(id: string) {
+    if (pingingProvider) return;
+    pingingProvider = id;
+    try {
+      await pingProvider(id);
+    } catch (e) {
+      console.error("pingProvider failed:", e);
+    } finally {
+      pingingProvider = null;
+    }
+  }
 </script>
 
 <div class="settings_view">
@@ -161,15 +156,32 @@
       <div class="input-row input-column">
         <span>{$_("app.settings.servers")}</span>
         {#each $providers as [id, stats]}
-          <Radio name="provider" value={id} disabled={!stats.available} bind:group={$radioApiProvider}>
-            {$_(`app.servers.${id}`)}
-            {#if stats.available}
-              ({$_("app.settings.ping")} {stats.latency_ms})
-            {:else}
-              <span class="warntext">({$_("app.settings.noAvailable")})</span>
-            {/if}
-          </Radio>
+          <div class="provider-row">
+            <Radio name="provider" value={id} disabled={!stats.available} bind:group={$radioApiProvider}>
+              {$_(`app.servers.${id}`)}
+              {#if stats.available}
+                ({$_("app.settings.ping")} {stats.latency_ms})
+              {:else}
+                <span class="warntext">({$_("app.settings.noAvailable")})</span>
+              {/if}
+            </Radio>
+            <button
+              type="button"
+              class="ping-btn"
+              onclick={() => handlePingProvider(id)}
+              title={$_("app.settings.retryPing")}
+            >
+              {#if pingingProvider === id}
+                <Spin size={14} color="rgba(200, 200, 200, 0.8)" />
+              {:else}
+                <RefreshCw size={14} color="rgba(200, 200, 200, 0.8)" />
+              {/if}
+            </button>
+          </div>
         {/each}
+        {#if providerSwitchError}
+          <span class="warntext" style="margin-top: 4px;">{providerSwitchError}</span>
+        {/if}
       </div>
     </Bg>
   </Scroll>
@@ -199,6 +211,30 @@
   .warntext {
     font-size: 0.8rem;
     color: rgba(252, 186, 186, 0.8);
+  }
+
+  .provider-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+
+  .ping-btn {
+    -webkit-app-region: no-drag;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+  }
+
+  .ping-btn:hover {
+    opacity: 1;
   }
 
   .uuid-input {

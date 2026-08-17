@@ -1,6 +1,6 @@
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { selectedVersion, updateVersion, versions } from '../store/upload';
+import { selectedVersion, updateVersionProgress, removeDownloadState, versions } from '../store/upload';
 import { formatSpeedBytesPerSec } from '../utils/dwn';
 import { invoke } from '@tauri-apps/api/core';
 import { get } from 'svelte/store';
@@ -19,7 +19,7 @@ export async function initDownloadListeners() {
       total_file_count,
     } = event.payload;
 
-    updateVersion(version_name, () => ({
+    updateVersionProgress(version_name, () => ({
       downloadCurrentFile: file,
       downloadProgress: progress,
       downloadedFilesCnt: downloaded_files_cnt,
@@ -32,7 +32,7 @@ export async function initDownloadListeners() {
 
     const [speedValue, sfxValue] = formatSpeedBytesPerSec(speed);
 
-    updateVersion(versionName, (version) => {
+    updateVersionProgress(versionName, (version) => {
       const map = new Map(version.filesProgress);
       let totalSpeed = 0;
       let downloadFilesTotalBytes = 0;
@@ -83,7 +83,7 @@ export async function initDownloadListeners() {
   unlisten.set('download-version-files', await listen('download-version-files', (event: Event<[string, { name: string; unpacked: boolean; size: number }[]]>) => {
     const [versionName, fileSizesMap] = event.payload;
 
-    updateVersion(versionName, (version) => {
+    updateVersionProgress(versionName, (version) => {
       const map = new Map(version.filesProgress);
       const totals = new Map((version.manifest?.files || []).map((f) => [f.name, f.size]));
 
@@ -151,6 +151,8 @@ export async function initDownloadListeners() {
     } catch (e) {
       console.error("clear_progress_version failed:", e);
     }
+
+    removeDownloadState(versionName);
 
     if (localVersions.size() === 0) {
       selectedVersion.set(undefined);

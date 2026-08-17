@@ -80,7 +80,9 @@ impl ApiClient {
       (*id, status)
     });
 
-    join_all(ping_futures).await
+    let mut results: Vec<_> = join_all(ping_futures).await;
+    results.sort_by_key(|(_, s)| s.latency_ms.unwrap_or(u64::MAX));
+    results
   }
 
   /// Возвращает только доступные провайдеры

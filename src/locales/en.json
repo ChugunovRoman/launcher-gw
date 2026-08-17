@@ -59,7 +59,9 @@
       "clientUuid": "Client ID",
       "ping": "ping: ",
       "noAvailable": "Not available",
-      "servers": "Current server for downloading game files:"
+      "servers": "Current server for downloading game files:",
+      "retryPing": "Retry ping",
+      "providerSwitchError": "Failed to switch server. Check your connection."
     },
     "servers": {
       "github": "Server 1",

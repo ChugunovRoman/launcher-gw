@@ -33,6 +33,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     // service
     handlers::service::ping_all_providers,
     handlers::service::ping_current_provider,
+    handlers::service::ping_api_provider,
     handlers::service::get_fastest_provider,
     handlers::service::get_launcher_bg,
     handlers::service::set_token_for_provider,

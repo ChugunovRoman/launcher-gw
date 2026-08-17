@@ -1,7 +1,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
 import { progress } from '../store/unpack';
-import { updateVersion } from '../store/upload';
+import { updateVersionProgress } from '../store/upload';
 import { DownloadStatus } from '../consts';
 
 const unlistens: UnlistenFn[] = [];
@@ -15,7 +15,7 @@ export async function initUnpackListener() {
       progress.set(percent);
 
       if (versionName !== "") {
-        updateVersion(versionName, () => ({
+        updateVersionProgress(versionName, () => ({
           status: DownloadStatus.Unpacking,
           downloadProgress: percent,
         }));
@@ -30,7 +30,7 @@ export async function initUnpackListener() {
       const status = percent >= 100 ? 3 : 2;
 
       if (versionName !== "") {
-        updateVersion(versionName, (version) => {
+        updateVersionProgress(versionName, (version) => {
           const map = version.filesProgress;
           const prev = map.get(fileName);
           if (!prev) {

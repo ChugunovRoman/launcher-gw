@@ -21,7 +21,7 @@
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
   import Spin from "../Components/Spin.svelte";
-  import { getInMb, parseBytes } from "../utils/dwn";
+  import { getInMb, parseBytes, formatSpeedBytesPerSec } from "../utils/dwn";
 
   let expandedIndex = $state<number | null>(null);
 
@@ -157,13 +157,16 @@
       const vn = activeUploadVersion;
       if (!vn) return;
       const p = e.payload;
+      // Keep speedValue numeric (UploadFileData.speedValue is number) and use the
+      // shared formatter for consistent units, same as the upload-v2 flow.
+      const [speedValue, sfxValue] = formatSpeedBytesPerSec(p.speed);
       updateUploadState(vn, (s) => {
         s.files = new Map(s.files).set(p.file_name, {
           file_uploaded_size: p.file_uploaded_size,
           file_total_size: p.file_total_size,
           progress: p.file_total_size > 0 ? (p.file_uploaded_size / p.file_total_size) * 100 : 0,
-          speedValue: String(Math.round(p.speed)),
-          sfxValue: "B/s",
+          speedValue,
+          sfxValue,
         });
       });
     });

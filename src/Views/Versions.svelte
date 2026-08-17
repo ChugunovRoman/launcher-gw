@@ -21,7 +21,7 @@
     patchNotesData,
     fetchLocalVersions,
   } from "../store/main";
-  import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
+  import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
   import { FileDown } from "lucide-svelte";
@@ -99,7 +99,7 @@
     $showDlgPatchNotes = true;
   }
 
-  function formatInstalledDate(iso: string | undefined): string {
+  function formatInstalledDate(iso: string | null | undefined): string {
     if (!iso) return "";
     return iso.slice(0, 10);
   }
@@ -126,7 +126,7 @@
     const found = $versions.find((v) => v.name === releaseName);
     if (found?.manifest) {
       if (!found.filesProgress || found.filesProgress.size === 0) {
-        updateVersion(releaseName, (version) => ({
+        updateVersionProgress(releaseName, (version) => ({
           filesProgress: filesProgressFromManifest(found.manifest!, version.filesProgress),
         }));
       }
@@ -135,7 +135,7 @@
 
     const manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
 
-    updateVersion(releaseName, (version) => ({
+    updateVersionProgress(releaseName, (version) => ({
       manifest,
       filesProgress: filesProgressFromManifest(manifest, version.filesProgress),
     }));
@@ -157,7 +157,7 @@
       $expandedIndex = index;
     }
 
-    updateVersion(version.name, () => ({
+    updateVersionProgress(version.name, () => ({
       inProgress: true,
       isStoped: false,
       status: DownloadStatus.DownloadFiles,
@@ -170,12 +170,12 @@
     } catch (error: any) {
       const msg = typeof error === "string" ? error : String(error?.message ?? error);
       if (msg.includes("USER_CANCELLED") && !version.wasCanceled) {
-        updateVersion(version.name, () => ({
+        updateVersionProgress(version.name, () => ({
           inProgress: false,
           isStoped: true,
         }));
       } else {
-        updateVersion(version.name, () => ({
+        updateVersionProgress(version.name, () => ({
           inProgress: false,
           isStoped: false,
         }));
@@ -194,7 +194,7 @@
     await cancelDownload(event, releaseName);
     // Reset to a fresh state (not just inProgress/isStoped) so no stale progress
     // fields linger on the version in the store after cancel.
-    updateVersion(releaseName, () => ({
+    updateVersionProgress(releaseName, () => ({
       inProgress: false,
       isStoped: false,
       wasCanceled: true,
@@ -232,7 +232,7 @@
   }
   async function handlePauseDownload(event: Event, releaseName: string) {
     await cancelDownload(event, releaseName);
-    updateVersion(releaseName, () => ({
+    updateVersionProgress(releaseName, () => ({
       inProgress: false,
       isStoped: true,
     }));
@@ -289,7 +289,7 @@
 
     console.log("Start handleStartDownload");
 
-    updateVersion(releaseName, () => ({
+    updateVersionProgress(releaseName, () => ({
       inProgress: true,
       isStoped: false,
       wasCanceled: false,
@@ -307,12 +307,12 @@
       const updatedVersion = $versions.find((v) => v.name === releaseName);
       const msg = typeof error === "string" ? error : String(error?.message ?? error);
       if (msg.includes("USER_CANCELLED") && !updatedVersion!.wasCanceled) {
-        updateVersion(releaseName, () => ({
+        updateVersionProgress(releaseName, () => ({
           inProgress: false,
           isStoped: true,
         }));
       } else {
-        updateVersion(releaseName, () => ({
+        updateVersionProgress(releaseName, () => ({
           inProgress: false,
           isStoped: false,
         }));
@@ -332,7 +332,7 @@
       dpath = dpath.replace(`${version.path}_data`, "");
     }
 
-    updateVersion(version.name, () => ({
+    updateVersionProgress(version.name, () => ({
       installed_path: ipath,
       download_path: dpath,
     }));
@@ -347,7 +347,7 @@
         path = await join(path, version.path);
       }
 
-      updateVersion(version.name, () => ({
+      updateVersionProgress(version.name, () => ({
         installed_path: path,
         download_path: `${path}_data`,
       }));
@@ -356,7 +356,7 @@
   async function chooseDownloadDataPath(event: Event, version: Version) {
     event.stopPropagation();
     await choosePath((selected) => {
-      updateVersion(version.name, () => ({
+      updateVersionProgress(version.name, () => ({
         download_path: selected,
       }));
     });

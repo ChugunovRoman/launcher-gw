@@ -45,18 +45,18 @@ declare interface VersionFileDownload {
 declare interface InstalledPatch {
   name: string;
   provider_id: string;
-  installed_at?: string;
+  installed_at?: string | null;
   notes?: string | null;
 }
 declare interface Version {
-  id: string;
+  id: number;
   name: string;
   path: string;
   installed_path: string;
   download_path: string;
-  engine_path: string;
-  fsgame_path: string;
-  userltx_path: string;
+  engine_path: string | null;
+  fsgame_path: string | null;
+  userltx_path: string | null;
   exe_path?: string;
   installed_updates: InstalledPatch[];
   is_local: boolean;
@@ -77,23 +77,24 @@ declare interface Version {
   filesProgress: Map<string, VersionFileDownload>;
 }
 declare interface VersionProgress {
-  id: string;
+  id: number;
   name: string;
   path: string;
   installed_path: string;
   download_path: string;
   files: Dict<FileProgress>;
   is_downloaded: boolean;
-  is_unpacked: boolean;
   downloaded_files_cnt: number;
   total_file_count: number;
   manifest?: ReleaseManifest;
 }
 declare interface FileProgress {
   id: string;
+  download_link: string;
   name: string;
-  path: string;
   is_downloaded: boolean;
+  is_unpacked: boolean;
+  size: number;
   total_size: number;
 }
 declare interface RunParams {
@@ -124,6 +125,7 @@ declare interface AppConfig {
   vid_modes: string[];
   vid_mode_latest: string;
   log_level: LogLevel;
+  lang: string;
   run_params: RunParams;
   pack_source_dir: string;
   pack_target_dir: string;
@@ -132,6 +134,8 @@ declare interface AppConfig {
   patch_source_dir: string;
   patch_upload_dir: string;
   patch_exclude_patterns: string[];
+  versions: Version[];
+  choosed_version_path?: string | null;
   selected_version?: string;
   selected_profile?: string;
   apply_key_profile?: boolean | null;
@@ -168,7 +172,7 @@ declare interface ReleaseManifest {
 
 declare interface ProviderStatus {
   available: boolean;
-  latency_ms: number;
+  latency_ms: number | null;
 }
 
 declare interface ProgressPayload {
@@ -233,14 +237,6 @@ declare interface RepoTagReport {
 declare interface PatchUploadResult {
   repos: RepoTagReport[];
   warnings: string[];
-}
-declare interface UploadProgressPayload {
-  file_name: string;
-  file_uploaded_size: number;
-  file_total_size: number;
-  total_uploaded_size: number;
-  total_size: number;
-  speed: number;
 }
 
 
