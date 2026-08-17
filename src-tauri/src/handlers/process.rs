@@ -260,21 +260,17 @@ pub async fn run_game(
   let users_args = split_args(&config_guard.run_params.cmd_params);
   run_params.extend(users_args);
 
-  // CLI args are for the xray engine directly (tiers 2 and 5). Stalker launcher
-  // exes (tiers 1, 3, 4) are wrappers launched like a double-click: they set up
-  // the engine themselves and read settings from fsgame.ltx/user.ltx. Passing
-  // args to them can make the wrapper exit immediately without starting the game
-  // (confirmed: 0.5.2-Beta's Stalker-CoC.exe exits with code 0 when given args).
-  let launch_args: Vec<String> = if is_xray_engine {
-    run_params
-  } else {
-    Vec::new()
-  };
-
+  // CLI args are passed on every tier. Direct xray launches (tiers 2, 5) parse
+  // them via Core.Params; the Stalker-* wrappers (tiers 1, 3, 4) re-pack their
+  // own command line (minus their private flags like -skip_reg) and
+  // ShellExecute bin\xrEngine.exe with it. Engine flags (-dbg, -uidbg, ...)
+  // exist ONLY on the command line — they cannot be expressed via user.ltx.
+  // The wrapper always exits 0 right after spawning the engine (with or without
+  // args); resolve_engine_pid finds the real engine PID after that quick exit.
   log::info!(
     "Start game exe: {:?} with params: {:?} target_path: {:?}",
     &exe,
-    &launch_args,
+    &run_params,
     target_path
   );
 
@@ -328,7 +324,7 @@ pub async fn run_game(
   );
 
   let child = Command::new(&launch_exe)
-    .args(&launch_args)
+    .args(&run_params)
     .current_dir(&effective_cwd)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
