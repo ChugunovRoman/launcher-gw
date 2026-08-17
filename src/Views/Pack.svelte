@@ -6,6 +6,7 @@
   import { progress, isInProcess, finish, completed, currentFile, processedSize, totalSize, status } from "../store/pack";
   import { providersWasInited } from "../store/main";
   import { choosePath, chooseFilePath } from "../utils/path";
+  import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
 
   import Progress from "../Components/Progress.svelte";
   import Spin from "../Components/Spin.svelte";
@@ -43,58 +44,7 @@
         targetPath: targetPath,
         chunkSize,
         exePath: exePath && exePath.length ? exePath : null,
-        excludePatterns: [
-          "*.git",
-          "*.git/**",
-          ".gitlab-ci.yml",
-          "*/.gitlab-ci.yml",
-          ".editorconfig",
-          "*/.editorconfig",
-          ".gitignore",
-          "*/.gitignore",
-          ".gitmodules",
-          "*/.gitmodules",
-          ".gitconfig",
-          "*/.gitconfig",
-          ".gitattributes",
-          "*/.gitattributes",
-          "*.pl",
-          "*.sh",
-          "utils/**",
-          "utils",
-          "*.rar",
-          ".vscode",
-          ".vscode/**",
-          "*/.vscode/**",
-          "xrLost.exe",
-          "xrPlay.ini",
-          "packer.exe",
-          "gamedata/helpers",
-          "gamedata/helpers/**",
-          "appdata/logs",
-          "appdata/logs/**",
-          "appdata/savedgames",
-          "appdata/savedgames/**",
-          "appdata/screenshots",
-          "appdata/screenshots/**",
-          "appdata/shaders_cache",
-          "appdata/shaders_cache/**",
-          "appdata/shaders_cache_oxr",
-          "appdata/shaders_cache_oxr/**",
-          "appdata/launcherdata",
-          "appdata/launcherdata/**",
-          "appdata/cdb_cache",
-          "appdata/cdb_cache/**",
-          "appdata/reports",
-          "appdata/reports/**",
-          "gamedata/configs/misc/armament/custom",
-          "gamedata/configs/misc/armament/custom/**",
-          "*JSGME*",
-          "*.lnk",
-          "*.txt",
-          "installer",
-          "Compressor",
-        ],
+        excludePatterns: DEFAULT_EXCLUDE_PATTERNS,
       });
 
       $progress = 100;

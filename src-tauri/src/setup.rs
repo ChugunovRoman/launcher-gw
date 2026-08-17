@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tauri::Manager;
 use tauri::{App, Emitter};
 
+use crate::handlers::patch_install::check_patches_available;
 use crate::handlers::start_download_version::CancelMap;
 use crate::handlers::upload_v2::UploadCancelMap;
 use crate::service::files::ServiceFiles;
@@ -147,6 +148,42 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let _ = app_handle_bg.emit("versions-loaded", releases);
+      }
+
+      // Auto-check for available patches (lightweight, silent).
+      {
+        let api_client = {
+          let svc = service_clone.lock().await;
+          svc.api_client.clone()
+        };
+        let version_names: Vec<String> = {
+          let cfg = config_arc_clone.lock().await;
+          cfg.installed_versions.values().map(|v| v.name.clone()).collect()
+        };
+
+        for vname in version_names {
+          let check = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            check_patches_available(&api_client, &config_arc_clone, &vname),
+          )
+          .await;
+
+          match check {
+            Ok(Some(count)) if count > 0 => {
+              log::info!("Auto-check: {} patches available for '{}'", count, &vname);
+              let _ = app_handle_bg.emit("patches-available", (&vname, count));
+            }
+            Ok(Some(_)) => {
+              log::info!("Auto-check: '{}' is up to date", &vname);
+            }
+            Ok(None) => {
+              log::warn!("Auto-check: could not check patches for '{}'", &vname);
+            }
+            Err(_) => {
+              log::warn!("Auto-check: timed out for '{}'", &vname);
+            }
+          }
+        }
       }
 
       {

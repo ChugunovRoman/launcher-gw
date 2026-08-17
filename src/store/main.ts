@@ -43,6 +43,13 @@ export const moveProgress = createMapStore<string, ProgressPayload>();
 
 export const localVersions = createMapStore<string, Version>();
 
+// Patch check & install stores
+export const patchCheckResults = createMapStore<string, { count: number; checkedAt: number }>();
+export const patchInstallProgress = writable<PatchInstallProgress | null>(null);
+export const patchInstallLog = writable<string[]>([]);
+export const showDlgPatchNotes = writable(false);
+export const patchNotesData = writable<{ title: string; notes: string | null } | null>(null);
+
 export function updateConfig<F extends keyof AppConfig>(field: F, value: any) {
   appConfig.update(cfg => {
     cfg[field] = value;

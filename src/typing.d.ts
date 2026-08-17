@@ -42,6 +42,12 @@ declare interface VersionFileDownload {
   // 0 - в очереди на загрузку; 1 - загружается; 2 - распаковывается; 3 - скачаен и распакован
   status: number;
 }
+declare interface InstalledPatch {
+  name: string;
+  provider_id: string;
+  installed_at?: string;
+  notes?: string | null;
+}
 declare interface Version {
   id: string;
   name: string;
@@ -52,7 +58,7 @@ declare interface Version {
   fsgame_path: string;
   userltx_path: string;
   exe_path?: string;
-  installed_updates: string[];
+  installed_updates: InstalledPatch[];
   is_local: boolean;
   manifest?: ReleaseManifest;
   // only js fields
@@ -123,6 +129,9 @@ declare interface AppConfig {
   pack_target_dir: string;
   unpack_source_dir: string;
   unpack_target_dir: string;
+  patch_source_dir: string;
+  patch_upload_dir: string;
+  patch_exclude_patterns: string[];
   selected_version?: string;
   selected_profile?: string;
   apply_key_profile?: boolean | null;
@@ -149,6 +158,11 @@ declare interface ReleaseManifest {
   compressed_size: number;
   files: ReleaseManifestFile[];
   exe_path?: string;
+  // Patch fields (present only in patch manifests from updates repos).
+  patch_name?: string;
+  base_patch?: string;
+  base_release_tag?: string;
+  deleted_files: string[];
 }
 
 
@@ -190,6 +204,45 @@ declare interface UploadFileData {
   sfxValue: string;
 }
 
+// Partial update patches: git collection result (stage 1)
+declare type RepoPatchStatus = "collected" | "no_tags" | "no_changes" | "error";
+declare interface RepoPatchReport {
+  repo_rel_path: string;
+  base_tag: string;
+  status: RepoPatchStatus;
+  changed: number;
+  deleted: number;
+  message?: string | null;
+}
+declare interface PatchCollectResult {
+  patch_dir: string;
+  deleted_files: string[];
+  base_tag: string | null;
+  repos: RepoPatchReport[];
+  changed: number;
+  deleted: number;
+}
+
+// Partial update patches: upload result (stage 2)
+declare interface RepoTagReport {
+  repo_rel_path: string;
+  tagged: boolean;
+  pushed: boolean;
+  message?: string | null;
+}
+declare interface PatchUploadResult {
+  repos: RepoTagReport[];
+  warnings: string[];
+}
+declare interface UploadProgressPayload {
+  file_name: string;
+  file_uploaded_size: number;
+  file_total_size: number;
+  total_uploaded_size: number;
+  total_size: number;
+  speed: number;
+}
+
 
 // 
 
@@ -210,4 +263,23 @@ declare interface KeybindingMapData {
 declare interface ProfileItem {
   name: string;
   keybinds: Dict<String, KeybindingMapData>;
+}
+
+// Partial update patches: check & install (stage 3)
+declare interface PatchInfo {
+  name: string;
+  notes: string | null;
+  size: number | null;
+  is_next: boolean;
+}
+declare interface PatchCheckResult {
+  patches: PatchInfo[];
+  missing: string[];
+}
+declare interface PatchInstallProgress {
+  stage: "download" | "unpack" | "delete" | "done";
+  version: string;
+  file: string;
+  file_progress: number;
+  total_progress: number;
 }

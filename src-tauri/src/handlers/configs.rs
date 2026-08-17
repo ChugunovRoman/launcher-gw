@@ -72,6 +72,30 @@ pub async fn set_unpack_paths(app: tauri::AppHandle, source: String, target: Str
 }
 
 #[tauri::command]
+pub async fn set_patch_source_dir(app: tauri::AppHandle, source: String) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().await;
+  config_guard.patch_source_dir = source;
+  config_guard.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_patch_upload_dir(app: tauri::AppHandle, path: String) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().await;
+  config_guard.patch_upload_dir = path;
+  config_guard.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_patch_exclude_patterns(app: tauri::AppHandle, patterns: Vec<String>) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().await;
+  config_guard.patch_exclude_patterns = patterns;
+  config_guard.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_tokens(app: tauri::AppHandle) -> Result<HashMap<String, String>, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let config_guard = state.lock().await;

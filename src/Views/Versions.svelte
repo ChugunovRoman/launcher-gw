@@ -15,6 +15,11 @@
     updateLocalVersion,
     showDlgAddVersion,
     appConfig,
+    patchCheckResults,
+    patchInstallProgress,
+    showDlgPatchNotes,
+    patchNotesData,
+    fetchLocalVersions,
   } from "../store/main";
   import { versions, updateVersion, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
@@ -33,6 +38,71 @@
   let input1Needed = $state<number>(0);
   let input2Needed = $state<number>(0);
   let addVersionName = $state<boolean>(true);
+
+  // Patch state
+  let patchChecks = $state<Map<string, PatchCheckResult>>(new Map());
+  let checkingPatch = $state<string | null>(null);
+  let installingPatch = $state<{ version: string; patch: string } | null>(null);
+  let patchErrors = $state<Map<string, string>>(new Map());
+
+  function parseSize(size: number | null): string {
+    if (!size) return "";
+    const parsed = parseBytes(size);
+    return `${parsed[0]} ${$_(`app.common.${parsed[1]}`)}`;
+  }
+
+  async function handleCheckPatches(version: Version) {
+    const name = version.name;
+    checkingPatch = name;
+    patchErrors.delete(name);
+    patchErrors = patchErrors;
+
+    try {
+      const result = await invoke<PatchCheckResult>("get_version_patches", { versionName: name });
+      patchChecks = new Map(patchChecks).set(name, result);
+      patchCheckResults.setItem(name, { count: result.missing.length, checkedAt: Date.now() });
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : String(e?.message ?? e);
+      patchErrors = new Map(patchErrors).set(name, msg);
+      patchCheckResults.delItem(name);
+    } finally {
+      checkingPatch = null;
+    }
+  }
+
+  async function handleInstallPatch(version: Version, patchName: string) {
+    installingPatch = { version: version.name, patch: patchName };
+    const name = version.name;
+    patchErrors.delete(name);
+    patchErrors = patchErrors;
+
+    try {
+      await invoke<void>("start_install_patch", { versionName: name, patchName });
+      // Refresh installed_updates in the local store.
+      await fetchLocalVersions();
+      // Re-check available patches.
+      await handleCheckPatches(version);
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : String(e?.message ?? e);
+      patchErrors = new Map(patchErrors).set(name, msg);
+    } finally {
+      installingPatch = null;
+    }
+  }
+
+  async function handleCancelInstall(versionName: string) {
+    await invoke<void>("cancel_install_patch", { versionName });
+  }
+
+  function openPatchNotes(title: string, notes: string | null) {
+    $patchNotesData = { title, notes };
+    $showDlgPatchNotes = true;
+  }
+
+  function formatInstalledDate(iso: string | undefined): string {
+    if (!iso) return "";
+    return iso.slice(0, 10);
+  }
 
   function filesProgressFromManifest(manifest: ReleaseManifest, old?: Map<string, VersionFileDownload>) {
     const map = new Map<string, VersionFileDownload>();
@@ -413,6 +483,9 @@
           </span>
           <span class="version-name">
             {name}
+            {#if ($patchCheckResults.get(name)?.count ?? 0) > 0}
+              <span class="patch-badge">{$patchCheckResults.get(name)!.count}</span>
+            {/if}
           </span>
           <button type="button" onclick={(e) => chooseInstalledVersion(e, version)} class="choose-btn" style="margin-left: auto">
             {#if name === $selectedVersion}
@@ -458,6 +531,110 @@
                 </Button>
               </div>
             </div>
+
+            <!-- Patch section -->
+            <div class="patch-section">
+              <div class="patch-section-header">
+                <span class="patch-section-title">{$_("app.patches.title")}</span>
+                <button
+                  type="button"
+                  class="choose-btn patch-check-btn"
+                  disabled={checkingPatch === name}
+                  onclick={() => handleCheckPatches(version)}>
+                  {#if checkingPatch === name}
+                    <Spin size={12} /> {$_("app.patches.checking")}
+                  {:else}
+                    {$_("app.patches.check")}
+                  {/if}
+                </button>
+              </div>
+
+              <!-- Installed patches -->
+              {#if version.installed_updates.length > 0}
+                <div class="patch-subsection">{$_("app.patches.installed")}</div>
+                {#each version.installed_updates as patch}
+                  <div class="patch-row">
+                    <span
+                      class="patch-name clickable"
+                      onclick={() => openPatchNotes(patch.name, patch.notes ?? null)}>
+                      {patch.name}
+                    </span>
+                    <span class="patch-date">{formatInstalledDate(patch.installed_at)}</span>
+                  </div>
+                {/each}
+              {/if}
+
+              <!-- Available patches (from check result) -->
+              {#if patchChecks.has(name)}
+                {@const check = patchChecks.get(name)!}
+                {#if check.missing.length > 0}
+                  <div class="patch-subsection">{$_("app.patches.available")}</div>
+                  {#each check.patches.filter((p) => check.missing.includes(p.name)) as patch}
+                    <div class="patch-row" class:patch-next={patch.is_next}>
+                      <span
+                        class="patch-name clickable"
+                        onclick={() => openPatchNotes(patch.name, patch.notes)}>
+                        {patch.name}
+                      </span>
+                      <span class="patch-size">{parseSize(patch.size)}</span>
+                      {#if patch.is_next}
+                        <button
+                          type="button"
+                          class="download-btn patch-install-btn"
+                          class:patch-install-btn-busy={installingPatch?.version === name}
+                          disabled={installingPatch?.version === name}
+                          onclick={() => handleInstallPatch(version, patch.name)}>
+                          {#if installingPatch?.version === name}
+                            <Spin size={12} /> {$_("app.patches.installing")}
+                          {:else}
+                            {$_("app.patches.install")}
+                          {/if}
+                        </button>
+                      {:else}
+                        <span class="patch-hint">{$_("app.patches.installNextFirst")}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                {:else}
+                  <div class="patch-up-to-date">{$_("app.patches.upToDate")}</div>
+                {/if}
+              {/if}
+
+              <!-- Install progress -->
+              {#if installingPatch?.version === name && $patchInstallProgress}
+                <div class="patch-install-progress">
+                  <div class="patch-install-stage">
+                    {#if $patchInstallProgress.stage === "download"}
+                      {$_("app.patches.stageDownload")}
+                    {:else if $patchInstallProgress.stage === "unpack"}
+                      {$_("app.patches.stageUnpack")}
+                    {:else if $patchInstallProgress.stage === "delete"}
+                      {$_("app.patches.stageDelete")}
+                    {:else}
+                      {$patchInstallProgress.stage}
+                    {/if}
+                    {#if $patchInstallProgress.file}
+                      — {$patchInstallProgress.file}
+                    {/if}
+                  </div>
+                  <Progress progress={$patchInstallProgress.total_progress} />
+                  {#if $patchInstallProgress.stage === "download"}
+                  <button
+                    type="button"
+                    class="cancel-btn choose-btn patch-cancel-btn"
+                    onclick={() => handleCancelInstall(name)}>
+                    {$_("app.patches.cancel")}
+                  </button>
+                  {/if}
+                </div>
+              {/if}
+
+              <!-- Error -->
+              {#if patchErrors.has(name)}
+                <div class="patch-error">{patchErrors.get(name)}</div>
+              {/if}
+            </div>
+
             {#if $moveProgress.has(version.name)}
               <div class="input-group">
                 <div class="input-buttons">
@@ -1051,5 +1228,138 @@
   /* Опционально: hover-эффект */
   .checkbox-label input[type="checkbox"]:hover {
     background: rgba(40, 40, 40, 0.7);
+  }
+
+  /* Patch section */
+  .patch-section {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+  }
+  .patch-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .patch-section-title {
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .patch-check-btn {
+    font-size: 0.8rem;
+    padding: 0.3rem 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .patch-check-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .patch-subsection {
+    color: #aaa;
+    font-size: 0.8rem;
+    font-weight: 500;
+    margin-bottom: 0.35rem;
+    margin-top: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .patch-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+    font-size: 0.85rem;
+  }
+  .patch-row.patch-next {
+    background: rgba(76, 175, 80, 0.08);
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+  }
+  .patch-name {
+    color: #ddd;
+    min-width: 120px;
+  }
+  .patch-name.clickable {
+    color: #6db3f2;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+  }
+  .patch-name.clickable:hover {
+    color: #90c8ff;
+  }
+  .patch-date {
+    color: #888;
+    font-size: 0.8rem;
+  }
+  .patch-size {
+    color: #999;
+    font-size: 0.8rem;
+  }
+  .patch-install-btn {
+    font-size: 0.8rem;
+    padding: 0.3rem 1rem;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .patch-install-btn-busy {
+    background-color: rgba(233, 236, 61, 0.8) !important;
+    cursor: wait !important;
+  }
+  .patch-install-btn-busy:hover {
+    background-color: rgba(233, 236, 61, 0.8) !important;
+  }
+  .patch-hint {
+    color: #777;
+    font-size: 0.75rem;
+    font-style: italic;
+    margin-left: auto;
+  }
+  .patch-up-to-date {
+    color: #4caf50;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+  }
+  .patch-install-progress {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .patch-install-stage {
+    color: #ddd;
+    font-size: 0.85rem;
+  }
+  .patch-cancel-btn {
+    align-self: flex-start;
+    font-size: 0.8rem;
+    padding: 0.3rem 1rem;
+    margin-top: 0.25rem;
+  }
+  .patch-error {
+    color: #f44336;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+  }
+  .patch-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(255, 193, 7, 0.9);
+    color: #000;
+    font-size: 0.7rem;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    padding: 0 5px;
+    margin-left: 8px;
+    vertical-align: middle;
   }
 </style>

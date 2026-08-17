@@ -19,6 +19,9 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_lang,
     handlers::configs::set_pack_paths,
     handlers::configs::set_unpack_paths,
+    handlers::configs::set_patch_source_dir,
+    handlers::configs::set_patch_upload_dir,
+    handlers::configs::set_patch_exclude_patterns,
     handlers::configs::get_tokens,
     handlers::configs::set_default_install_path,
     handlers::configs::set_default_download_path,
@@ -59,6 +62,14 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::upload_v2::upload_v2_release,
     handlers::upload_v2::cancel_upload,
     handlers::upload_v2::continue_upload_v2,
+    // patches (developer: collect & upload)
+    handlers::patches::collect_patch,
+    handlers::patches::upload_patch,
+    handlers::patches::cancel_patch_upload,
+    // patches (player: check & install)
+    handlers::patch_install::get_version_patches,
+    handlers::patch_install::start_install_patch,
+    handlers::patch_install::cancel_install_patch,
     // Profiles
     handlers::profiles::add_profile,
     handlers::profiles::delete_profile,

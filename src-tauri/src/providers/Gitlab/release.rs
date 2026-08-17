@@ -6,6 +6,41 @@ use crate::providers::{
 
 use anyhow::{Context, Result, bail};
 
+/// Lists all releases of a concrete repo (tag, name, body/notes, created_at).
+/// Used for patch chains in updates repos.
+pub async fn __get_repo_releases(s: &Gitlab, project_id: &str) -> Result<Vec<RepoReleaseInfo>> {
+  let url = format!("{}/projects/{}/releases", &s.host, &project_id);
+  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_repo_releases)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__get_repo_releases, GitLab API error {}: {} url: {}", status, body, url);
+  }
+
+  let body_text = resp.text().await.context("Failed to read GitLab releases response body")?;
+  let preview: String = body_text.chars().take(500).collect();
+  log::debug!("GitLab __get_repo_releases raw response ({} chars) for project '{}': {}", body_text.len(), project_id, preview);
+
+  let releases: Vec<ReleaseGitlab> = serde_json::from_str(&body_text).context("Failed to parse GitLab releases response as JSON")?;
+  log::info!("GitLab __get_repo_releases: {} releases for project '{}' url: {}", releases.len(), project_id, url);
+
+  Ok(releases
+    .into_iter()
+    .map(|r| RepoReleaseInfo {
+      tag_name: r.tag_name,
+      name: r.name,
+      body: r.description,
+      created_at: r.created_at,
+      assets: r.assets.links.into_iter().map(|a| RepoReleaseAsset {
+        name: a.name,
+        size: None, // GitLab does not expose size in link objects.
+        download_link: a.direct_asset_url,
+      }).collect(),
+    })
+    .collect())
+}
+
 pub async fn __get_releases(s: &Gitlab, cashed: bool) -> Result<Vec<Release>> {
   let root_id = s.get_manifest()?.root_id.context("Cannot get root_id from Gitlab manifest file!")?;
 

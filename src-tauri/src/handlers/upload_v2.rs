@@ -50,12 +50,12 @@ struct UploadContext {
 }
 
 /// Compute the tag name from a release name (whitespace → dashes).
-fn make_tag_name(name: &str) -> String {
+pub(crate) fn make_tag_name(name: &str) -> String {
   Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string()
 }
 
 /// Build asset URLs for a file from a template `upload_url` (with <FILE_NAME>).
-fn build_asset_url(upload_template: &str, project_id: &str, tag_name: &str, file_name: &str) -> String {
+pub(crate) fn build_asset_url(upload_template: &str, project_id: &str, tag_name: &str, file_name: &str) -> String {
   upload_template
     .replace("<PROJECT_ID>", project_id)
     .replace("<NAME_SPACE>", NAMESPACE)

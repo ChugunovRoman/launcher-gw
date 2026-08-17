@@ -1,5 +1,6 @@
 use crate::consts::{BASE_DIR, CONFIG_NAME, CUSTOM_BIND_LTX, VERSIONS_DIR};
 use crate::handlers::dto::ReleaseManifest;
+use crate::utils::patch_markers::InstalledPatch;
 use crate::logger::LogLevel;
 use crate::utils::video::get_available_resolutions;
 
@@ -31,7 +32,7 @@ pub struct Version {
   #[serde(default)]
   pub download_path: String,
   #[serde(default)]
-  pub installed_updates: Vec<String>,
+  pub installed_updates: Vec<InstalledPatch>,
   #[serde(default)]
   pub is_local: bool,
 
@@ -219,6 +220,15 @@ pub struct AppConfig {
   pub unpack_target_dir: String,
 
   #[serde(default)]
+  pub patch_source_dir: String,
+  #[serde(default)]
+  pub patch_upload_dir: String,
+  /// User-customizable glob patterns for files to exclude when collecting a patch.
+  /// Empty = frontend will supply defaults from DEFAULT_EXCLUDE_PATTERNS constant.
+  #[serde(default)]
+  pub patch_exclude_patterns: Vec<String>,
+
+  #[serde(default)]
   pub versions: Vec<Version>,
 
   #[serde(default)]
@@ -258,6 +268,9 @@ impl Default for AppConfig {
       pack_target_dir: "".to_string(),
       unpack_source_dir: "".to_string(),
       unpack_target_dir: "".to_string(),
+      patch_source_dir: "".to_string(),
+      patch_upload_dir: "".to_string(),
+      patch_exclude_patterns: vec![],
       installed_versions: HashMap::new(),
       selected_provider_id: None,
       selected_version: None,
@@ -392,6 +405,22 @@ impl AppConfig {
         }
         _ => {
           *entry = default_run_params.clone();
+        }
+      }
+    }
+
+    // Migrate installed_updates from Vec<String> to Vec<InstalledPatch>.
+    // Old config: "installed_updates": ["0.5.5-patch1"]
+    // New config:  "installed_updates": [{"name":"0.5.5-patch1", ...}]
+    if let Some(versions) = json_value.get_mut("installed_versions").and_then(|v| v.as_object_mut()) {
+      for (_, ver) in versions.iter_mut() {
+        if let Some(updates) = ver.get_mut("installed_updates").and_then(|u| u.as_array_mut()) {
+          for entry in updates.iter_mut() {
+            if entry.is_string() {
+              let name = entry.as_str().unwrap_or_default().to_string();
+              *entry = serde_json::json!({"name": name});
+            }
+          }
         }
       }
     }

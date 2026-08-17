@@ -4,6 +4,8 @@ pub mod errors;
 pub mod git;
 pub mod parse_strings;
 pub mod paths;
+pub mod patch_collect;
+pub mod patch_markers;
 pub mod resources;
 pub mod restart;
 pub mod split_args;

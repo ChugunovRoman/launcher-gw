@@ -49,6 +49,11 @@ pub struct ReleaseGithub {
   pub name: String,
   pub tag_name: String,
   pub assets: Vec<ReleaseAssetGithub>,
+  // Optional fields for the release listing (patch chain / release notes).
+  #[serde(default)]
+  pub body: Option<String>,
+  #[serde(default)]
+  pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

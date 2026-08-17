@@ -1,4 +1,72 @@
 export const COFF_FROM_COMPRESSED_SIZE = 0.3;
+
+/**
+ * Default glob patterns for files/dirs to exclude when packing game data
+ * or collecting patches. Shared between Pack and Releases views.
+ */
+export const DEFAULT_EXCLUDE_PATTERNS: string[] = [
+  // Git files
+  "*.git",
+  "*.git/**",
+  ".gitlab-ci.yml",
+  "*/.gitlab-ci.yml",
+  ".editorconfig",
+  "*/.editorconfig",
+  ".gitignore",
+  "*/.gitignore",
+  ".gitmodules",
+  "*/.gitmodules",
+  ".gitconfig",
+  "*/.gitconfig",
+  ".gitattributes",
+  "*/.gitattributes",
+  // Build/CI scripts
+  "*.pl",
+  "*.sh",
+  // Game dev artifacts
+  "utils/**",
+  "utils",
+  "*.rar",
+  ".vscode",
+  ".vscode/**",
+  "*/.vscode/**",
+  // Game executables/config
+  "xrLost.exe",
+  "xrPlay.ini",
+  "packer.exe",
+  "gamedata/helpers",
+  "gamedata/helpers/**",
+  // Appdata caches/logs
+  "appdata/logs",
+  "appdata/logs/**",
+  "appdata/savedgames",
+  "appdata/savedgames/**",
+  "appdata/screenshots",
+  "appdata/screenshots/**",
+  "appdata/shaders_cache",
+  "appdata/shaders_cache/**",
+  "appdata/shaders_cache_oxr",
+  "appdata/shaders_cache_oxr/**",
+  "appdata/launcherdata",
+  "appdata/launcherdata/**",
+  "appdata/cdb_cache",
+  "appdata/cdb_cache/**",
+  "appdata/reports",
+  "appdata/reports/**",
+  "appdata/crashreports",
+  "appdata/crashreports/**",
+  "appdata/cached_dyn_textures",
+  "appdata/cached_dyn_textures/**",
+  // Custom configs
+  "gamedata/configs/misc/armament/custom",
+  "gamedata/configs/misc/armament/custom/**",
+  // Misc
+  "*JSGME*",
+  "*.lnk",
+  "*.txt",
+  "installer",
+  "Compressor",
+];
 export const DEFAULT_BIND_LTX = "default.ltx";
 export const CUSTOM_BIND_LTX = "custom.ltx";
 

@@ -127,6 +127,41 @@ pub async fn __get_release_repos_by_name(s: &Github, release_name: &str) -> Resu
   Ok(repos)
 }
 
+/// Lists all releases of a concrete repo (tag, name, body/notes, created_at).
+/// Used for patch chains in updates repos.
+pub async fn __get_repo_releases(s: &Github, project_id: &str) -> Result<Vec<RepoReleaseInfo>> {
+  let url = format!("{}/repos/{}/{}/releases", &s.host, GITHUB_ORG, &project_id);
+  let resp = s
+    .get(&url)
+    .send()
+    .await
+    .context("Failed to send request to Github (get_repo_releases)")?;
+
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__get_repo_releases, Github API error {}: {} url: {}", status, body, url);
+  }
+
+  let releases: Vec<ReleaseGithub> = resp.json().await.context("Failed to parse Github releases response as JSON")?;
+  log::info!("Github __get_repo_releases: {} releases for project '{}'", releases.len(), project_id);
+
+  Ok(releases
+    .into_iter()
+    .map(|r| RepoReleaseInfo {
+      tag_name: r.tag_name,
+      name: r.name,
+      body: r.body,
+      created_at: r.created_at,
+      assets: r.assets.into_iter().map(|a| RepoReleaseAsset {
+        name: a.name,
+        size: Some(a.size),
+        download_link: a.browser_download_url,
+      }).collect(),
+    })
+    .collect())
+}
+
 pub async fn __get_updates_repos_by_name(s: &Github, release_name: &str) -> Result<Vec<Project>> {
   __fetch_releases(s, true).await?;
 

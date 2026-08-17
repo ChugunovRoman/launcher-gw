@@ -44,16 +44,43 @@ impl Service {
 
     log::info!("Register providers, sorted_by_ping: {:?}", &self.stats);
 
+    // First available provider by ping — used as fallback when the saved
+    // selection is down, so the whole background init does not fail just
+    // because one provider is rate-limited/unreachable.
+    let first_available = self.stats.iter().find(|(_, s)| s.available).map(|(id, _)| *id);
+
     match {
       let cfg = self.config.lock().await;
       cfg.selected_provider_id.clone()
     } {
       Some(id) => {
-        self.api_client.set_current_provider(&id)?;
+        let saved_available = self
+          .api_client
+          .get_status(&id)
+          .map(|s| s.available)
+          .unwrap_or(false);
+
+        if saved_available {
+          self.api_client.set_current_provider(&id)?;
+        } else if let Some(fallback_id) = first_available {
+          // Runtime-only fallback: the user's saved selection stays in the
+          // config and is re-tried on the next launch.
+          log::warn!("Saved provider '{}' is unavailable, falling back to '{}'", &id, fallback_id);
+          self.api_client.set_current_provider(fallback_id)?;
+        } else {
+          // Nobody is available — keep the saved selection so the error
+          // message below names the user's provider.
+          self.api_client.set_current_provider(&id)?;
+        }
       }
-      None => {
-        self.api_client.set_current_provider(self.stats[0].0)?;
-      }
+      None => match first_available {
+        Some(fallback_id) => {
+          self.api_client.set_current_provider(fallback_id)?;
+        }
+        None => {
+          bail!("No available API providers!");
+        }
+      },
     };
 
     Ok(())
@@ -63,7 +90,7 @@ impl Service {
     let api = self.api_client.current_provider()?;
 
     if !api.is_available() {
-      bail!("Api Provider {} is available ! Cannot load manifest file !", &api.id())
+      bail!("Api Provider {} is NOT available ! Cannot load manifest file !", &api.id())
     }
 
     api.load_manifest().await?;

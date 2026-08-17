@@ -60,6 +60,7 @@ pub trait ApiProvider: Send + Sync {
   async fn set_release_visibility(&self, release_id: &str, visibility: bool) -> Result<()>;
   async fn get_release_repos_by_name(&self, release_id: &str) -> Result<Vec<Project>>;
   async fn get_updates_repos_by_name(&self, release_name: &str) -> Result<Vec<Project>>;
+  async fn get_repo_releases(&self, project_id: &str) -> Result<Vec<RepoReleaseInfo>>;
 
   async fn create_group(&self, name: &str, parent_id: &u32) -> Result<CreategGroupResponse>;
   async fn create_repo(&self, name: &str, description: &str, parent_id: &str) -> Result<CreateRepoResponse>;

@@ -63,6 +63,31 @@ pub struct ReleaseManifest {
   pub files: Vec<ReleaseManifestFile>,
   #[serde(default)]
   pub exe_path: Option<String>,
+  // Partial-update patch metadata. Absent (None/empty) for full release
+  // manifests, so old manifests keep deserializing unchanged.
+  /// Patch name = release tag in the updates repo.
+  #[serde(default)]
+  pub patch_name: Option<String>,
+  /// Previous patch in the chain (None = first patch after a full release).
+  #[serde(default)]
+  pub base_patch: Option<String>,
+  /// Tag of the full release the patch chain is based on.
+  #[serde(default)]
+  pub base_release_tag: Option<String>,
+  /// Files to delete when applying the patch, relative to the game root.
+  #[serde(default)]
+  pub deleted_files: Vec<String>,
+}
+
+/// Patch metadata passed to the packer when building a patch upload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchMeta {
+  pub patch_name: String,
+  pub base_patch: Option<String>,
+  pub base_release_tag: Option<String>,
+  #[serde(default)]
+  pub deleted_files: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]

@@ -40,6 +40,31 @@ pub struct ReleaseGit {
   pub assets: Vec<ReleaseAssetGit>,
 }
 
+/// Asset attached to a release in a concrete repo (used for downloading
+/// patch archives and manifest from updates repos).
+#[derive(Deserialize, Debug, Clone, Serialize)]
+pub struct RepoReleaseAsset {
+  pub name: String,
+  /// GitHub provides size; GitLab does not (None — must HEAD for size).
+  #[serde(default)]
+  pub size: Option<u64>,
+  pub download_link: String,
+}
+
+/// Release of a concrete repo (used for patch chains in updates repos:
+/// base_patch detection and release notes).
+#[derive(Deserialize, Debug, Clone, Serialize)]
+pub struct RepoReleaseInfo {
+  pub tag_name: String,
+  pub name: String,
+  #[serde(default)]
+  pub body: Option<String>,
+  #[serde(default)]
+  pub created_at: Option<String>,
+  #[serde(default)]
+  pub assets: Vec<RepoReleaseAsset>,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct Project {
   pub id: u32,

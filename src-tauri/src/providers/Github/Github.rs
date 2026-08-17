@@ -91,8 +91,10 @@ impl ApiProvider for Github {
 
     let user_agent = user_agent();
     let mut headers = HeaderMap::new();
-    let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).or_else(|_| HeaderValue::from_str(&format!("Authorization: {}", token)))?;
-    headers.insert(AUTHORIZATION, auth_value);
+    if !token.is_empty() {
+      let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).or_else(|_| HeaderValue::from_str(&format!("Authorization: {}", token)))?;
+      headers.insert(AUTHORIZATION, auth_value);
+    }
     headers.insert("User-Agent", HeaderValue::from_str(&user_agent)?);
 
     *self.client.lock().unwrap() = Client::builder().default_headers(headers).build()?;
@@ -258,6 +260,9 @@ impl ApiProvider for Github {
   }
   async fn get_updates_repos_by_name(&self, release_name: &str) -> Result<Vec<Project>> {
     __get_updates_repos_by_name(self, release_name).await
+  }
+  async fn get_repo_releases(&self, project_id: &str) -> Result<Vec<RepoReleaseInfo>> {
+    __get_repo_releases(self, project_id).await
   }
 
   fn clone_box(&self) -> Box<dyn ApiProvider + Send + Sync> {

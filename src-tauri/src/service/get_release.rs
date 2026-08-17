@@ -6,7 +6,7 @@ use crate::{
   handlers::dto::ReleaseManifest,
   providers::dto::{Release, ReleaseGit, TreeItem},
   service::main::Service,
-  utils::{encoding::read_cp1251_file, resources::game_exe},
+  utils::{encoding::read_cp1251_file, patch_markers::read_installed_patches, resources::game_exe},
 };
 
 use anyhow::{Result, anyhow, bail};
@@ -217,6 +217,8 @@ impl ServiceGetRelease for Service {
         &entry
       );
 
+      let installed_path_str = path.to_string_lossy().to_string();
+
       versions.push(Version {
         id: 0,
         name: name,
@@ -226,9 +228,9 @@ impl ServiceGetRelease for Service {
         fsgame_path: None,
         userltx_path: None,
         exe_path: None,
-        installed_path: path.to_string_lossy().to_string(),
-        download_path: path.to_string_lossy().to_string(),
-        installed_updates: vec![],
+        installed_updates: read_installed_patches(&path),
+        installed_path: installed_path_str.clone(),
+        download_path: installed_path_str,
         is_local: true,
       });
     }
@@ -298,9 +300,9 @@ impl ServiceGetRelease for Service {
       fsgame_path: None,
       userltx_path: None,
       exe_path: None,
+      installed_updates: read_installed_patches(&current_path),
       installed_path: current_path.to_string_lossy().to_string(),
       download_path: current_path.to_string_lossy().to_string(),
-      installed_updates: vec![],
       is_local: true,
     })
   }

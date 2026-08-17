@@ -7,6 +7,7 @@ import { initUnpackListener } from "./lib/unpack";
 import { initUploadListeners } from "./lib/upload";
 import { initDownloadListeners } from "./lib/download";
 import { initProfilesListeners } from './lib/profiles';
+import { initPatchListeners } from './lib/patches';
 
 export async function init() {
   await Promise.all([
@@ -16,6 +17,7 @@ export async function init() {
     initUnpackListener(),
     initUploadListeners(),
     initDownloadListeners(),
+    initPatchListeners(),
   ]);
 
   register(Lang.En, () => import('./locales/en.json'));

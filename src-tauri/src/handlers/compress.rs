@@ -1,9 +1,9 @@
 use crate::consts::MANIFEST_NAME;
-use crate::handlers::dto::{CompressProgressPayload, ReleaseManifest, ReleaseManifestFile};
+use crate::handlers::dto::{CompressProgressPayload, PatchMeta, ReleaseManifest, ReleaseManifestFile};
 use crate::utils::CountingWriter::CountingWriter;
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -21,6 +21,24 @@ pub async fn create_split_archives(
   excludePatterns: Vec<String>,
   exePath: Option<String>,
 ) -> Result<(), String> {
+  pack_split_archives(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, None)
+    .await
+    .map(|_| ())
+}
+
+/// Builds split `data{N}.zip` archives (zip+zstd) from `sourceDir` into
+/// `targetPath` and writes `manifest.json` next to them. Shared by the Pack
+/// view (full releases, `patch_meta = None`) and patch uploads
+/// (`patch_meta = Some(..)` adds patch fields into the manifest).
+pub async fn pack_split_archives(
+  app: &tauri::AppHandle,
+  sourceDir: String,
+  targetPath: String,
+  chunkSize: u64,
+  excludePatterns: Vec<String>,
+  exePath: Option<String>,
+  patch_meta: Option<PatchMeta>,
+) -> Result<ReleaseManifest, String> {
   let src_dir = Path::new(&sourceDir);
   let out_dir = Path::new(&targetPath);
   fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
@@ -74,6 +92,10 @@ pub async fn create_split_archives(
     compressed_size: 0,
     files: vec![],
     exe_path: None,
+    patch_name: None,
+    base_patch: None,
+    base_release_tag: None,
+    deleted_files: vec![],
   };
 
   // Optional launcher exe (e.g. Stalker-CoC.exe) recorded in the manifest as a
@@ -186,6 +208,14 @@ pub async fn create_split_archives(
 
   manifest.compressed_size = compressed_size;
 
+  // Patch metadata lands in the manifest as-is (full releases leave it empty).
+  if let Some(pm) = &patch_meta {
+    manifest.patch_name = Some(pm.patch_name.clone());
+    manifest.base_patch = pm.base_patch.clone().filter(|s| !s.is_empty());
+    manifest.base_release_tag = pm.base_release_tag.clone().filter(|s| !s.is_empty());
+    manifest.deleted_files = pm.deleted_files.clone();
+  }
+
   let manifest_path = Path::new(&targetPath).join(MANIFEST_NAME).to_string_lossy().into_owned();
   let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
   fs::write(&manifest_path, json).map_err(|e| e.to_string())?;
@@ -201,7 +231,7 @@ pub async fn create_split_archives(
     },
   );
 
-  Ok(())
+  Ok(manifest)
 }
 
 /// Unpack a single `.zip` archive into `outputDir`.

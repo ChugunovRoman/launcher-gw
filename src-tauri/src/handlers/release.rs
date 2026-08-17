@@ -3,7 +3,7 @@ use crate::{
   consts::BIN_DIR,
   handlers::dto::{DownlaodFileStat, ReleaseManifest},
   service::{create_release::ServiceRelease, get_release::ServiceGetRelease, main::Service},
-  utils::{errors::log_full_error, git::grouping::group_files_by_size, resources::game_exe},
+  utils::{errors::log_full_error, git::grouping::group_files_by_size, patch_markers::{read_installed_patches, write_patch_marker}, resources::game_exe},
 };
 use anyhow::Context;
 use std::{cmp::Reverse, fs, path::PathBuf};
@@ -147,38 +147,68 @@ pub async fn get_main_version(app: tauri::AppHandle) -> Result<Option<Version>, 
 
 #[tauri::command]
 pub async fn get_installed_versions(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
+  // Collect versions that need migration (config installed_updates -> marker files).
+  let mut migration_keys: Vec<String> = Vec::new();
+
   let versions = {
     let cfg = app_config.lock().await;
+    let mut result: Vec<Version> = Vec::new();
 
-    cfg
-      .installed_versions
-      .iter()
-      .filter_map(|(_, v)| {
-        let path = Path::new(&v.installed_path);
-        let engine_path_exists = match &v.engine_path {
-          Some(value) => Path::new(value).exists(),
-          None => false,
-        };
-        let fsgame_path_exists = match &v.fsgame_path {
-          Some(value) => Path::new(value).exists(),
-          None => false,
-        };
-        let path_bin = path.join(BIN_DIR);
-        let path_exe = path_bin.join(game_exe());
-        log::debug!(
-          "get_installed_versions, filter version: {} installed_path: {} game_exe: {}",
-          &v.name,
-          &v.installed_path,
-          game_exe()
-        );
-        if path.exists() && ((path_bin.exists() && path_exe.exists()) || (engine_path_exists && fsgame_path_exists)) && path.is_dir() {
-          Some(v.clone())
-        } else {
-          None
+    for (key, v) in cfg.installed_versions.iter() {
+      let path = Path::new(&v.installed_path);
+      let engine_path_exists = match &v.engine_path {
+        Some(value) => Path::new(value).exists(),
+        None => false,
+      };
+      let fsgame_path_exists = match &v.fsgame_path {
+        Some(value) => Path::new(value).exists(),
+        None => false,
+      };
+      let path_bin = path.join(BIN_DIR);
+      let path_exe = path_bin.join(game_exe());
+      log::debug!(
+        "get_installed_versions, filter version: {} installed_path: {} game_exe: {}",
+        &v.name,
+        &v.installed_path,
+        game_exe()
+      );
+      if !path.exists() || !((path_bin.exists() && path_exe.exists()) || (engine_path_exists && fsgame_path_exists)) || !path.is_dir() {
+        continue;
+      }
+
+      // One-time migration: if config still has installed_updates, write them
+      // as marker files (defer config clearing to avoid borrow conflict).
+      if !v.installed_updates.is_empty() {
+        log::info!("Migrating {} installed_updates from config to markers for '{}'", v.installed_updates.len(), &v.name);
+        for patch in &v.installed_updates {
+          if let Err(e) = write_patch_marker(path, patch) {
+            log::warn!("Migration: cannot write marker for '{}': {}", patch.name, e);
+          }
         }
-      })
-      .collect()
+        migration_keys.push(key.clone());
+      }
+
+      let mut ver = v.clone();
+      // Always read from marker files (source of truth).
+      ver.installed_updates = read_installed_patches(path);
+      result.push(ver);
+    }
+
+    result
   };
+
+  // Apply migration: clear config fields and save.
+  if !migration_keys.is_empty() {
+    let mut cfg = app_config.lock().await;
+    for key in &migration_keys {
+      if let Some(version) = cfg.installed_versions.get_mut(key) {
+        version.installed_updates.clear();
+      }
+    }
+    if let Err(e) = cfg.save() {
+      log::warn!("get_installed_versions: config save after migration failed: {}", e);
+    }
+  }
 
   Ok(versions)
 }

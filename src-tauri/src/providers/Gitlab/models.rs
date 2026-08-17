@@ -69,6 +69,11 @@ pub struct ReleaseGitlab {
   pub name: String,
   pub tag_name: String,
   pub assets: ReleaseAssetGitlab,
+  // Optional fields for the release listing (patch chain / release notes).
+  #[serde(default)]
+  pub description: Option<String>,
+  #[serde(default)]
+  pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
