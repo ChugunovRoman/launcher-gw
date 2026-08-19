@@ -95,6 +95,19 @@
     patchErrors.delete(name);
     patchErrors = patchErrors;
 
+    // Reset progress state synchronously on click so the UI shows a fresh
+    // 0% download bar immediately. Without this, $patchInstallProgress keeps
+    // the stale "done"/100% value from a previous install and the bar would
+    // flash full before the new download's first backend event arrives.
+    patchInstallProgress.set({
+      stage: "download",
+      version: name,
+      file: "",
+      file_progress: 0,
+      total_progress: 0,
+    });
+    patchDownloadInfo = null;
+
     try {
       await invoke<void>("start_install_patch", { versionName: name, patchName });
       // Refresh installed_updates in the local store.
@@ -106,6 +119,9 @@
       patchErrors = new Map(patchErrors).set(name, msg);
     } finally {
       installingPatch = null;
+      // Clear progress stores so no stale state bleeds into the next install.
+      patchInstallProgress.set(null);
+      patchDownloadInfo = null;
     }
   }
 

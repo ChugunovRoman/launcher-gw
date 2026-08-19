@@ -463,6 +463,21 @@ async fn start_install_patch_inner(
   let grand_total: u64 = data_assets.iter().filter_map(|a| a.size).sum();
   let mut downloaded_total: u64 = 0;
 
+  // Announce the download stage immediately (0%) so the frontend can render
+  // the progress bar as soon as the install reaches the download phase,
+  // rather than only after the first archive finishes. The byte-level fill
+  // is driven by "download-speed-status" events emitted from ServiceFiles.
+  let _ = app.emit(
+    EVT_INSTALL_PROGRESS,
+    PatchInstallProgress {
+      stage: "download".to_string(),
+      version: version_name_owned.clone(),
+      file: String::new(),
+      file_progress: 0.0,
+      total_progress: 0.0,
+    },
+  );
+
   for (i, asset) in data_assets.iter().enumerate() {
     // Cancel check.
     if cancel_tx.receiver_count() > 0 {
