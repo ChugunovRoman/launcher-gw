@@ -327,6 +327,11 @@ pub async fn upload_patch(
 
   patch_upload_log(&app, format!("Patch '{}' uploaded successful !", &tag_name));
 
+  // Best-effort: re-publish the static release index.  Non-fatal.
+  if let Err(e) = crate::service::index_publisher::publish_index(api).await {
+    log::warn!("Failed to publish release index after patch upload: {}", e);
+  }
+
   // ------------------------------------------------------------------
   // 5. Tag the game git repositories with the patch tag (anchors the
   //    diff base for the NEXT patch). Never aborts the finished upload.

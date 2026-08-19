@@ -21,7 +21,9 @@ use crate::{
     dto::{Issue, *},
   },
   service::main::LogCallback,
+  utils::http_cache,
 };
+use rand_agents::user_agent;
 
 #[derive(Clone)]
 pub struct Gitlab {
@@ -39,9 +41,15 @@ pub struct Gitlab {
 
 impl Gitlab {
   pub fn new(h: &str, suppot_subgroups: bool, logger: LogCallback) -> Result<Self> {
-    log::info!("Start init Gitlab client");
+    let ua = user_agent();
+    log::info!("Start init Gitlab client with User-Agent: {}", &ua);
 
-    let client = Client::builder().build()?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+      reqwest::header::USER_AGENT,
+      reqwest::header::HeaderValue::from_str(&ua)?,
+    );
+    let client = Client::builder().default_headers(headers).build()?;
 
     Ok(Self {
       host: h.to_string(),
@@ -72,6 +80,16 @@ impl Gitlab {
   pub fn head(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().head(url)
   }
+
+  /// GET with ETag disk cache (same semantics as Github::get_cached).
+  pub async fn get_cached(
+    &self,
+    url: &str,
+    ttl: Duration,
+  ) -> anyhow::Result<http_cache::CachedBody> {
+    let client = self.get_client();
+    http_cache::fetch(&client, url, ttl).await
+  }
 }
 
 #[async_trait]
@@ -79,7 +97,9 @@ impl ApiProvider for Gitlab {
   fn set_token(&self, token: String) -> Result<()> {
     *self.token.lock().unwrap() = token.clone();
 
+    let ua = user_agent();
     let mut headers = HeaderMap::new();
+    headers.insert(reqwest::header::USER_AGENT, HeaderValue::from_str(&ua)?);
     if !token.is_empty() {
       let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).or_else(|_| HeaderValue::from_str(&format!("PRIVATE-TOKEN {}", token)))?;
       headers.insert(AUTHORIZATION, auth_value);
@@ -97,12 +117,16 @@ impl ApiProvider for Gitlab {
     GITLAB_PID
   }
   async fn ping(&self) -> ProviderStatus {
-    log::info!("Start PING provider: {}, url: {}", self.id(), &self.host);
+    // GitLab does not have a bg.jpg in the launcher repo, so we use the
+    // projects API (unlike GitHub which pings via a raw file to avoid the
+    // API rate limit).  GitLab's anonymous rate limit is more generous.
+    let url = format!("{}/projects/{}", &self.host, REPO_LAUNCGER_ID);
+    log::info!("Start PING provider: {}, url: {}", self.id(), &url);
 
     let start = Instant::now();
     let res = self
-      .get(&format!("{}/projects/{}", &self.host, REPO_LAUNCGER_ID))
-      .timeout(Duration::from_secs(10)) // важно: не висеть вечно
+      .get(&url)
+      .timeout(Duration::from_secs(10))
       .send()
       .await;
 
@@ -163,6 +187,12 @@ impl ApiProvider for Gitlab {
   }
   async fn get_launcher_bg(&self) -> Result<Vec<u8>> {
     __get_launcher_bg(self).await
+  }
+  fn launcher_bg_url(&self) -> String {
+    format!(
+      "{}/projects/{}/repository/files/data%2Fbg%2Fbg.jpg/raw?ref=master",
+      self.host, crate::consts::REPO_LAUNCGER_ID,
+    )
   }
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
     __get_file_raw(self, project_id, file_path).await

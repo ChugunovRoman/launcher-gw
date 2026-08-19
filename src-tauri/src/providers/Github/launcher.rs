@@ -1,28 +1,21 @@
+use std::time::Duration;
+
 use crate::{
   consts::*,
   providers::{
     Github::{Github::Github, models::*},
     dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform},
   },
+  utils::http_cache,
 };
 
 use anyhow::{Context, Result, bail};
 
 pub async fn __get_launcher_latest_release(s: &Github, owner: &str, project_id: &str) -> Result<ReleaseGit> {
   let url = format!("{}/repos/{}/{}/releases/latest", &s.host, owner, project_id);
-  let resp = s
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to Github (get_launcher_release)")?;
-
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__get_launcher_latest_release, Github API error {}: {} url: {}", status, body, url);
-  }
-
-  let release: ReleaseGithub = resp.json().await.context("Failed to parse ReleaseGithub response as JSON")?;
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_RELEASE_SECS)).await?;
+  let release: ReleaseGithub = serde_json::from_slice(&cached.bytes)
+    .context("Failed to parse ReleaseGithub response as JSON")?;
 
   let mut assets: Vec<ReleaseAssetGit> = vec![];
 

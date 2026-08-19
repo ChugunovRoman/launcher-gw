@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose};
 use bytes::Bytes;
@@ -10,20 +12,13 @@ use crate::{
     Github::{Github::Github, issues::*, models::*},
     dto::{Manifest, TreeItem},
   },
+  utils::http_cache,
 };
 
 pub async fn __get_file_raw_github(s: &Github, parent_id: &str, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
   let url = format!("{}/{}/{}/raw/master/{}", GITHUB_HOST, parent_id, project_id, file_path);
-  let resp = s.get(&url).send().await.context("Failed to send request to Github (get_file_raw)")?;
-
-  if resp.status().is_success() {
-    let bytes = resp.bytes().await.context("Failed to read response body")?;
-    Ok(bytes.to_vec())
-  } else {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__get_file_raw, Github API error {}: {}, url: {}", status, body, url);
-  }
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_RAW_FILE_SECS)).await?;
+  Ok(cached.bytes)
 }
 
 pub async fn __get_file_raw(s: &Github, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
@@ -174,25 +169,64 @@ pub async fn __get_file_content_size(s: &Github, direct_url: &str) -> Result<u64
 pub async fn __add_file_to_repo(s: &Github, repo_id: &str, file_name: &str, content: &str, commmit_msg: &str, branch: &str) -> Result<()> {
   let url = format!("{}/repos/{}/{}/contents/{}", s.host, GITHUB_ORG, repo_id, file_name);
   let content_base64 = general_purpose::STANDARD.encode(content);
+
+  // The GitHub Contents API requires the existing file's `sha` when updating.
+  // GET the current metadata first; a 404 means the file does not exist yet
+  // and we create it with a plain PUT (no `sha`).
+  let existing_sha: Option<String> = {
+    let resp = s
+      .get(&format!("{}?ref={}", &url, branch))
+      .send()
+      .await
+      .context("Failed to send request to Github (__add_file_to_repo GET)")?;
+    if resp.status().is_success() {
+      resp.json::<ContentFileGithub>().await.map(|f| Some(f.sha)).unwrap_or(None)
+    } else {
+      None
+    }
+  };
+
   let data = AddFileContentBodyGithub {
     content: content_base64.to_string(),
     message: commmit_msg.to_string(),
     branch: branch.to_string(),
+    sha: existing_sha.clone(),
   };
+
   let resp = s
     .put(&url)
     .json(&data)
     .send()
     .await
-    .context("Failed to send request to Github (__add_file_to_repo)")?;
+    .context("Failed to send request to Github (__add_file_to_repo PUT)")?;
 
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__add_file_to_repo, Github API error {}: {} data: {:?} url: {}", status, body, data, url);
+  if resp.status().is_success() {
+    return Ok(());
   }
 
-  Ok(())
+  // If the file disappeared between our GET and PUT (race), retry once as a
+  // create (no `sha`). Non-fatal: the next publish will resolve the new sha.
+  let status = resp.status();
+  let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+  if existing_sha.is_some() && status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+    log::warn!("__add_file_to_repo: PUT 422 with stale sha, retrying as create (no sha)");
+    let create_data = AddFileContentBodyGithub {
+      content: content_base64.to_string(),
+      message: commmit_msg.to_string(),
+      branch: branch.to_string(),
+      sha: None,
+    };
+    let resp2 = s.put(&url).json(&create_data).send().await
+      .context("Failed to send request to Github (__add_file_to_repo retry PUT)")?;
+    if resp2.status().is_success() {
+      return Ok(());
+    }
+    let status2 = resp2.status();
+    let body2 = resp2.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!("__add_file_to_repo, Github API error (PUT {}: {} then retry PUT {}: {}), url: {}", status, body, status2, body2, url);
+  }
+
+  bail!("__add_file_to_repo, Github API error {}: {} data: {:?} url: {}", status, body, data, url);
 }
 
 pub async fn __upload_release_file(

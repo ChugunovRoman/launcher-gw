@@ -22,6 +22,7 @@ use crate::{
     dto::{Issue, *},
   },
   service::main::LogCallback,
+  utils::http_cache,
 };
 
 #[derive(Clone)]
@@ -82,6 +83,18 @@ impl Github {
   pub fn head(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().head(url)
   }
+
+  /// GET with ETag disk cache.  The cached body is returned when the TTL has
+  /// not expired or when the server replies 304 Not Modified (which GitHub
+  /// does NOT count against the API rate limit).
+  pub async fn get_cached(
+    &self,
+    url: &str,
+    ttl: Duration,
+  ) -> anyhow::Result<http_cache::CachedBody> {
+    let client = self.get_client();
+    http_cache::fetch(&client, url, ttl).await
+  }
 }
 
 #[async_trait]
@@ -109,12 +122,19 @@ impl ApiProvider for Github {
     GITHUB_PID
   }
   async fn ping(&self) -> ProviderStatus {
-    log::info!("Start PING provider: {}, url: {}", self.id(), &self.host);
+    // HEAD to a raw file (does not count against the API rate limit).
+    let url = format!(
+      "{}/{}/{}/raw/master/src%2Fstatic%2Fbg.jpg",
+      crate::consts::GITHUB_HOST,
+      crate::consts::MAIN_DEVELOPER_NAME,
+      crate::consts::GITHUB_LAUNCHER_REPO_NAME,
+    );
+    log::info!("Start PING provider: {}, url: {}", self.id(), &url);
 
     let start = Instant::now();
     let res = self
-      .get(&self.host)
-      .timeout(Duration::from_secs(10)) // важно: не висеть вечно
+      .head(&url)
+      .timeout(Duration::from_secs(10))
       .send()
       .await;
 
@@ -175,6 +195,14 @@ impl ApiProvider for Github {
   }
   async fn get_launcher_bg(&self) -> Result<Vec<u8>> {
     __get_launcher_bg(self).await
+  }
+  fn launcher_bg_url(&self) -> String {
+    format!(
+      "{}/{}/{}/raw/master/src%2Fstatic%2Fbg.jpg",
+      crate::consts::GITHUB_HOST,
+      crate::consts::MAIN_DEVELOPER_NAME,
+      crate::consts::GITHUB_LAUNCHER_REPO_NAME,
+    )
   }
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
     __get_file_raw(self, project_id, file_path).await

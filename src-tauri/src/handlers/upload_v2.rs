@@ -326,6 +326,13 @@ async fn step_finalize(ctx: &UploadContext, api: &(dyn crate::providers::ApiProv
   }
   upload_log(&ctx.app, "FULL Upload completed successful !".to_string());
   log::info!("Full upload of version {} finish successful !", &ctx.name);
+
+  // Best-effort: re-publish the static release index so players see the
+  // new release without hitting the API.  Errors are non-fatal.
+  if let Err(e) = crate::service::index_publisher::publish_index(api).await {
+    log::warn!("Failed to publish release index after upload: {}", e);
+  }
+
   Ok(())
 }
 

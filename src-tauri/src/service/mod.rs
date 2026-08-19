@@ -3,6 +3,8 @@ pub mod create_release;
 pub mod dto;
 pub mod files;
 pub mod get_release;
+pub mod index;
+pub mod index_publisher;
 pub mod keybind_manager;
 pub mod main;
 pub mod unpack;

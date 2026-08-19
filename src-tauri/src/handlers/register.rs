@@ -42,6 +42,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::service::remove_download_version,
     handlers::service::remove_install_dir,
     handlers::service::move_version,
+    handlers::service::publish_index,
     // releases
     handlers::start_download_version::start_download_version,
     handlers::start_download_version::cancel_download_version,

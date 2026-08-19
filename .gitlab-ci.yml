@@ -115,3 +115,43 @@ publish-release:
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}"
         - name: 'Windows'
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}.exe"
+
+# --- ЭТАП 4: Обновление launcher-секции индекса ---
+update-index:
+  stage: release
+  image: alpine:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - job: publish-release
+    - job: build-linux
+      artifacts: true
+    - job: build-windows
+      artifacts: true
+  before_script:
+    - apk add --no-cache curl jq coreutils bash
+  script: |
+    set -euo pipefail
+    INDEX_API="${CI_API_V4_URL}/projects/85506224/repository/files/index.json"
+    WIN_SIZE=$(wc -c < dist/windows/Launcher.exe)
+    LIN_SIZE=$(wc -c < dist/linux/Launcher)
+    BG_ETAG=$(curl -fsSIL "${CI_API_V4_URL}/projects/75545910/repository/files/data%2Fbg%2Fbg.jpg/raw?ref=master" | tr -d '\r' | awk 'tolower($1)=="etag:"{sub(/^etag:[ \t]*/,""); print}' | tail -n1)
+    curl -fsS -H "PRIVATE-TOKEN: ${LAUNCHER_INDEX_TOKEN}" "${INDEX_API}/raw?ref=master" -o current.json
+    BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}"
+    jq --arg tag "$CI_COMMIT_TAG" --arg etag "$BG_ETAG" --arg base "$BASE_URL" --argjson ws "$WIN_SIZE" --argjson ls "$LIN_SIZE" '
+      .launcher.version = $tag
+      | .launcher.bg_etag = (if $etag == "" then null else $etag end)
+      | .launcher.assets = [
+          {name:"Launcher.exe", platform:"windows", size:$ws, url:($base + "/Launcher.exe")},
+          {name:"Launcher", platform:"linux", size:$ls, url:($base + "/Launcher")}
+        ]
+      | .generated_at = (now | todate)' current.json > new.json
+    jq -n --rawfile c new.json --arg msg "Update launcher to ${CI_COMMIT_TAG}" \
+      '{content:$c, commit_message:$msg, branch:"master"}' > body.json
+    STATUS=$(curl -s -o resp.json -w "%{http_code}" -X PUT -H "PRIVATE-TOKEN: ${LAUNCHER_INDEX_TOKEN}" \
+      -H "Content-Type: application/json" "${INDEX_API}" -d @body.json)
+    if [ "$STATUS" != "200" ] && [ "$STATUS" != "201" ]; then
+      STATUS2=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "PRIVATE-TOKEN: ${LAUNCHER_INDEX_TOKEN}" \
+        -H "Content-Type: application/json" "${INDEX_API}" -d @body.json)
+      if [ "$STATUS2" != "201" ]; then echo "PUT=$STATUS POST=$STATUS2"; cat resp.json; exit 1; fi
+    fi

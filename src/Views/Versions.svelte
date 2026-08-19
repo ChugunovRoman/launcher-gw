@@ -3,6 +3,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { join } from "@tauri-apps/api/path";
+  import { listen } from "@tauri-apps/api/event";
   import {
     connectStatus,
     localVersions,
@@ -26,7 +27,7 @@
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
   import { FileDown } from "lucide-svelte";
   import { choosePath } from "../utils/path";
-  import { getInGb, parseBytes } from "../utils/dwn";
+  import { getInGb, parseBytes, formatSpeedBytesPerSec } from "../utils/dwn";
 
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
@@ -43,6 +44,7 @@
   let patchChecks = $state<Map<string, PatchCheckResult>>(new Map());
   let checkingPatch = $state<string | null>(null);
   let installingPatch = $state<{ version: string; patch: string } | null>(null);
+  let patchDownloadInfo = $state<{ file: string; bytes: number; totalBytes: number; speedValue: number; sfxValue: string } | null>(null);
   let patchErrors = $state<Map<string, string>>(new Map());
 
   function parseSize(size: number | null): string {
@@ -50,6 +52,23 @@
     const parsed = parseBytes(size);
     return `${parsed[0]} ${$_(`app.common.${parsed[1]}`)}`;
   }
+
+  // Listen for byte-level download progress during patch installation.
+  // The backend emits "download-speed-status" globally via ServiceFiles.
+  $effect(() => {
+    const unlisten = listen<[string, string, number, number, number]>("download-speed-status", (e) => {
+      const [versionName, fileName, bytes, totalBytes, speed] = e.payload;
+      if (installingPatch && versionName === installingPatch.version) {
+        const [speedValue, sfxValue] = formatSpeedBytesPerSec(speed);
+        patchDownloadInfo = { file: fileName, bytes, totalBytes, speedValue, sfxValue };
+      }
+    });
+    return () => { unlisten.then((u) => u()); };
+  });
+  // Clear download info once the install leaves the download stage.
+  $effect(() => {
+    if ($patchInstallProgress && $patchInstallProgress.stage !== "download") patchDownloadInfo = null;
+  });
 
   async function handleCheckPatches(version: Version) {
     const name = version.name;
@@ -404,6 +423,10 @@
     const path = await join(version.installed_path, "appdata", "logs");
     await invoke("open_explorer", { path });
   }
+  async function handleOpenCrashReportsDir(version: Version) {
+    const path = await join(version.installed_path, "appdata", "crashreports");
+    await invoke("open_explorer", { path, createDir: true });
+  }
 
   function getStatusText(status: DownloadStatus) {
     switch (status) {
@@ -529,6 +552,9 @@
                 <Button size="slim" onclick={() => handleOpenLogDir(version)}>
                   {$_("app.releases.openLogDir")}
                 </Button>
+                <Button size="slim" onclick={() => handleOpenCrashReportsDir(version)}>
+                  {$_("app.releases.openCrashDir")}
+                </Button>
               </div>
             </div>
 
@@ -603,21 +629,33 @@
               <!-- Install progress -->
               {#if installingPatch?.version === name && $patchInstallProgress}
                 <div class="patch-install-progress">
-                  <div class="patch-install-stage">
-                    {#if $patchInstallProgress.stage === "download"}
-                      {$_("app.patches.stageDownload")}
-                    {:else if $patchInstallProgress.stage === "unpack"}
-                      {$_("app.patches.stageUnpack")}
-                    {:else if $patchInstallProgress.stage === "delete"}
-                      {$_("app.patches.stageDelete")}
-                    {:else}
-                      {$patchInstallProgress.stage}
-                    {/if}
-                    {#if $patchInstallProgress.file}
-                      — {$patchInstallProgress.file}
-                    {/if}
-                  </div>
-                  <Progress progress={$patchInstallProgress.total_progress} />
+                  {#if $patchInstallProgress.stage === "download" && patchDownloadInfo}
+                    <div class="patch-install-stage">
+                      {$_("app.patches.stageDownload")} — {patchDownloadInfo.file}
+                    </div>
+                    <div class="patch-dl-info">
+                      {parseBytes(patchDownloadInfo.bytes)[0]} {$_(`app.common.${parseBytes(patchDownloadInfo.bytes)[1]}`)}
+                      / {parseBytes(patchDownloadInfo.totalBytes)[0]} {$_(`app.common.${parseBytes(patchDownloadInfo.totalBytes)[1]}`)}
+                      · {patchDownloadInfo.speedValue} {patchDownloadInfo.sfxValue}
+                    </div>
+                    <Progress progress={(patchDownloadInfo.bytes / Math.max(patchDownloadInfo.totalBytes, 1)) * 100} />
+                  {:else}
+                    <div class="patch-install-stage">
+                      {#if $patchInstallProgress.stage === "download"}
+                        {$_("app.patches.stageDownload")}
+                      {:else if $patchInstallProgress.stage === "unpack"}
+                        {$_("app.patches.stageUnpack")}
+                      {:else if $patchInstallProgress.stage === "delete"}
+                        {$_("app.patches.stageDelete")}
+                      {:else}
+                        {$patchInstallProgress.stage}
+                      {/if}
+                      {#if $patchInstallProgress.file}
+                        — {$patchInstallProgress.file}
+                      {/if}
+                    </div>
+                    <Progress progress={$patchInstallProgress.total_progress} />
+                  {/if}
                   {#if $patchInstallProgress.stage === "download"}
                   <button
                     type="button"
@@ -1335,6 +1373,11 @@
   .patch-install-stage {
     color: #ddd;
     font-size: 0.85rem;
+  }
+  .patch-dl-info {
+    color: #aaa;
+    font-size: 0.8rem;
+    margin: 0.25rem 0;
   }
   .patch-cancel-btn {
     align-self: flex-start;

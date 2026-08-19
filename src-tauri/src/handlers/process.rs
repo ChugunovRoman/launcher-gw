@@ -401,10 +401,14 @@ pub fn is_process_alive(pid: u32) -> bool {
 }
 
 #[tauri::command]
-pub fn open_explorer(path: String) -> Result<(), String> {
+pub fn open_explorer(path: String, createDir: Option<bool>) -> Result<(), String> {
   let p = Path::new(&path);
   if !p.exists() {
-    return Err(format!("Path does not exist: {}", path));
+    if createDir.unwrap_or(false) {
+      std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    } else {
+      return Err(format!("Path does not exist: {}", path));
+    }
   }
 
   #[cfg(target_os = "windows")]

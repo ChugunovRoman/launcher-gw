@@ -2,6 +2,7 @@ pub mod CountingWriter;
 pub mod encoding;
 pub mod errors;
 pub mod git;
+pub mod http_cache;
 pub mod parse_strings;
 pub mod paths;
 pub mod patch_collect;

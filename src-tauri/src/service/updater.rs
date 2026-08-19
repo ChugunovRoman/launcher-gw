@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::consts::{BASE_DIR, GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME, REPO_LAUNCGER_ID_2};
 use crate::providers::ApiClient::ApiClient::ApiClient;
-use crate::providers::dto::{ReleaseGit, ReleasePlatform};
+use crate::providers::dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform};
 use crate::utils::paths::get_exe_name;
 use crate::utils::resources::launcher_exe;
 use anyhow::{Context, Result, bail};
@@ -42,9 +42,38 @@ impl ServiceUpdater {
   }
 
   pub async fn check(&self, api_client: &ApiClient, current_version: String) -> Result<Option<ReleaseGit>> {
-    let api = api_client.current_provider()?;
-
     log::debug!("ServiceUpdater.check, start");
+
+    // Try the static release index first (0 API calls).
+    let provider_id = api_client.current_provider()?.id();
+    if let Ok(index) = crate::service::index::load_index(provider_id).await {
+      log::debug!("ServiceUpdater.check, launcher version from index: {}", &index.launcher.version);
+      let current_v = Version::parse(&current_version).unwrap_or(Version::new(0, 0, 0));
+      let latest_v = Version::parse(&index.launcher.version).unwrap_or(Version::new(0, 0, 0));
+
+      if latest_v > current_v {
+        let assets: Vec<ReleaseAssetGit> = index
+          .launcher
+          .assets
+          .iter()
+          .map(|a| ReleaseAssetGit {
+            name: a.name.clone(),
+            platform: parse_platform(&a.platform),
+            size: a.size,
+            download_link: a.url.clone(),
+          })
+          .collect();
+        return Ok(Some(ReleaseGit {
+          name: "Launcher".to_string(),
+          version: index.launcher.version,
+          assets,
+        }));
+      }
+      return Ok(None);
+    }
+
+    // Fallback: original API path.
+    let api = api_client.current_provider()?;
 
     let project_id = if api.is_suppot_subgroups() {
       REPO_LAUNCGER_ID_2.to_string()
@@ -165,5 +194,13 @@ impl ServiceUpdater {
     // Never returns: spawns the replacement with the restart lock handshake
     // and exits the current process.
     crate::utils::restart::restart_launcher(app_handle, self.original_exe());
+  }
+}
+
+fn parse_platform(s: &str) -> ReleasePlatform {
+  match s {
+    "windows" => ReleasePlatform::Windows,
+    "linux" => ReleasePlatform::Linux,
+    _ => ReleasePlatform::MacOS,
   }
 }

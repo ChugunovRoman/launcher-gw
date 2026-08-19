@@ -130,24 +130,43 @@ pub async fn ping_api_provider(app: tauri::AppHandle, providerId: String) -> Res
 #[tauri::command]
 pub async fn get_launcher_bg(
   service: tauri::State<'_, Arc<Mutex<Service>>>,
-  service_files: tauri::State<'_, Arc<ServiceFiles>>,
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
 ) -> Result<Vec<u8>, String> {
-  let api_client = {
+  let (api_client, provider_id) = {
     let service_guard = service.lock().await;
-    service_guard.api_client.clone()
+    let api = service_guard.api_client.current_provider().map_err(|e| e.to_string())?;
+    (service_guard.api_client.clone(), api.id().to_string())
   };
+  let url = api_client.current_provider().map_err(|e| e.to_string())?.launcher_bg_url();
 
-  let bg = match service_files.get_launcher_bg(&api_client).await {
-    Ok(bytes) => bytes,
-    Err(e) => {
-      let msg = format!("Cannot get launcher bg, error: {:?}", e);
-      log::error!("{}", msg);
+  // Fast path: index bg_etag matches the saved one -> serve from disk, no network.
+  let index_bg_etag = crate::service::index::load_index(&provider_id)
+    .await
+    .ok()
+    .and_then(|i| i.launcher.bg_etag);
+  let saved_etag = { app_config.lock().await.bg_etag.clone() };
+  if let (Some(idx), Some(saved)) = (&index_bg_etag, &saved_etag)
+    && idx == saved
+    && let Some(bytes) = crate::utils::http_cache::read_body(&url)
+  {
+    log::info!("get_launcher_bg: etag match, serving cached bg (0 network requests)");
+    return Ok(bytes);
+  }
 
-      return Err(msg);
-    }
-  };
+  // Slow path: fetch via the ETag disk cache.
+  let client = reqwest::Client::new();
+  let cached = crate::utils::http_cache::fetch(&client, &url, std::time::Duration::from_secs(crate::consts::CACHE_TTL_BACKGROUND_SECS))
+    .await
+    .map_err(|e| format!("Cannot fetch launcher bg: {}", e))?;
 
-  Ok(bg)
+  // Persist the served etag for the fast path next time.
+  if let Some(etag) = crate::utils::http_cache::read_etag(&url) {
+    let mut cfg = app_config.lock().await;
+    cfg.bg_etag = Some(etag);
+    let _ = cfg.save();
+  }
+
+  Ok(cached.bytes)
 }
 
 #[tauri::command]
@@ -323,4 +342,24 @@ pub async fn move_version(
   };
 
   Ok(())
+}
+
+/// Manually re-publish the static release index from live API data.
+/// Exposed as a button in the Releases view.
+#[tauri::command]
+pub async fn publish_index(app: tauri::AppHandle) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+
+  let api_client = {
+    let service_guard = state.lock().await;
+    service_guard.api_client.clone()
+  };
+  let api = api_client.current_provider().map_err(|e| e.to_string())?;
+
+  crate::service::index_publisher::publish_index(api)
+    .await
+    .map_err(|e| {
+      log::error!("publish_index failed: {}", e);
+      e.to_string()
+    })
 }

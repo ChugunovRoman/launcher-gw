@@ -24,6 +24,8 @@
   import { getInMb, parseBytes, formatSpeedBytesPerSec } from "../utils/dwn";
 
   let expandedIndex = $state<number | null>(null);
+  let republishingIndex = $state(false);
+  let republishIndexMsg = $state<"ok" | "err" | "">("");
 
   // --- Patch collection (stage 1 of partial updates) ---
   let patchSourcePath = $state("");
@@ -233,6 +235,20 @@
     await invoke<void>("cancel_patch_upload", { patchName: state.uploadName });
   }
 
+  async function handleRepublishIndex() {
+    republishingIndex = true;
+    republishIndexMsg = "";
+    try {
+      await invoke<void>("publish_index");
+      republishIndexMsg = "ok";
+    } catch (e) {
+      console.error("publish_index failed:", e);
+      republishIndexMsg = "err";
+    } finally {
+      republishingIndex = false;
+    }
+  }
+
   function syncExcludeTextToPatterns() {
     patchExcludePatterns = patchExcludeText
       .split("\n")
@@ -427,6 +443,39 @@
     </div>
 
     <!-- Элемент сбора патча из git-репозиториев игры -->
+    <div class="release-item patch-item">
+      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand(-4)}>
+        <span class="plus-icon">↻</span>
+        <span class="placeholder-text">{$_("app.releases.republishIndex")}</span>
+      </div>
+      {#if expandedIndex === -4}
+        <div class="expanded-content" onclick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            class="create-btn"
+            disabled={republishingIndex}
+            onclick={handleRepublishIndex}
+          >
+            {#if republishingIndex}
+              <Spin size={14} />
+            {:else}
+              {$_("app.releases.republishIndex")}
+            {/if}
+          </button>
+          {#if republishIndexMsg}
+            <div class="patch-summary" class:error-text={republishIndexMsg === "err"}>
+              {#if republishIndexMsg === "ok"}
+                <span class="status-icon">✓</span>
+                {$_("app.releases.republishIndexOk")}
+              {:else}
+                {$_("app.releases.republishIndexErr")}
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     <div class="release-item patch-item">
       <div class="header" role="button" tabindex="0" onclick={() => toggleExpand(-3)}>
         <span class="plus-icon">±</span>

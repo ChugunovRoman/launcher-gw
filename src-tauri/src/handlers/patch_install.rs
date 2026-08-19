@@ -122,6 +122,17 @@ pub(crate) async fn check_patches_available(
     None => 0,
   };
 
+  // Try static index first (0 API calls).
+  let provider_id = api_client.current_provider().ok()?.id();
+  if let Ok(index) = crate::service::index::load_index(provider_id).await {
+    if let Some(entry) = index.releases.iter().find(|r| r.path == version_name) {
+      let total = entry.patches.len();
+      log::info!("Auto-check '{}': {} patches from index ({} installed)", version_name, total, installed_count);
+      return Some(total.saturating_sub(installed_count));
+    }
+  }
+
+  // Fallback: original API path.
   let updates_project = match resolve_updates_project(api_client, version_name).await {
     Ok(p) => p,
     Err(e) => {
@@ -206,6 +217,7 @@ pub(crate) async fn get_version_patches_impl(
     let svc = service.lock().await;
     svc.api_client.clone()
   };
+  let provider_id = api_client.current_provider()?.id();
 
   // Find the installed version and read patch markers from disk.
   let installed_set: HashSet<String> = {
@@ -221,13 +233,39 @@ pub(crate) async fn get_version_patches_impl(
       .collect()
   };
 
-  // Find the updates repo.
+  // Try the static release index first (0 API calls).
+  if let Ok(index) = crate::service::index::load_index(provider_id).await {
+    if let Some(entry) = index.releases.iter().find(|r| r.path == version_name) {
+      log::info!("get_version_patches '{}': loaded {} patches from index", version_name, entry.patches.len());
+      let mut found_next = false;
+      let mut patches: Vec<PatchInfo> = Vec::new();
+
+      for patch in &entry.patches {
+        let is_installed = installed_set.contains(&patch.tag);
+        let is_next = !is_installed && !found_next;
+        if is_next {
+          found_next = true;
+        }
+        let size: u64 = patch.assets.iter().filter(|a| a.name != MANIFEST_NAME).map(|a| a.size).sum();
+        patches.push(PatchInfo {
+          name: patch.tag.clone(),
+          notes: patch.notes.clone(),
+          size: if size > 0 { Some(size) } else { None },
+          is_next,
+        });
+      }
+
+      let missing: Vec<String> = patches.iter().filter(|p| !installed_set.contains(&p.name)).map(|p| p.name.clone()).collect();
+      return Ok(PatchCheckResult { patches, missing });
+    }
+  }
+
+  // Fallback: original API path.
   let updates_project = resolve_updates_project(&api_client, version_name).await?;
   let pid = project_id_for(&api_client, &updates_project)?;
 
   log::info!("get_version_patches: querying updates repo '{}' (pid={}) for '{}'", updates_project.name, &pid, version_name);
 
-  // List all releases in the updates repo (now includes assets).
   let releases = api_client.current_provider()?.get_repo_releases(&pid).await?;
 
   log::info!("get_version_patches: get_repo_releases returned {} releases for '{}'", releases.len(), version_name);
@@ -242,7 +280,6 @@ pub(crate) async fn get_version_patches_impl(
     });
   }
 
-  // Sort by created_at ascending (chain order).
   let mut sorted_releases = releases;
   sorted_releases.sort_by(|a, b| {
     let ta = a.created_at.as_deref().unwrap_or("");
@@ -250,8 +287,6 @@ pub(crate) async fn get_version_patches_impl(
     ta.cmp(tb)
   });
 
-  // Build patch info from releases directly (no manifest download needed for listing).
-  // tag_name is always the canonical patch name (set during upload).
   let mut found_next = false;
   let mut patches: Vec<PatchInfo> = Vec::new();
 

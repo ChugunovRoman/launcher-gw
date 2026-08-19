@@ -1,28 +1,23 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use std::collections::HashMap;
 
 use crate::{
-  consts::REPO_LAUNCGER_ID,
+  consts::{REPO_LAUNCGER_ID, CACHE_TTL_RAW_FILE_SECS},
   providers::{
     Gitlab::{Gitlab::Gitlab, issues::*, models::*},
     dto::{Manifest, TreeItem},
   },
+  utils::http_cache,
 };
 
 pub async fn __get_file_raw(s: &Gitlab, project_id: &str, file_path: &str) -> Result<Vec<u8>> {
   let url = format!("{}/projects/{}/repository/files/{}/raw?ref=master", s.host, project_id, file_path);
-  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_file_raw)")?;
-
-  if resp.status().is_success() {
-    let bytes = resp.bytes().await.context("Failed to read response body")?;
-    Ok(bytes.to_vec())
-  } else {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__get_file_raw, GitLab API error {}: {}, url: {}", status, body, url);
-  }
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_RAW_FILE_SECS)).await?;
+  Ok(cached.bytes)
 }
 
 pub async fn __get_blob_stream(
@@ -184,20 +179,46 @@ pub async fn __add_file_to_repo(s: &Gitlab, repo_id: &str, file_name: &str, cont
     commit_message: commmit_msg.to_string(),
     branch: branch.to_string(),
   };
+
+  // GitLab Files API: POST = create, PUT = update.
+  // Try POST first; if the file already exists (400), fall back to PUT.
   let resp = s
     .post(&url)
     .json(&data)
     .send()
     .await
-    .context("Failed to send request to Gitlab (__add_file_to_repo)")?;
+    .context("Failed to send request to Gitlab (__add_file_to_repo POST)")?;
 
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__add_file_to_repo, Gitlab API error {}: {} data: {:?} url: {}", status, body, data, url);
+  if resp.status().is_success() {
+    return Ok(());
   }
 
-  Ok(())
+  let post_status = resp.status();
+  let post_body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
+
+  // 400 "file already exists" — retry with PUT.
+  if post_status == reqwest::StatusCode::BAD_REQUEST {
+    log::debug!("__add_file_to_repo: POST returned 400 (file exists), retrying with PUT");
+    let resp_put = s
+      .put(&url)
+      .json(&data)
+      .send()
+      .await
+      .context("Failed to send request to Gitlab (__add_file_to_repo PUT)")?;
+
+    if resp_put.status().is_success() {
+      return Ok(());
+    }
+
+    let put_status = resp_put.status();
+    let put_body = resp_put.text().await.unwrap_or_else(|_| "No body".to_string());
+    bail!(
+      "__add_file_to_repo, Gitlab API error (POST {}: {} then PUT {}: {}), url: {}",
+      post_status, post_body, put_status, put_body, url,
+    );
+  }
+
+  bail!("__add_file_to_repo, Gitlab API error {}: {} data: {:?} url: {}", post_status, post_body, data, url);
 }
 
 pub async fn __upload_release_file(

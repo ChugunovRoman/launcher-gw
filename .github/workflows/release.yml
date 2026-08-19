@@ -92,3 +92,41 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- ЭТАП 4: Обновление launcher-секции индекса ---
+  update-index:
+    runs-on: ubuntu-latest
+    needs: [publish-release]
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-assets
+          merge-multiple: true
+      - name: Update index.json
+        env:
+          GH_TOKEN: ${{ secrets.INDEX_UPDATE_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd ./release-assets
+          WIN_SIZE=$(stat -c%s Launcher.exe)
+          LIN_SIZE=$(stat -c%s Launcher)
+          BG_ETAG=$(curl -fsSIL "https://github.com/ChugunovRoman/launcher-gw/raw/master/src%2Fstatic%2Fbg.jpg" | tr -d '\r' | awk 'tolower($1)=="etag:"{sub(/^etag:[ \t]*/,""); print}' | tail -n1)
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/Global-War-Releases/index/contents/index.json -o meta.json
+          SHA=$(jq -r '.sha' meta.json)
+          jq -r '.content' meta.json | base64 -d > current.json
+          jq --arg tag "$TAG" --arg etag "$BG_ETAG" --argjson ws "$WIN_SIZE" --argjson ls "$LIN_SIZE" '
+            .launcher.version = $tag
+            | .launcher.bg_etag = (if $etag == "" then null else $etag end)
+            | .launcher.assets = [
+                {name:"Launcher.exe", platform:"windows", size:$ws, url:("https://github.com/ChugunovRoman/launcher-gw/releases/download/" + $tag + "/Launcher.exe")},
+                {name:"Launcher", platform:"linux", size:$ls, url:("https://github.com/ChugunovRoman/launcher-gw/releases/download/" + $tag + "/Launcher")}
+              ]
+            | .generated_at = (now | todate)' current.json > new.json
+          CONTENT=$(base64 -w0 new.json)
+          jq -n --arg msg "Update launcher to $TAG" --arg content "$CONTENT" --arg sha "$SHA" \
+            '{message:$msg, content:$content, sha:$sha, branch:"master"}' > body.json
+          curl -fsS -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Global-War-Releases/index/contents/index.json -d @body.json

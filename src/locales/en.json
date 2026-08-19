@@ -290,6 +290,7 @@
       "move": "Move",
       "openDir": "Open the game folder",
       "openLogDir": "Open the log folder",
+      "openCrashDir": "Open crash reports folder",
       "moving": "Moving...",
       "movingFileName": "File: ",
       "movingCompleted": "Completed !",
@@ -298,6 +299,9 @@
       "delete": "Delete",
       "deleting": "Deleting...",
       "installed": "Downloaded",
+      "republishIndex": "Re-publish index",
+      "republishIndexOk": "Index re-published",
+      "republishIndexErr": "Failed to re-publish index",
       "patch": {
         "collectTitle": "Collect patch",
         "source": "Path to the game folder (main repository)",

@@ -19,6 +19,7 @@ use crate::service::unpack::ServiceUnpacker;
 use crate::service::updater::ServiceUpdater;
 use crate::service::wake_detector::WakeDetector;
 use crate::utils::errors::log_full_error;
+use crate::utils::http_cache;
 use crate::{
   configs::{AppConfig::AppConfig, GameConfig::GameConfig, TmpLtx, UserLtx},
   logger::Logger,
@@ -62,6 +63,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   log::info!("Start app setup");
 
   let config = AppConfig::load_or_create(app.handle())?;
+  http_cache::init(app.handle())?;
   let config_arc = Arc::new(Mutex::new(config));
   let config_arc_clone = config_arc.clone();
 
@@ -135,7 +137,22 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
       {
         let mut service = service_clone.lock().await;
         service.register_all_providers().await?;
-        service.load_manifest().await?;
+
+        // load_manifest: GitLab uses a hardcoded JSON (no network, safe to
+        // always call).  GitHub calls the Search API which counts against
+        // the rate limit — skip it for anonymous players (the static
+        // release index provides everything the player flow needs).
+        {
+          let (is_gitlab, has_token) = match service.api_client.current_provider() {
+            Ok(api) => (api.is_suppot_subgroups(), !api.get_token().is_empty()),
+            Err(_) => (false, false),
+          };
+          if is_gitlab || has_token {
+            service.load_manifest().await?;
+          } else {
+            log::info!("Skipping load_manifest: GitHub player mode (no token)");
+          }
+        }
 
         let releases = service.get_releases(false).await?;
 

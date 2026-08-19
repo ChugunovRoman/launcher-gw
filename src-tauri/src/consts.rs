@@ -35,6 +35,41 @@ pub const GITHUB_PID: &str = "github";
 
 pub const PULL_FILES_SIZE: u8 = 1;
 
+// Static release index (player-side, raw CDN — not counted against API rate limit)
+// Per-provider: each provider gets its own index with provider-specific URLs.
+// The writer publishes the index for the *currently selected* provider; the
+// reader reads the index of the *currently active* provider (which may be a
+// fallback if the saved provider is down).
+
+/// GitHub index: repo `Global-War-Releases/index`, branch `master`.
+pub const GITHUB_INDEX_RAW_URL: &str =
+  "https://raw.githubusercontent.com/Global-War-Releases/index/master/index.json";
+/// GitLab index: project `index` in the root group.
+/// `0` = not configured (reader falls back to API, writer skips silently).
+/// Fill with the real numeric project id after creating the GitLab index project.
+pub const GITLAB_INDEX_PROJECT_ID: u32 = 85506224;
+pub const INDEX_REPO_NAME: &str = "index";
+pub const INDEX_SCHEMA_VERSION: u32 = 1;
+pub const INDEX_CACHE_TTL_SECS: u64 = 600; // 10 min
+
+// HTTP cache TTLs (seconds).  Tune these to balance freshness vs API usage.
+/// Org repos listing (paginated GET /orgs/{org}/repos).
+pub const CACHE_TTL_ORG_REPOS_SECS: u64 = 3600; // 1 hour
+/// Single release metadata (releases/latest, /repos/.../releases).
+pub const CACHE_TTL_RELEASE_SECS: u64 = 600; // 10 min
+/// Search API (/search/issues) — user data and manifest lookup.
+pub const CACHE_TTL_SEARCH_API_SECS: u64 = 86400; // 24 hours
+/// Raw files (manifest.json and similar).
+pub const CACHE_TTL_RAW_FILE_SECS: u64 = 600; // 10 min
+/// Launcher background image.
+pub const CACHE_TTL_BACKGROUND_SECS: u64 = 86400; // 24 hours
+
+// User data cache TTLs (persisted in config.json, separate from http_cache).
+/// Positive cache hit (user found with flags).
+pub const USER_CACHE_TTL_POSITIVE_SECS: u64 = 86400; // 24 hours
+/// Negative cache hit (no issue found).
+pub const USER_CACHE_TTL_NEGATIVE_SECS: u64 = 21600; // 6 hours
+
 /// Default git branch used when uploading the manifest and creating a tag.
 /// TODO: this is a temporary crutch. The correct fix is to fetch the repo's
 /// default branch from the provider and thread it through `add_file_to_repo` /

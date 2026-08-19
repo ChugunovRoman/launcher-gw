@@ -1,25 +1,21 @@
-use crate::providers::{
-  Gitlab::{Gitlab::Gitlab, files::__get_file_content_size, models::*},
-  dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform},
+use std::time::Duration;
+
+use crate::{
+  consts::CACHE_TTL_RELEASE_SECS,
+  providers::{
+    Gitlab::{Gitlab::Gitlab, files::__get_file_content_size, models::*},
+    dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform},
+  },
+  utils::http_cache,
 };
 
 use anyhow::{Context, Result, bail};
 
 pub async fn __get_launcher_latest_release(s: &Gitlab, owner: &str, project_id: &str) -> Result<ReleaseGit> {
   let url = format!("{}/projects/{}/releases", &s.host, &project_id);
-  let resp = s
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to GitLab (get_launcher_release)")?;
-
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__get_launcher_latest_release, GitLab API error {}: {} url: {}", status, body, url);
-  }
-
-  let release: Vec<ReleaseGitlab> = resp.json().await.context("Failed to parse ReleaseGitlab response as JSON")?;
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_RELEASE_SECS)).await?;
+  let release: Vec<ReleaseGitlab> = serde_json::from_slice(&cached.bytes)
+    .context("Failed to parse ReleaseGitlab response as JSON")?;
 
   if release.len() == 0 {
     bail!("There is not launcher releases in {} porject!", project_id);

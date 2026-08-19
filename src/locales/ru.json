@@ -290,6 +290,7 @@
       "move": "Переместить",
       "openDir": "Открыть папку игры",
       "openLogDir": "Открыть папку с логом",
+      "openCrashDir": "Открыть папку крашрепортов",
       "moving": "Перемещение...",
       "movingFileName": "Файл: ",
       "movingCompleted": "Завершено !",
@@ -298,6 +299,9 @@
       "delete": "Удалить",
       "deleting": "Удаление...",
       "installed": "Загружено",
+      "republishIndex": "Переиздать индекс",
+      "republishIndexOk": "Индекс переиздан",
+      "republishIndexErr": "Ошибка переиздания индекса",
       "patch": {
         "collectTitle": "Собрать патч",
         "source": "Путь к папке игры (главный репозиторий)",

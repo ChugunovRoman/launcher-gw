@@ -1,16 +1,18 @@
 use std::{collections::HashMap, vec};
 
 use crate::{
-  consts::GITHUB_ORG,
+  consts::{GITHUB_ORG, CACHE_TTL_ORG_REPOS_SECS, CACHE_TTL_RELEASE_SECS},
   providers::{
     ApiProvider::ApiProvider,
     Github::{Github::Github, models::*, repo::*},
     dto::*,
   },
+  utils::http_cache,
 };
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
+use std::time::Duration;
 
 async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
   let mut map: HashMap<u32, ProjectGithub> = HashMap::new();
@@ -131,20 +133,10 @@ pub async fn __get_release_repos_by_name(s: &Github, release_name: &str) -> Resu
 /// Used for patch chains in updates repos.
 pub async fn __get_repo_releases(s: &Github, project_id: &str) -> Result<Vec<RepoReleaseInfo>> {
   let url = format!("{}/repos/{}/{}/releases", &s.host, GITHUB_ORG, &project_id);
-  let resp = s
-    .get(&url)
-    .send()
-    .await
-    .context("Failed to send request to Github (get_repo_releases)")?;
-
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__get_repo_releases, Github API error {}: {} url: {}", status, body, url);
-  }
-
-  let releases: Vec<ReleaseGithub> = resp.json().await.context("Failed to parse Github releases response as JSON")?;
-  log::info!("Github __get_repo_releases: {} releases for project '{}'", releases.len(), project_id);
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_RELEASE_SECS)).await?;
+  let releases: Vec<ReleaseGithub> = serde_json::from_slice(&cached.bytes)
+    .context("Failed to parse Github releases response as JSON")?;
+  log::info!("Github __get_repo_releases: {} releases for project '{}' (cache: {:?})", releases.len(), project_id, cached.source);
 
   Ok(releases
     .into_iter()

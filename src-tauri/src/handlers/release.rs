@@ -15,10 +15,26 @@ use tokio::sync::Mutex;
 pub async fn get_available_versions(app: tauri::AppHandle, app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
   let mut service_guard = state.lock().await;
-  service_guard.load_manifest().await.map_err(|e| {
-    log_full_error(&e);
-    e.to_string()
-  })?;
+
+  // load_manifest uses the GitHub Search API (anonymous rate limit ~10/min).
+  // For anonymous GitHub players the static release index already provides
+  // everything get_releases needs, so skip it — same guard as tauri_setup.
+  // GitLab uses a hardcoded manifest (no network), token-holders have quota.
+  let should_skip = {
+    match service_guard.api_client.current_provider() {
+      Ok(api) => !api.is_suppot_subgroups() && api.get_token().is_empty(),
+      Err(_) => false,
+    }
+  };
+  if !should_skip {
+    service_guard.load_manifest().await.map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  } else {
+    log::info!("get_available_versions: skipping load_manifest (GitHub player mode, no token)");
+  }
+
   let releases = service_guard.get_releases(true).await.context("Cannot get game releases").map_err(|e| {
     log_full_error(&e);
     e.to_string()

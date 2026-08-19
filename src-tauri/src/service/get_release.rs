@@ -4,7 +4,7 @@ use crate::{
   configs::AppConfig::Version,
   consts::*,
   handlers::dto::ReleaseManifest,
-  providers::dto::{Release, ReleaseGit, TreeItem},
+  providers::dto::{Release, ReleaseAssetGit, ReleaseGit, ReleasePlatform, TreeItem},
   service::main::Service,
   utils::{encoding::read_cp1251_file, patch_markers::read_installed_patches, resources::game_exe},
 };
@@ -20,6 +20,16 @@ fn is_main_repo(name: &str) -> bool {
   name.starts_with("main_1") || name.ends_with("main_1")
 }
 
+fn get_platform_from_name(name: &str) -> ReleasePlatform {
+  if name == EXE_WIN_NAME {
+    ReleasePlatform::Windows
+  } else if name == EXE_LINUX_NAME {
+    ReleasePlatform::Linux
+  } else {
+    ReleasePlatform::MacOS
+  }
+}
+
 pub trait ServiceGetRelease {
   async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>>;
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest>;
@@ -33,15 +43,77 @@ pub trait ServiceGetRelease {
 impl ServiceGetRelease for Service {
   async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>> {
     let api = self.api_client.current_provider()?;
-    let mut releases: Vec<Release> = vec![];
+    let provider_id = api.id();
 
-    if cashed && let Some(cash) = self.releases.get(api.id()) {
-      releases = cash.clone();
-    } else {
-      releases = api.get_releases(cashed).await?;
-
-      self.releases.insert(String::from(api.id()), releases.clone());
+    // 1. In-memory cache (provider-specific, keyed by provider id).
+    if cashed {
+      if let Some(cash) = self.releases.get(provider_id) {
+        log::info!("get_releases: in-memory cache hit for '{}'", provider_id);
+        return Ok(cash.iter().map(|release| Version {
+          id: release.id,
+          name: release.name.clone(),
+          path: release.path.clone(),
+          manifest: None,
+          engine_path: None,
+          fsgame_path: None,
+          userltx_path: None,
+          exe_path: None,
+          installed_path: "".to_owned(),
+          download_path: "".to_owned(),
+          installed_updates: vec![],
+          is_local: false,
+        }).collect());
+      }
     }
+
+    // 2. Static release index (0 API calls) — works for both cashed=false
+    //    (fresh fetch) and cashed=true with empty in-memory cache (e.g.
+    //    right after switching providers in the UI).
+    match crate::service::index::load_index(provider_id).await {
+      Ok(index) => {
+        log::info!("get_releases: loaded from static index ({} releases)", index.releases.len());
+        let versions: Vec<Version> = index
+          .releases
+          .iter()
+          .enumerate()
+          .map(|(i, entry)| Version {
+            id: (i + 1) as u32,
+            name: entry.name.clone(),
+            path: entry.path.clone(),
+            manifest: None,
+            engine_path: None,
+            fsgame_path: None,
+            userltx_path: None,
+            exe_path: None,
+            installed_path: "".to_owned(),
+            download_path: "".to_owned(),
+            installed_updates: vec![],
+            is_local: false,
+          })
+          .collect();
+        let releases: Vec<Release> = versions
+          .iter()
+          .map(|v| Release { id: v.id, name: v.name.clone(), path: v.path.clone() })
+          .collect();
+        self.releases.insert(String::from(provider_id), releases);
+
+        // NOTE: do not warm up the provider's projects_map here. The patch
+        // checks (check_patches_available / get_version_patches_impl) are
+        // already index-first and only hit the API when the index is down —
+        // in which case the fallback path resolves the map itself. A warmup
+        // call here would burn the anonymous GitHub rate limit on every
+        // launch for no benefit.
+
+        return Ok(versions);
+      }
+      Err(e) => {
+        log::warn!("get_releases: static index unavailable, falling back to API: {}", e);
+      }
+    }
+
+    // 3. Fallback: live API.
+    let releases = api.get_releases(cashed).await?;
+    self.releases.insert(String::from(provider_id), releases.clone());
 
     let result = releases
       .iter()
@@ -66,6 +138,24 @@ impl ServiceGetRelease for Service {
 
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest> {
     let api = self.api_client.current_provider()?;
+
+    // Try the static index first: the manifest URL is a raw link.
+    if let Ok(index) = crate::service::index::load_index(api.id()).await {
+      if let Some(entry) = index.releases.iter().find(|r| r.path == release_name) {
+        log::info!("get_release_manifest '{}': fetching from index manifest URL", release_name);
+        let client = reqwest::Client::new();
+        let cached = crate::utils::http_cache::fetch(
+          &client,
+          &entry.manifest,
+          std::time::Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS),
+        )
+        .await?;
+        let manifest: ReleaseManifest = serde_json::from_slice(&cached.bytes)?;
+        return Ok(manifest);
+      }
+    }
+
+    // Fallback: original API path.
     let repos = api.get_release_repos_by_name(release_name.clone()).await?;
 
     let project = repos
@@ -87,6 +177,30 @@ impl ServiceGetRelease for Service {
   async fn get_main_release(&self, release_name: &str) -> Result<ReleaseGit> {
     let api = self.api_client.current_provider()?;
 
+    // Try the static release index first.
+    if let Ok(index) = crate::service::index::load_index(api.id()).await {
+      if let Some(entry) = index.releases.iter().find(|r| r.path == release_name) {
+        log::info!("get_main_release '{}': loaded from static index", release_name);
+        let assets: Vec<ReleaseAssetGit> = entry
+          .assets
+          .iter()
+          .map(|a| ReleaseAssetGit {
+            name: a.name.clone(),
+            platform: get_platform_from_name(&a.name),
+            size: a.size,
+            download_link: a.url.clone(),
+          })
+          .collect();
+        return Ok(ReleaseGit {
+          name: entry.name.clone(),
+          version: entry.tag.clone(),
+          assets,
+        });
+      }
+    }
+
+    // Fallback: original API path.
+
     let repos = api.get_release_repos_by_name(release_name).await?;
 
     if repos.is_empty() {
@@ -97,7 +211,6 @@ impl ServiceGetRelease for Service {
       .iter()
       .find(|r| is_main_repo(&r.name))
       .ok_or_else(|| {
-        // Log available repo names so a naming mismatch is diagnosable instead of a bare panic.
         let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
         log::error!(
           "main_1 repo not found for release '{}'. Available repos: {:?}",

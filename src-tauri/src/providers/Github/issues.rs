@@ -1,44 +1,33 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use urlencoding::encode;
 
 use crate::{
-  consts::{GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME},
+  consts::{GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME, CACHE_TTL_SEARCH_API_SECS},
   providers::{
     Github::{Github::Github, models::*},
     dto::Issue,
   },
+  utils::http_cache,
 };
 
-pub async fn __find_issue(s: &Github, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
+pub async fn __find_issue(s: &Github, _repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
   let params = search_params
     .iter()
     .map(|v| format!("{}={}", v.0, encode(v.1)))
     .collect::<Vec<_>>()
     .join("&");
 
-  let mut path = format!("{}/search/issues", s.host);
+  let mut url = format!("{}/search/issues", s.host);
 
   if search_params.len() > 0 {
-    path = format!("{}?{}", &path, &params);
+    url = format!("{}?{}", &url, &params);
   }
 
-  // log::debug!("Github __find_issue, path: {}", &path);
-
-  let response = s.get(&path).send().await?;
-
-  if !response.status().is_success() {
-    let status = response.status();
-    let body = response.text().await.unwrap_or_else(|_| "No response body".to_string());
-    let msg = format!("__find_issue, Github API error {}: {}. Returning default UserData.", status, body);
-    log::warn!("{}", &msg);
-    bail!(msg)
-  }
-
-  let text = response.text().await?;
-  // log::info!("Get github Issues: {}", &text);
-  let issues: IssueResponseGithub = serde_json::from_str(&text)?;
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_SEARCH_API_SECS)).await?;
+  let issues: IssueResponseGithub = serde_json::from_slice(&cached.bytes)?;
 
   if issues.total_count == 0 {
     return Ok(vec![]);

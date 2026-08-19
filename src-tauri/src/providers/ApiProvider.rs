@@ -28,6 +28,7 @@ pub trait ApiProvider: Send + Sync {
   fn get_manifest(&self) -> Result<Manifest>;
 
   async fn get_launcher_bg(&self) -> Result<Vec<u8>>;
+  fn launcher_bg_url(&self) -> String;
   async fn get_file_raw(&self, project_id: &str, file_path: &str) -> Result<Vec<u8>>;
   async fn get_blob_stream(
     &self,

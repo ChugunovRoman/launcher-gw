@@ -1,7 +1,13 @@
-use crate::providers::{
-  ApiProvider::ApiProvider,
-  Gitlab::{Gitlab::Gitlab, group::__update_group, models::*, repo::__update_repo},
-  dto::*,
+use std::time::Duration;
+
+use crate::{
+  consts::CACHE_TTL_RELEASE_SECS,
+  providers::{
+    ApiProvider::ApiProvider,
+    Gitlab::{Gitlab::Gitlab, group::__update_group, models::*, repo::__update_repo},
+    dto::*,
+  },
+  utils::http_cache,
 };
 
 use anyhow::{Context, Result, bail};
@@ -10,20 +16,10 @@ use anyhow::{Context, Result, bail};
 /// Used for patch chains in updates repos.
 pub async fn __get_repo_releases(s: &Gitlab, project_id: &str) -> Result<Vec<RepoReleaseInfo>> {
   let url = format!("{}/projects/{}/releases", &s.host, &project_id);
-  let resp = s.get(&url).send().await.context("Failed to send request to GitLab (get_repo_releases)")?;
-
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-    bail!("__get_repo_releases, GitLab API error {}: {} url: {}", status, body, url);
-  }
-
-  let body_text = resp.text().await.context("Failed to read GitLab releases response body")?;
-  let preview: String = body_text.chars().take(500).collect();
-  log::debug!("GitLab __get_repo_releases raw response ({} chars) for project '{}': {}", body_text.len(), project_id, preview);
-
-  let releases: Vec<ReleaseGitlab> = serde_json::from_str(&body_text).context("Failed to parse GitLab releases response as JSON")?;
-  log::info!("GitLab __get_repo_releases: {} releases for project '{}' url: {}", releases.len(), project_id, url);
+  let cached = s.get_cached(&url, Duration::from_secs(CACHE_TTL_RELEASE_SECS)).await?;
+  let releases: Vec<ReleaseGitlab> = serde_json::from_slice(&cached.bytes)
+    .context("Failed to parse GitLab releases response as JSON")?;
+  log::info!("GitLab __get_repo_releases: {} releases for project '{}' (cache: {:?})", releases.len(), project_id, cached.source);
 
   Ok(releases
     .into_iter()
@@ -72,8 +68,10 @@ pub async fn __get_release_repos_by_name(s: &Gitlab, release_name: &str) -> Resu
   let releases = __get_releases(s, true).await?;
   let release = releases
     .iter()
-    .find(|r| r.name == release_name)
-    .expect(&format!("get_release_repos_by_name(), relese with name: {} not found !", &release_name));
+    .find(|r| r.name == release_name || r.path == release_name)
+    .ok_or_else(|| anyhow::anyhow!(
+      "get_release_repos_by_name(): release '{}' not found (checked name and path)", release_name
+    ))?;
 
   let repos = __get_release_repos(s, &release.id.to_string()).await?;
 

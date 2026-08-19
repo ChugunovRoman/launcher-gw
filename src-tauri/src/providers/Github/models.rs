@@ -102,6 +102,17 @@ pub struct AddFileContentBodyGithub {
   pub message: String,
   pub content: String,
   pub branch: String,
+  /// Required by the GitHub Contents API when *updating* an existing file.
+  /// Omitted (via `skip_serializing_if`) when creating a new one.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub sha: Option<String>,
+}
+
+/// Minimal subset of the GitHub Contents API response used to resolve the
+/// `sha` of an existing file before updating it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContentFileGithub {
+  pub sha: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
