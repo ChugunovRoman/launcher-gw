@@ -344,24 +344,39 @@ pub async fn move_version(
   Ok(())
 }
 
-/// Manually re-publish the static release index from live API data.
-/// Exposed as a button in the Releases view.
+/// Collect release index JSON from live API data for preview.
+/// Returns the JSON string to be displayed in a text area.
 #[tauri::command]
-pub async fn publish_index(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn preview_index(app: tauri::AppHandle) -> Result<String, String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-
   let api_client = {
     let service_guard = state.lock().await;
     service_guard.api_client.clone()
   };
   let api = api_client.current_provider().map_err(|e| e.to_string())?;
 
-  crate::service::index_publisher::publish_index(api)
+  crate::service::index_publisher::collect_index(api)
     .await
     .map_err(|e| {
-      // {:?} prints the full anyhow cause chain (e.g. the underlying parse
-      // or HEAD error), not just the top-level context like {} does.
-      log::error!("publish_index failed: {:?}", e);
+      log::error!("preview_index failed: {:?}", e);
+      e.to_string()
+    })
+}
+
+/// Commit a previously previewed index JSON to the provider's index repo.
+#[tauri::command]
+pub async fn commit_index(app: tauri::AppHandle, json: String) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let api_client = {
+    let service_guard = state.lock().await;
+    service_guard.api_client.clone()
+  };
+  let api = api_client.current_provider().map_err(|e| e.to_string())?;
+
+  crate::service::index_publisher::commit_index_json(api, &json)
+    .await
+    .map_err(|e| {
+      log::error!("commit_index failed: {:?}", e);
       e.to_string()
     })
 }

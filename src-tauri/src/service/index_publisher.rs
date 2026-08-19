@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json;
 
 use crate::{
@@ -22,13 +22,36 @@ use crate::{
     service::index::*,
 };
 
-/// Rebuild `index.json` from live API data and commit it to the provider's
-/// index repo.  Errors are returned but callers should treat them as
-/// non-fatal warnings.
-pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> {
-    let is_gitlab = api.is_suppot_subgroups();
+/// Collect the release index JSON from live API data (no commit).
+/// Used for preview in the UI before the dev confirms the commit.
+pub async fn collect_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<String> {
+    let index = collect_release_index(api).await?;
+    serde_json::to_string_pretty(&index).context("index: serialize")
+}
 
-    log::info!("Publishing release index (provider: {})...", api.id());
+/// Commit a previously collected index JSON string to the provider's index repo.
+pub async fn commit_index_json(api: &(dyn ApiProvider + Send + Sync), json: &str) -> Result<()> {
+    let is_gitlab = api.is_suppot_subgroups();
+    if is_gitlab {
+        if GITLAB_INDEX_PROJECT_ID == 0 {
+            bail!("GITLAB_INDEX_PROJECT_ID = 0, GitLab index not configured");
+        }
+        api.add_file_to_repo(
+            &GITLAB_INDEX_PROJECT_ID.to_string(), "index.json", json,
+            "Update release index", DEFAULT_BRANCH,
+        ).await.context("index: add_file_to_repo (GitLab)")?;
+    } else {
+        api.add_file_to_repo(
+            INDEX_REPO_NAME, "index.json", json,
+            "Update release index", DEFAULT_BRANCH,
+        ).await.context("index: add_file_to_repo (GitHub)")?;
+    }
+    Ok(())
+}
+
+/// Collect the release index from live API data (no network commit).
+async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<ReleaseIndex> {
+    let is_gitlab = api.is_suppot_subgroups();
 
     // ---- Launcher (self-update) ----
     let launcher_project_id = if is_gitlab {
@@ -69,13 +92,15 @@ pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> 
     let mut release_entries: Vec<ReleaseIndexEntry> = Vec::new();
 
     for release in &releases_raw {
+        // Use release.name (original description with spaces) for API lookups,
+        // not release.path (where spaces are replaced with dashes).
         let repos = match api
-            .get_release_repos_by_name(&release.path)
+            .get_release_repos_by_name(&release.name)
             .await
         {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("index: get_release_repos_by_name('{}') failed, skipping: {}", &release.path, e);
+                log::warn!("index: get_release_repos_by_name('{}') failed, skipping: {}", &release.name, e);
                 continue;
             }
         };
@@ -83,7 +108,7 @@ pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> 
         let main_repo = repos.iter().find(|r| is_main_repo(&r.name));
 
         let Some(main) = main_repo else {
-            log::warn!("index: no main_1 repo for release '{}', skipping", &release.path);
+            log::warn!("index: no main_1 repo for release '{}', skipping", &release.name);
             continue;
         };
 
@@ -117,12 +142,12 @@ pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> 
 
         // ---- Patches (updates repos) ----
         let updates_repos = match api
-            .get_updates_repos_by_name(&release.path)
+            .get_updates_repos_by_name(&release.name)
             .await
         {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("index: get_updates_repos_by_name('{}') failed, skipping patches: {}", &release.path, e);
+                log::warn!("index: get_updates_repos_by_name('{}') failed, skipping patches: {}", &release.name, e);
                 Vec::new()
             }
         };
@@ -188,48 +213,23 @@ pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> 
         });
     }
 
-    let index = ReleaseIndex {
+    Ok(ReleaseIndex {
         schema: INDEX_SCHEMA_VERSION,
         generated_at: chrono::Utc::now().to_rfc3339(),
         launcher: launcher_index,
         releases: release_entries,
-    };
+    })
+}
 
-    let content = serde_json::to_string_pretty(&index)
-        .context("index: serialize")?;
-
-    // Commit to the provider's index repo.
-    if is_gitlab {
-        if GITLAB_INDEX_PROJECT_ID == 0 {
-            log::warn!("index: GITLAB_INDEX_PROJECT_ID = 0, skipping GitLab index publish");
-            return Ok(());
-        }
-        api.add_file_to_repo(
-            &GITLAB_INDEX_PROJECT_ID.to_string(),
-            "index.json",
-            &content,
-            "Update release index",
-            DEFAULT_BRANCH,
-        )
-        .await
-        .context("index: add_file_to_repo (GitLab)")?;
-    } else {
-        api.add_file_to_repo(
-            INDEX_REPO_NAME,
-            "index.json",
-            &content,
-            "Update release index",
-            DEFAULT_BRANCH,
-        )
-        .await
-        .context("index: add_file_to_repo (GitHub)")?;
-    }
-
-    log::info!(
-        "Release index published for '{}' ({} releases)",
-        api.id(),
-        index.releases.len()
-    );
+/// Rebuild `index.json` from live API data and commit it to the provider's
+/// index repo.  Errors are returned but callers should treat them as
+/// non-fatal warnings.
+pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> {
+    log::info!("Publishing release index (provider: {})...", api.id());
+    let index = collect_release_index(api).await?;
+    let content = serde_json::to_string_pretty(&index).context("index: serialize")?;
+    commit_index_json(api, &content).await?;
+    log::info!("Release index published for '{}' ({} releases)", api.id(), index.releases.len());
     Ok(())
 }
 

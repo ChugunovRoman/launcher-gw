@@ -4,17 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { providersWasInited } from "../store/main";
-  import {
-    showUploading,
-    inProcess,
-    versions,
-    logText,
-    releaseName,
-    releasePath,
-    totalFiles,
-    uploadedFiles,
-    uploadFilesMap,
-  } from "../store/upload";
+  import { showUploading, inProcess, versions, logText, releaseName, releasePath, totalFiles, uploadedFiles, uploadFilesMap } from "../store/upload";
   import { choosePath } from "../utils/path";
   import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
 
@@ -26,6 +16,9 @@
   let expandedIndex = $state<number | null>(null);
   let republishingIndex = $state(false);
   let republishIndexMsg = $state<"ok" | "err" | "">("");
+  let indexPreviewJson = $state("");
+  let indexCommitting = $state(false);
+  let indexCommitted = $state(false);
 
   // --- Patch collection (stage 1 of partial updates) ---
   let patchSourcePath = $state("");
@@ -79,7 +72,10 @@
       // If a version is expanded, also update its state directly.
       if (expandedIndex !== null && expandedIndex >= 0) {
         const vn = $versions[expandedIndex]?.name;
-        if (vn) updateUploadState(vn, (s) => { s.uploadPath = patchResult!.patch_dir; });
+        if (vn)
+          updateUploadState(vn, (s) => {
+            s.uploadPath = patchResult!.patch_dir;
+          });
       }
       invoke("set_patch_upload_dir", { path: patchResult.patch_dir });
     } catch (e) {
@@ -183,7 +179,9 @@
     event.stopPropagation();
 
     await choosePath((selected) => {
-      updateUploadState(versionName, (s) => { s.uploadPath = selected; });
+      updateUploadState(versionName, (s) => {
+        s.uploadPath = selected;
+      });
       invoke("set_patch_upload_dir", { path: selected });
     });
   }
@@ -216,12 +214,18 @@
         deletedFiles: fromCollect && patchResult ? patchResult.deleted_files : [],
         baseReleaseTag: fromCollect && patchResult ? patchResult.base_tag : null,
       });
-      updateUploadState(releaseNameStr, (s) => { s.result = result; });
+      updateUploadState(releaseNameStr, (s) => {
+        s.result = result;
+      });
     } catch (e) {
       console.error("handleUploadPatch failed:", e);
-      updateUploadState(releaseNameStr, (s) => { s.error = String(e); });
+      updateUploadState(releaseNameStr, (s) => {
+        s.error = String(e);
+      });
     } finally {
-      updateUploadState(releaseNameStr, (s) => { s.uploading = false; });
+      updateUploadState(releaseNameStr, (s) => {
+        s.uploading = false;
+      });
       activeUploadVersion = null;
     }
   }
@@ -235,17 +239,34 @@
     await invoke<void>("cancel_patch_upload", { patchName: state.uploadName });
   }
 
-  async function handleRepublishIndex() {
+  async function handlePreviewIndex() {
     republishingIndex = true;
     republishIndexMsg = "";
+    indexPreviewJson = "";
+    indexCommitted = false;
     try {
-      await invoke<void>("publish_index");
-      republishIndexMsg = "ok";
+      indexPreviewJson = await invoke<string>("preview_index");
     } catch (e) {
-      console.error("publish_index failed:", e);
+      console.error("preview_index failed:", e);
       republishIndexMsg = "err";
     } finally {
       republishingIndex = false;
+    }
+  }
+
+  async function handleCommitIndex() {
+    if (!indexPreviewJson) return;
+    indexCommitting = true;
+    republishIndexMsg = "";
+    try {
+      await invoke<void>("commit_index", { json: indexPreviewJson });
+      republishIndexMsg = "ok";
+      indexCommitted = true;
+    } catch (e) {
+      console.error("commit_index failed:", e);
+      republishIndexMsg = "err";
+    } finally {
+      indexCommitting = false;
     }
   }
 
@@ -373,11 +394,7 @@
         // Guard: only restore if progress_upload is a real in-progress upload
         // (name non-empty and not completed). An empty {} object from an old
         // config or a manual reset must NOT be treated as an active upload.
-        if (
-          !!config.progress_upload &&
-          !!config.progress_upload.name &&
-          !config.progress_upload.is_completed
-        ) {
+        if (!!config.progress_upload && !!config.progress_upload.name && !config.progress_upload.is_completed) {
           showUploading.set(true);
           releaseName.set(config.progress_upload.name);
           totalFiles.set(config.progress_upload.total_files);
@@ -450,18 +467,34 @@
       </div>
       {#if expandedIndex === -4}
         <div class="expanded-content" onclick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            class="create-btn"
-            disabled={republishingIndex}
-            onclick={handleRepublishIndex}
-          >
+          <button type="button" class="create-btn" disabled={republishingIndex} onclick={handlePreviewIndex}>
             {#if republishingIndex}
               <Spin size={14} />
             {:else}
               {$_("app.releases.republishIndex")}
             {/if}
           </button>
+
+          {#if indexPreviewJson}
+            <label class="input-label" style="margin-top: 0.75rem;">index.json</label>
+            <textarea
+              class="index-preview-textarea"
+              rows="20"
+              bind:value={indexPreviewJson}
+            ></textarea>
+            <div class="input-row" style="margin-top: 0.5rem;">
+              <button type="button" class="create-btn" disabled={indexCommitting || indexCommitted} onclick={handleCommitIndex}>
+                {#if indexCommitting}
+                  <Spin size={14} />
+                {:else if indexCommitted}
+                  ✓
+                {:else}
+                  {$_("app.releases.commitIndex")}
+                {/if}
+              </button>
+            </div>
+          {/if}
+
           {#if republishIndexMsg}
             <div class="patch-summary" class:error-text={republishIndexMsg === "err"}>
               {#if republishIndexMsg === "ok"}
@@ -486,13 +519,7 @@
           <div class="input-group">
             <label class="input-label">{$_("app.releases.patch.source")}</label>
             <div class="input-row">
-              <input
-                type="text"
-                readonly
-                bind:value={patchSourcePath}
-                placeholder={$_("app.releases.patch.source")}
-                class="release-input"
-              />
+              <input type="text" readonly bind:value={patchSourcePath} placeholder={$_("app.releases.patch.source")} class="release-input" />
               <button type="button" onclick={choosePatchSourcePath} class="choose-btn">
                 {$_("app.releases.browse")}
               </button>
@@ -500,11 +527,7 @@
           </div>
           <div class="input-group">
             <label class="input-label">{$_("app.releases.patch.excludePatterns")}</label>
-            <textarea
-              class="exclude-textarea"
-              bind:value={patchExcludeText}
-              placeholder={$_("app.releases.patch.excludePatterns")}
-              rows="6"
+            <textarea class="exclude-textarea" bind:value={patchExcludeText} placeholder={$_("app.releases.patch.excludePatterns")} rows="6"
             ></textarea>
             <button type="button" onclick={resetExcludePatterns} class="reset-btn">
               {$_("app.releases.patch.resetDefaults")}
@@ -625,13 +648,7 @@
             <div class="input-group">
               <label class="input-label">{$_("app.releases.patch.dir")}</label>
               <div class="input-row">
-                <input
-                  type="text"
-                  readonly
-                  value={ups.uploadPath}
-                  placeholder={$_("app.releases.patch.dir")}
-                  class="release-input"
-                />
+                <input type="text" readonly value={ups.uploadPath} placeholder={$_("app.releases.patch.dir")} class="release-input" />
                 <button type="button" onclick={(e) => choosePatchUploadPath(e, version.name)} class="choose-btn">
                   {$_("app.releases.browse")}
                 </button>
@@ -643,10 +660,12 @@
                 <input
                   type="text"
                   value={ups.uploadName}
-                  oninput={(e) => updateUploadState(version.name, (s) => { s.uploadName = (e.target as HTMLInputElement).value; })}
+                  oninput={(e) =>
+                    updateUploadState(version.name, (s) => {
+                      s.uploadName = (e.target as HTMLInputElement).value;
+                    })}
                   placeholder={$_("app.releases.patch.name")}
-                  class="release-input"
-                />
+                  class="release-input" />
               </div>
             </div>
             <div class="input-row patch-actions">
@@ -1028,6 +1047,37 @@
   .exclude-textarea:focus {
     background-color: rgba(255, 255, 255, 1);
     outline: none;
+  }
+  .index-preview-textarea {
+    -webkit-app-region: no-drag;
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #ddd;
+    font-family: monospace;
+    font-size: 0.75rem;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .index-preview-textarea::-webkit-scrollbar {
+    width: 12px;
+  }
+  .index-preview-textarea::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .index-preview-textarea::-webkit-scrollbar-thumb {
+    background-color: rgba(61, 93, 236, 0.8);
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .index-preview-textarea::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(61, 93, 236, 1);
+  }
+  .index-preview-textarea::-webkit-scrollbar-button {
+    display: none;
   }
 
   .reset-btn {

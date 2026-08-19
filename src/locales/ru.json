@@ -302,6 +302,7 @@
       "republishIndex": "Переиздать индекс",
       "republishIndexOk": "Индекс переиздан",
       "republishIndexErr": "Ошибка переиздания индекса",
+      "commitIndex": "Коммит индекса",
       "patch": {
         "collectTitle": "Собрать патч",
         "source": "Путь к папке игры (главный репозиторий)",

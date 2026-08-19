@@ -302,6 +302,7 @@
       "republishIndex": "Re-publish index",
       "republishIndexOk": "Index re-published",
       "republishIndexErr": "Failed to re-publish index",
+      "commitIndex": "Commit index",
       "patch": {
         "collectTitle": "Collect patch",
         "source": "Path to the game folder (main repository)",
