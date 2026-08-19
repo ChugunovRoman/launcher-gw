@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectGithub {
   pub id: u32,
   pub name: String,
-  pub description: String,
+  #[serde(default)]
+  pub description: Option<String>,
   pub full_name: String,
   pub ssh_url: String,
   pub archived: bool,

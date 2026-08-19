@@ -92,13 +92,15 @@ pub async fn __get_releases(s: &Github, cashed: bool) -> Result<Vec<Release>> {
   let mut exist_names: HashMap<String, bool> = HashMap::new();
 
   for (id, project) in cached_projects {
-    if let None = exist_names.get(&project.description) {
+    let desc = project.description.clone().unwrap_or_default();
+    if desc.is_empty() { continue; }
+    if let None = exist_names.get(&desc) {
       releases.push(Release {
         id,
-        name: project.description.clone(),
-        path: Regex::new(r"\s+").unwrap().replace_all(&project.description, "-").to_string(),
+        name: desc.clone(),
+        path: Regex::new(r"\s+").unwrap().replace_all(&desc, "-").to_string(),
       });
-      exist_names.insert(project.description, true);
+      exist_names.insert(desc, true);
     }
   }
 
@@ -114,7 +116,7 @@ pub async fn __get_release_repos_by_name(s: &Github, release_name: &str) -> Resu
   for (id, project) in cached_projects {
     if let Some(pos) = project.name.find("_main_")
       && pos > 0
-      && project.description == release_name
+      && project.description.as_deref() == Some(release_name)
     {
       repos.push(Project {
         id,
@@ -163,7 +165,7 @@ pub async fn __get_updates_repos_by_name(s: &Github, release_name: &str) -> Resu
   for (id, project) in cached_projects {
     if let Some(pos) = project.name.find("_updates_")
       && pos > 0
-      && project.description == release_name
+      && project.description.as_deref() == Some(release_name)
     {
       repos.push(Project {
         id,
@@ -184,7 +186,7 @@ pub async fn __set_release_visibility(s: &Github, release_name: &str, visibility
   let cached_projects = s.projects_map.lock().unwrap().clone();
 
   for (_, project) in cached_projects {
-    if project.description == release_name {
+    if project.description.as_deref() == Some(release_name) {
       __update_repo(
         s,
         &project.name,
