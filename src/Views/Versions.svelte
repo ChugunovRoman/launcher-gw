@@ -168,12 +168,21 @@
       return;
     }
 
-    const manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
-
-    updateVersionProgress(releaseName, (version) => ({
-      manifest,
-      filesProgress: filesProgressFromManifest(manifest, version.filesProgress),
-    }));
+    try {
+      const manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
+      updateVersionProgress(releaseName, (version) => ({
+        manifest,
+        filesProgress: filesProgressFromManifest(manifest, version.filesProgress),
+      }));
+    } catch (e) {
+      console.error("fetchVersionManifest failed:", e);
+      // Provide a zero-size manifest so the UI shows "0 B" instead of an
+      // infinite spinner when the network request fails.
+      updateVersionProgress(releaseName, (version) => ({
+        manifest: { total_files_count: 0, total_size: 0, compressed_size: 0, files: [], deleted_files: [] } as ReleaseManifest,
+        filesProgress: version.filesProgress ?? new Map(),
+      }));
+    }
   }
 
   async function handleContinueDownload(

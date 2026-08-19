@@ -51,7 +51,7 @@ pub struct ReleaseManifestFile {
   #[serde(default)]
   pub size: u64,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReleaseManifest {
   #[serde(default)]
   pub total_files_count: u32,

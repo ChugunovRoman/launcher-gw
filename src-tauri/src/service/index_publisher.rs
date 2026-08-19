@@ -130,6 +130,12 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
 
         let manifest_url = manifest_url_for(api, main);
 
+        // Extract size fields + exe_path from the release manifest (CDN, not rate-limited).
+        let manifest_info = extract_manifest_info(&manifest_url).await;
+        if manifest_info.is_none() {
+            log::warn!("index: cannot fetch manifest for '{}', sizes will be 0", &release.name);
+        }
+
         let assets: Vec<IndexAsset> = latest
             .assets
             .iter()
@@ -206,10 +212,13 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
             name: release.name.clone(),
             path: release.path.clone(),
             tag: latest.version.clone(),
-            exe_path: None,
+            exe_path: manifest_info.as_ref().and_then(|m| m.exe_path.clone()),
             manifest: manifest_url,
             assets,
             patches,
+            total_files_count: manifest_info.as_ref().map(|m| m.total_files_count).unwrap_or(0),
+            total_size: manifest_info.as_ref().map(|m| m.total_size).unwrap_or(0),
+            compressed_size: manifest_info.as_ref().map(|m| m.compressed_size).unwrap_or(0),
         });
     }
 
@@ -270,6 +279,16 @@ fn project_id_for_api(api: &(dyn ApiProvider + Send + Sync), project: &Project) 
     } else {
         project.name.clone()
     }
+}
+
+/// Download a release manifest (raw URL) and extract size fields + exe_path.
+/// Returns `None` on any error (non-fatal — the index will just have 0 sizes).
+async fn extract_manifest_info(manifest_url: &str) -> Option<ReleaseManifest> {
+    let client = reqwest::Client::new();
+    let cached = crate::utils::http_cache::fetch(&client, manifest_url, Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS))
+        .await
+        .ok()?;
+    serde_json::from_slice(&cached.bytes).ok()
 }
 
 /// HEAD the launcher bg URL to capture its current ETag for the index.

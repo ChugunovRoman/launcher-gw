@@ -73,6 +73,14 @@ pub struct ReleaseIndexEntry {
     pub assets: Vec<IndexAsset>,
     #[serde(default)]
     pub patches: Vec<IndexPatch>,
+    // Size fields from the release manifest (populated by the writer from CDN).
+    // 0 = unknown (e.g. manifest fetch failed during index publish).
+    #[serde(default)]
+    pub total_files_count: u32,
+    #[serde(default)]
+    pub total_size: u64,
+    #[serde(default)]
+    pub compressed_size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

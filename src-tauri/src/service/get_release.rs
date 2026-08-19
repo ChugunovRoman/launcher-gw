@@ -5,7 +5,7 @@ use crate::{
   consts::*,
   handlers::dto::ReleaseManifest,
   providers::dto::{Release, ReleaseAssetGit, ReleaseGit, ReleasePlatform, TreeItem},
-  service::main::Service,
+  service::{index::ReleaseIndexEntry, main::Service},
   utils::{encoding::read_cp1251_file, patch_markers::read_installed_patches, resources::game_exe},
 };
 
@@ -28,6 +28,21 @@ fn get_platform_from_name(name: &str) -> ReleasePlatform {
   } else {
     ReleasePlatform::MacOS
   }
+}
+
+/// Build a lightweight ReleaseManifest from index entry fields (no network).
+/// Always returns `Some` — even when size fields are zero (old index format).
+/// This prevents an infinite spinner in the UI when the fallback manifest
+/// fetch also fails (e.g. rate limit).
+fn manifest_from_index_entry(entry: &ReleaseIndexEntry) -> Option<ReleaseManifest> {
+  Some(ReleaseManifest {
+    total_files_count: entry.total_files_count,
+    total_size: entry.total_size,
+    compressed_size: entry.compressed_size,
+    files: vec![],
+    exe_path: entry.exe_path.clone(),
+    ..ReleaseManifest::default()
+  })
 }
 
 pub trait ServiceGetRelease {
@@ -80,11 +95,11 @@ impl ServiceGetRelease for Service {
             id: (i + 1) as u32,
             name: entry.name.clone(),
             path: entry.path.clone(),
-            manifest: None,
+            manifest: manifest_from_index_entry(entry),
             engine_path: None,
             fsgame_path: None,
             userltx_path: None,
-            exe_path: None,
+            exe_path: entry.exe_path.clone(),
             installed_path: "".to_owned(),
             download_path: "".to_owned(),
             installed_updates: vec![],
@@ -139,9 +154,15 @@ impl ServiceGetRelease for Service {
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest> {
     let api = self.api_client.current_provider()?;
 
-    // Try the static index first: the manifest URL is a raw link.
+    // Try the static index first.
     if let Ok(index) = crate::service::index::load_index(api.id()).await {
-      if let Some(entry) = index.releases.iter().find(|r| r.path == release_name) {
+      if let Some(entry) = index.releases.iter().find(|r| r.path == release_name || r.name == release_name) {
+        // Fast path: sizes already embedded in the index (no network needed).
+        if let Some(m) = manifest_from_index_entry(entry) {
+          log::info!("get_release_manifest '{}': serving from index fields (0 requests)", release_name);
+          return Ok(m);
+        }
+        // Slow path: fetch the manifest via its raw URL.
         log::info!("get_release_manifest '{}': fetching from index manifest URL", release_name);
         let client = reqwest::Client::new();
         let cached = crate::utils::http_cache::fetch(
@@ -179,7 +200,7 @@ impl ServiceGetRelease for Service {
 
     // Try the static release index first.
     if let Ok(index) = crate::service::index::load_index(api.id()).await {
-      if let Some(entry) = index.releases.iter().find(|r| r.path == release_name) {
+      if let Some(entry) = index.releases.iter().find(|r| r.path == release_name || r.name == release_name) {
         log::info!("get_main_release '{}': loaded from static index", release_name);
         let assets: Vec<ReleaseAssetGit> = entry
           .assets
