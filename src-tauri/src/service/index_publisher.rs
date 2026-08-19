@@ -147,13 +147,15 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
             .collect();
 
         // ---- Patches (updates repos) ----
+        // GitLab expects numeric group id, GitHub expects release name.
+        let updates_key = if is_gitlab { release.id.to_string() } else { release.name.clone() };
         let updates_repos = match api
-            .get_updates_repos_by_name(&release.name)
+            .get_updates_repos_by_name(&updates_key)
             .await
         {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("index: get_updates_repos_by_name('{}') failed, skipping patches: {}", &release.name, e);
+                log::warn!("index: get_updates_repos_by_name('{}') failed, skipping patches: {}", &updates_key, e);
                 Vec::new()
             }
         };
