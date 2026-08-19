@@ -24,7 +24,21 @@ pub async fn __get_launcher_latest_release(s: &Gitlab, owner: &str, project_id: 
   let mut assets: Vec<ReleaseAssetGit> = vec![];
 
   for asset in &release[0].assets.links {
-    let size = __get_file_content_size(s, &asset.direct_asset_url).await?;
+    // Asset size is best-effort metadata for the index / self-update UI.
+    // A HEAD failure (403/404/redirect-to-HTML on a private or LFS URL)
+    // must not abort the whole index publish — fall back to 0, which all
+    // consumers already tolerate (size is only shown, never required).
+    let size = match __get_file_content_size(s, &asset.direct_asset_url).await {
+      Ok(sz) => sz,
+      Err(e) => {
+        log::warn!(
+          "get_launcher_latest_release: HEAD size failed for '{}': {} (using 0)",
+          &asset.direct_asset_url,
+          e
+        );
+        0
+      }
+    };
 
     assets.push(ReleaseAssetGit {
       name: asset.name.clone(),

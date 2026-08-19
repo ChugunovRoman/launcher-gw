@@ -97,6 +97,7 @@ jobs:
   update-index:
     runs-on: ubuntu-latest
     needs: [publish-release]
+    environment: production
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4

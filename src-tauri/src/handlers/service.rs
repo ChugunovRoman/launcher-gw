@@ -359,7 +359,9 @@ pub async fn publish_index(app: tauri::AppHandle) -> Result<(), String> {
   crate::service::index_publisher::publish_index(api)
     .await
     .map_err(|e| {
-      log::error!("publish_index failed: {}", e);
+      // {:?} prints the full anyhow cause chain (e.g. the underlying parse
+      // or HEAD error), not just the top-level context like {} does.
+      log::error!("publish_index failed: {:?}", e);
       e.to_string()
     })
 }

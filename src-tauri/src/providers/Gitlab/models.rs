@@ -57,7 +57,11 @@ pub struct ReleaseAssetLinkGitlab {
   pub name: String,
   pub url: String,
   pub direct_asset_url: String,
-  pub link_type: String,
+  // GitLab returns `link_type: null` for release links created without an
+  // explicit type, which broke deserialization when this was a plain String.
+  // The field is never read by the launcher, so tolerate null/missing.
+  #[serde(default)]
+  pub link_type: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseAssetGitlab {
