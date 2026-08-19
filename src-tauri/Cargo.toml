@@ -1,6 +1,6 @@
 [package]
 name = "Launcher"
-version = "0.2.4"
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["Chugunov Roman"]
 edition = "2024"
