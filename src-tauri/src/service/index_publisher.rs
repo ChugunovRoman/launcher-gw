@@ -265,8 +265,7 @@ fn manifest_url_for(api: &(dyn ApiProvider + Send + Sync), main: &Project) -> St
 /// Returns `None` on any error (non-fatal — the writer should not abort).
 async fn extract_base_patch(manifest_url: Option<&str>) -> Option<String> {
     let url = manifest_url?;
-    let client = reqwest::Client::new();
-    let cached = crate::utils::http_cache::fetch(&client, url, Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS))
+    let cached = crate::utils::http_cache::fetch(&crate::utils::http_cache::SHARED_CLIENT, url, Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS))
         .await
         .ok()?;
     let manifest: ReleaseManifest = serde_json::from_slice(&cached.bytes).ok()?;
@@ -286,8 +285,7 @@ fn project_id_for_api(api: &(dyn ApiProvider + Send + Sync), project: &Project) 
 /// Download a release manifest (raw URL) and extract size fields + exe_path.
 /// Returns `None` on any error (non-fatal — the index will just have 0 sizes).
 async fn extract_manifest_info(manifest_url: &str) -> Option<ReleaseManifest> {
-    let client = reqwest::Client::new();
-    let cached = crate::utils::http_cache::fetch(&client, manifest_url, Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS))
+    let cached = crate::utils::http_cache::fetch(&crate::utils::http_cache::SHARED_CLIENT, manifest_url, Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS))
         .await
         .ok()?;
     serde_json::from_slice(&cached.bytes).ok()
@@ -295,8 +293,7 @@ async fn extract_manifest_info(manifest_url: &str) -> Option<ReleaseManifest> {
 
 /// HEAD the launcher bg URL to capture its current ETag for the index.
 async fn fetch_bg_etag(bg_url: &str) -> Option<String> {
-    let client = reqwest::Client::new();
-    let resp = client.head(bg_url).send().await.ok()?;
+    let resp = crate::utils::http_cache::SHARED_CLIENT.head(bg_url).send().await.ok()?;
     resp.headers()
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())

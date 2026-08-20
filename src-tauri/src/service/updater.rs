@@ -38,7 +38,7 @@ impl ServiceUpdater {
 
   /// Path of the binary captured before the self-update replaced it.
   pub fn original_exe(&self) -> Option<PathBuf> {
-    self.original_exe.lock().unwrap().clone()
+    crate::utils::locks::lock(&self.original_exe).clone()
   }
 
   pub async fn check(&self, api_client: &ApiClient, current_version: String) -> Result<Option<ReleaseGit>> {
@@ -121,7 +121,7 @@ impl ServiceUpdater {
     if let Some(target) = release.assets.iter().find(|&asset| asset.platform == asset_name) {
       log::debug!("ServiceUpdater.download, target: {:?}", &target);
 
-      let mut stream = api.get_blob_by_url_stream(&target.download_link, &None).await?;
+      let (mut stream, _stream_start) = api.get_blob_by_url_stream(&target.download_link, &None).await?;
 
       let base_dir = app_handle
         .path()
@@ -176,7 +176,7 @@ impl ServiceUpdater {
     if let Some(target) = self.download(api_client, app_handle, release).await? {
       // Capture the exe path BEFORE install(): self_replace renames the
       // running binary, making current_exe() point to the temp old file.
-      *self.original_exe.lock().unwrap() = std::env::current_exe().ok();
+      *crate::utils::locks::lock(&self.original_exe) = std::env::current_exe().ok();
 
       self.install(target).await?;
 

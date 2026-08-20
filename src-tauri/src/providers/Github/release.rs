@@ -11,13 +11,12 @@ use crate::{
 };
 
 use anyhow::{Context, Result, bail};
-use regex::Regex;
 use std::time::Duration;
 
 async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
   let mut map: HashMap<u32, ProjectGithub> = HashMap::new();
   let mut page: u32 = 1;
-  let mut release_count = s.projects_map.lock().unwrap().len();
+  let mut release_count = crate::utils::locks::lock(&s.projects_map).len();
 
   if !cashed {
     release_count = 0;
@@ -78,7 +77,7 @@ async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
   }
 
   if release_count == 0 {
-    *s.projects_map.lock().unwrap() = map;
+    *crate::utils::locks::lock(&s.projects_map) = map;
   }
 
   Ok(())
@@ -87,7 +86,7 @@ async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
 pub async fn __get_releases(s: &Github, cashed: bool) -> Result<Vec<Release>> {
   __fetch_releases(s, cashed).await?;
 
-  let cached_projects = s.projects_map.lock().unwrap().clone();
+  let cached_projects = crate::utils::locks::lock(&s.projects_map).clone();
   let mut releases: Vec<Release> = vec![];
   let mut exist_names: HashMap<String, bool> = HashMap::new();
 
@@ -98,7 +97,7 @@ pub async fn __get_releases(s: &Github, cashed: bool) -> Result<Vec<Release>> {
       releases.push(Release {
         id,
         name: desc.clone(),
-        path: Regex::new(r"\s+").unwrap().replace_all(&desc, "-").to_string(),
+        path: crate::utils::parse_strings::WHITESPACE_RE.replace_all(&desc, "-").to_string(),
       });
       exist_names.insert(desc, true);
     }
@@ -110,7 +109,7 @@ pub async fn __get_releases(s: &Github, cashed: bool) -> Result<Vec<Release>> {
 pub async fn __get_release_repos_by_name(s: &Github, release_name: &str) -> Result<Vec<Project>> {
   __fetch_releases(s, true).await?;
 
-  let cached_projects = s.projects_map.lock().unwrap().clone();
+  let cached_projects = crate::utils::locks::lock(&s.projects_map).clone();
   let mut repos: Vec<Project> = vec![];
 
   for (id, project) in cached_projects {
@@ -159,7 +158,7 @@ pub async fn __get_repo_releases(s: &Github, project_id: &str) -> Result<Vec<Rep
 pub async fn __get_updates_repos_by_name(s: &Github, release_name: &str) -> Result<Vec<Project>> {
   __fetch_releases(s, true).await?;
 
-  let cached_projects = s.projects_map.lock().unwrap().clone();
+  let cached_projects = crate::utils::locks::lock(&s.projects_map).clone();
   let mut repos: Vec<Project> = vec![];
 
   for (id, project) in cached_projects {
@@ -183,7 +182,7 @@ pub async fn __get_updates_repos_by_name(s: &Github, release_name: &str) -> Resu
 pub async fn __set_release_visibility(s: &Github, release_name: &str, visibility: bool) -> Result<()> {
   __fetch_releases(s, true).await?;
 
-  let cached_projects = s.projects_map.lock().unwrap().clone();
+  let cached_projects = crate::utils::locks::lock(&s.projects_map).clone();
 
   for (_, project) in cached_projects {
     if project.description.as_deref() == Some(release_name) {

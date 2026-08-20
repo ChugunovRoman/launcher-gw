@@ -115,6 +115,26 @@ pub fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams) -> Resul
     "rs_fullscreen".to_string(),
     if run_params.windowed_mode { "0" } else { "1" }.to_string(),
   );
+  ltx.set(
+    "g_god".to_string(),
+    if run_params.god_mode { "on" } else { "off" }.to_string(),
+  );
+  ltx.set(
+    "g_unlimitedammo".to_string(),
+    if run_params.unlimited_ammo { "on" } else { "off" }.to_string(),
+  );
+  ltx.set(
+    "rs_fps".to_string(),
+    if run_params.show_fps { "on" } else { "off" }.to_string(),
+  );
+  ltx.set(
+    "rs_ids".to_string(),
+    if run_params.show_ids { "on" } else { "off" }.to_string(),
+  );
+  ltx.set(
+    "r_font_legacy".to_string(),
+    if run_params.font_legacy { "1" } else { "0" }.to_string(),
+  );
 
   ltx.save().map_err(|e| e.to_string())
 }

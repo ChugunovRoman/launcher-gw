@@ -1,7 +1,7 @@
 use crate::{
   providers::{ApiProvider::ApiProvider, dto::ProviderStatus},
   service::main::LogCallback,
-  utils::encoding::decode,
+  utils::encoding::decode_token,
 };
 use anyhow::Result;
 use futures_util::future::join_all;
@@ -108,7 +108,7 @@ impl ApiClient {
   pub async fn set_tokens(&self, tokens: HashMap<String, String>) -> Result<()> {
     for (id, token) in tokens {
       let provider = self.get_provider(&id)?;
-      let decoded_value = match decode(&token) {
+      let decoded_value = match decode_token(&token) {
         Ok(decoded) => decoded,
         Err(_) => token.clone(),
       };

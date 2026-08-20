@@ -66,7 +66,7 @@ impl Gitlab {
   }
 
   pub fn get_client(&self) -> Client {
-    self.client.lock().unwrap().clone()
+    crate::utils::locks::lock(&self.client).clone()
   }
   pub fn get(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().get(url)
@@ -95,7 +95,7 @@ impl Gitlab {
 #[async_trait]
 impl ApiProvider for Gitlab {
   fn set_token(&self, token: String) -> Result<()> {
-    *self.token.lock().unwrap() = token.clone();
+    *crate::utils::locks::lock(&self.token) = token.clone();
 
     let ua = user_agent();
     let mut headers = HeaderMap::new();
@@ -105,12 +105,12 @@ impl ApiProvider for Gitlab {
       headers.insert(AUTHORIZATION, auth_value);
     }
 
-    *self.client.lock().unwrap() = Client::builder().default_headers(headers).build()?;
+    *crate::utils::locks::lock(&self.client) = Client::builder().default_headers(headers).build()?;
 
     Ok(())
   }
   fn get_token(&self) -> String {
-    self.token.lock().unwrap().clone()
+    crate::utils::locks::lock(&self.token).clone()
   }
 
   fn id(&self) -> &'static str {
@@ -148,11 +148,11 @@ impl ApiProvider for Gitlab {
       latency_ms: if available { Some(latency_ms) } else { None },
     };
 
-    *self.status.lock().unwrap() = new_status.clone();
+    *crate::utils::locks::lock(&self.status) = new_status.clone();
     new_status
   }
   fn status(&self) -> ProviderStatus {
-    self.status.lock().unwrap().clone()
+    crate::utils::locks::lock(&self.status).clone()
   }
   fn is_available(&self) -> bool {
     self.status().available
@@ -165,7 +165,7 @@ impl ApiProvider for Gitlab {
     __load_manifest(self).await
   }
   fn get_manifest(&self) -> Result<Manifest> {
-    let manifest = self.manifest.lock().unwrap().clone();
+    let manifest = crate::utils::locks::lock(&self.manifest).clone();
 
     Ok(Manifest {
       root_id: if manifest.root_id.is_some() {
@@ -202,13 +202,13 @@ impl ApiProvider for Gitlab {
     project_id: &str,
     blob_sha: &str,
     seek: &Option<u64>,
-  ) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+  ) -> Result<BlobStreamWithOffset> {
     __get_blob_stream(self, project_id, blob_sha, seek).await
   }
   async fn get_blob_direct_url(&self, project_id: &str, blob_sha: &str) -> String {
     __get_blob_direct_url(self, project_id, blob_sha).await
   }
-  async fn get_blob_by_url_stream(&self, link: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+  async fn get_blob_by_url_stream(&self, link: &str, seek: &Option<u64>) -> Result<BlobStreamWithOffset> {
     __get_blob_by_url_stream(self, link, seek).await
   }
   async fn tree(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>> {

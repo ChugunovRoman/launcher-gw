@@ -44,6 +44,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "windows",
  "winit",
  "zip",
 ]

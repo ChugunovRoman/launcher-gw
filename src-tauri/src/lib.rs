@@ -30,7 +30,7 @@ pub fn run() {
   // config.json, WebView2 user-data). No-op for regular launches.
   utils::restart::wait_for_previous_instance();
 
-  let logger = Logger::new(logger::LogLevel::Debug).unwrap();
+  let logger = Logger::new(logger::LogLevel::Debug);
   let logger_arc = Arc::new(Mutex::new(logger));
 
   // Устанавливаем глобальный panic hook

@@ -19,7 +19,12 @@ pub struct KeybindManager {
 
 impl KeybindManager {
   pub fn new(app_handle: &tauri::AppHandle) -> Self {
-    let path = Self::init_dir(app_handle).expect("KeybindManager:new, cannot init directory");
+    // A failing profiles dir must not crash startup — fall back to a temp dir
+    // (profiles stay empty until the real dir becomes available).
+    let path = Self::init_dir(app_handle).unwrap_or_else(|e| {
+      log::error!("KeybindManager: cannot init profiles directory: {}", e);
+      std::env::temp_dir().join("gw-launcher-profiles")
+    });
 
     Self {
       path,
@@ -189,7 +194,15 @@ impl KeybindManager {
         continue;
       }
 
-      let name = entry.file_name().clone().into_string().expect("OsString was not valid UTF-8");
+      // Non-UTF-8 profile names cannot match anything the launcher manages —
+      // skip them instead of panicking the profiles load.
+      let name = match entry.file_name().into_string() {
+        Ok(name) => name,
+        Err(os_name) => {
+          log::warn!("Skipping keybind profile with non-UTF-8 file name: {:?}", os_name.to_string_lossy());
+          continue;
+        }
+      };
 
       log::debug!(
         "Load keybind profile, name: {} path: {:?} file_name: {:?} entry: {:?}",
@@ -461,7 +474,7 @@ impl KeybindManager {
       .resolve(BASE_DIR, BaseDirectory::AppConfig)
       .context("Failed to resolve config directory")?
       .parent()
-      .unwrap()
+      .context("Resolved config directory path has no parent")?
       .to_path_buf();
 
     fs::create_dir_all(&config_dir).context("Failed to create config directory")?;

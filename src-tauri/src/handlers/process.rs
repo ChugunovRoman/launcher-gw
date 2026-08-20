@@ -194,6 +194,17 @@ fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, instal
   wrapper_pid
 }
 
+/// Whether a process with the given pid is still running (best-effort).
+fn pid_alive(pid: u32) -> bool {
+  let mut system = System::new();
+  system.refresh_processes_specifics(
+    ProcessesToUpdate::Some(&[Pid::from(pid as usize)]),
+    true,
+    ProcessRefreshKind::nothing(),
+  );
+  system.process(Pid::from(pid as usize)).is_some()
+}
+
 #[tauri::command]
 pub async fn run_game(
   app: tauri::AppHandle,
@@ -202,9 +213,26 @@ pub async fn run_game(
   useMain: Option<bool>,
 ) -> Result<u32, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
-  let mut config_guard = state.lock().await;
 
-  let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false)).await?;
+  // Snapshot launch-critical fields and drop the config lock right away:
+  // the launch path does sync fs work (user.ltx), process spawning and up to
+  // ~2s of engine pid polling — holding the lock through all of that froze
+  // every other config command for the whole launch sequence.
+  let (version, run_params_snapshot, profile_for_launch) = {
+    let config_guard = state.lock().await;
+
+    let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false)).await?;
+
+    // Pre-launch only: patch launcher settings into the selected game's user.ltx.
+    // Do NOT rewrite user.ltx after the game exits (engine owns saves during/after session).
+    let profile_for_launch = if config_guard.should_apply_key_profile() {
+      config_guard.selected_profile.clone()
+    } else {
+      None
+    };
+
+    (version, config_guard.run_params.clone(), profile_for_launch)
+  };
 
   let target_path = version.installed_path.clone();
 
@@ -216,19 +244,12 @@ pub async fn run_game(
   };
   let tmp_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(TMP_LTX);
 
-  // Pre-launch only: patch launcher settings into the selected game's user.ltx.
-  // Do NOT rewrite user.ltx after the game exits (engine owns saves during/after session).
-  let profile_for_launch = if config_guard.should_apply_key_profile() {
-    config_guard.selected_profile.as_deref()
-  } else {
-    None
-  };
   crate::handlers::user_ltx::prepare_ltx_for_launch(
     &user_ltx_path,
     &tmp_ltx_path,
-    &config_guard.run_params,
+    &run_params_snapshot,
     &keybind_manager,
-    profile_for_launch,
+    profile_for_launch.as_deref(),
   )
   .await?;
 
@@ -239,25 +260,25 @@ pub async fn run_game(
   // and then decoded as UTF-8 — both break non-ASCII/spaced paths.
   let mut run_params: Vec<String> = Vec::new();
 
-  if config_guard.run_params.check_no_staging {
+  if run_params_snapshot.check_no_staging {
     run_params.push("-no_staging".to_string());
   }
-  if config_guard.run_params.check_spawner {
+  if run_params_snapshot.check_spawner {
     run_params.push("-dbg".to_string());
   }
-  if config_guard.run_params.check_without_cache {
+  if run_params_snapshot.check_without_cache {
     run_params.push("-noprefetch".to_string());
   }
-  if config_guard.run_params.checks {
+  if run_params_snapshot.checks {
     run_params.push("-checks".to_string());
   }
-  if config_guard.run_params.ui_debug {
+  if run_params_snapshot.ui_debug {
     run_params.push("-uidbg".to_string());
   }
-  if config_guard.run_params.debug_spawn {
+  if run_params_snapshot.debug_spawn {
     run_params.push("-dbgsspwn".to_string());
   }
-  let users_args = split_args(&config_guard.run_params.cmd_params);
+  let users_args = split_args(&run_params_snapshot.cmd_params);
   run_params.extend(users_args);
 
   // CLI args are passed on every tier. Direct xray launches (tiers 2, 5) parse
@@ -342,17 +363,77 @@ pub async fn run_game(
 
   let installed_for_pid = installed_path.clone();
   let cwd_for_pid = effective_cwd.clone();
-  let engine_pid = tokio::task::spawn_blocking(move || {
+  let mut engine_pid = tokio::task::spawn_blocking(move || {
     resolve_engine_pid(wrapper_pid, is_xray_engine, &cwd_for_pid, &installed_for_pid)
   })
   .await
   .map_err(|e| e.to_string())?;
 
-  config_guard.latest_pid = i64::from(engine_pid);
-  config_guard.save().map_err(|e| {
-    log_full_error(&e);
-    e.to_string()
-  })?;
+  // A Stalker-* wrapper stub may exit immediately with code 0 without
+  // starting the engine when spawned via CreateProcess from the launcher
+  // (double-click works — a long-standing quirk of the GSC launcher stubs,
+  // see the note in resolve_launch_target). When that happens, retry once
+  // with the direct engine binary (tier-5 style launch). ASCII CWDs only:
+  // a non-ASCII CWD needs the subst workaround which is tied to the wrapper
+  // decision above.
+  if !is_xray_engine && engine_pid == wrapper_pid && effective_cwd.to_string_lossy().is_ascii() {
+    let wrapper_still_running = tokio::task::spawn_blocking(move || pid_alive(wrapper_pid))
+      .await
+      .unwrap_or(false);
+
+    if wrapper_still_running {
+      log::info!("launch: wrapper {} is still running (launcher UI?); keeping its pid", wrapper_pid);
+    } else {
+      log::warn!(
+        "launch: wrapper {} exited without starting the engine; retrying with the direct engine binary",
+        wrapper_pid
+      );
+
+      let engine_bin = installed_path.join(BIN_DIR).join(game_exe());
+      if engine_bin.is_file() {
+        match Command::new(&engine_bin)
+          .args(&run_params)
+          .current_dir(&effective_cwd)
+          .stdin(Stdio::null())
+          .stdout(Stdio::null())
+          .stderr(Stdio::null())
+          .spawn()
+        {
+          Ok(engine_child) => {
+            let direct_pid = engine_child.id();
+            // Detach: the engine must be fully independent of the launcher.
+            drop(engine_child);
+            log::info!("launch: direct engine started, pid {}", direct_pid);
+            engine_pid = direct_pid;
+          }
+          Err(e) => log::error!("launch: direct engine spawn failed ({}): {}", engine_bin.display(), e),
+        }
+      } else {
+        log::warn!("launch: direct engine binary not found at {}", engine_bin.display());
+      }
+    }
+  }
+
+  // After all retry attempts, verify the resolved PID is actually alive.
+  // If the wrapper exited and the fallback spawn failed (or the engine binary
+  // was not found), engine_pid still points to a dead process.  Returning it
+  // would make the frontend show "In Game…" for a process that already exited.
+  if !pid_alive(engine_pid) {
+    return Err(format!(
+      "Game process exited immediately after launch (pid {}). \
+       The engine may have failed to start. Check game logs for details.",
+      engine_pid
+    ));
+  }
+
+  {
+    let mut config_guard = state.lock().await;
+    config_guard.latest_pid = i64::from(engine_pid);
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  }
 
   // If we created a subst drive, unmount it after the engine exits.
   // Wait on engine PID (wrapper may already be gone). Do not rewrite user.ltx.
@@ -403,6 +484,9 @@ pub fn is_process_alive(pid: u32) -> bool {
 #[tauri::command]
 pub fn open_explorer(path: String, createDir: Option<bool>) -> Result<(), String> {
   let p = Path::new(&path);
+  // Guard the IPC-driven directory creation/open: absolute paths only, no
+  // drive roots or system locations. For new paths the parent must exist.
+  crate::utils::paths::assert_creatable_directory(p)?;
   if !p.exists() {
     if createDir.unwrap_or(false) {
       std::fs::create_dir_all(p).map_err(|e| e.to_string())?;

@@ -11,7 +11,6 @@ use crate::{
 
 use anyhow::{Result, anyhow, bail};
 use futures_util::future::join_all;
-use regex::Regex;
 
 /// Identifies the primary ("main_1") repository of a release.
 /// Works for both providers: Gitlab names repos "main_1" (bare),
@@ -34,12 +33,25 @@ fn get_platform_from_name(name: &str) -> ReleasePlatform {
 /// Always returns `Some` — even when size fields are zero (old index format).
 /// This prevents an infinite spinner in the UI when the fallback manifest
 /// fetch also fails (e.g. rate limit).
+/// Build a ReleaseManifest from index entry fields (no network).
+/// Always returns `Some` — even when size fields are zero (old index format).
+/// This prevents an infinite spinner in the UI when the fallback manifest
+/// fetch also fails (e.g. rate limit).
+/// The per-file list comes from the index assets: without it the manifest is
+/// a stub (aggregate sizes only) and the download queue rows show
+/// "0 B / 0 B" for every file that is not currently being downloaded.
 fn manifest_from_index_entry(entry: &ReleaseIndexEntry) -> Option<ReleaseManifest> {
+  let files: Vec<crate::handlers::dto::ReleaseManifestFile> = entry
+    .assets
+    .iter()
+    .map(|a| crate::handlers::dto::ReleaseManifestFile { name: a.name.clone(), size: a.size })
+    .collect();
+
   Some(ReleaseManifest {
     total_files_count: entry.total_files_count,
     total_size: entry.total_size,
     compressed_size: entry.compressed_size,
-    files: vec![],
+    files,
     exe_path: entry.exe_path.clone(),
     ..ReleaseManifest::default()
   })
@@ -164,11 +176,10 @@ impl ServiceGetRelease for Service {
         }
         // Slow path: fetch the manifest via its raw URL.
         log::info!("get_release_manifest '{}': fetching from index manifest URL", release_name);
-        let client = reqwest::Client::new();
         let cached = crate::utils::http_cache::fetch(
-          &client,
-          &entry.manifest,
-          std::time::Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS),
+            &crate::utils::http_cache::SHARED_CLIENT,
+            &entry.manifest,
+            std::time::Duration::from_secs(crate::consts::CACHE_TTL_RAW_FILE_SECS),
         )
         .await?;
         let manifest: ReleaseManifest = serde_json::from_slice(&cached.bytes)?;
@@ -336,8 +347,16 @@ impl ServiceGetRelease for Service {
         continue;
       }
 
-      let key_path = entry.file_name().clone().into_string().expect("OsString was not valid UTF-8");
-      let name = Regex::new(r"[-]+").unwrap().replace_all(&key_path, " ").to_string();
+      // A non-UTF-8 folder name must not panic the whole background init:
+      // launcher-created installs always have UTF-8 names, so skip odd ones.
+      let key_path = match entry.file_name().into_string() {
+        Ok(name) => name,
+        Err(os_name) => {
+          log::warn!("Skipping installed version with non-UTF-8 folder name: {:?}", os_name.to_string_lossy());
+          continue;
+        }
+      };
+      let name = crate::utils::parse_strings::DASHES_RE.replace_all(&key_path, " ").to_string();
 
       if let Some(_) = progress_download.iter().find(|(_, progress)| progress.path == key_path) {
         continue;

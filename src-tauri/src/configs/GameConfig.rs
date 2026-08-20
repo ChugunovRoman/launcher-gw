@@ -171,7 +171,8 @@ impl GameConfig {
       out.push('\n');
     }
 
-    fs::write(&self.file_path, out).with_context(|| format!("Failed to write config file: {}", self.file_path))?;
+    // Atomic tmp+rename so a crash mid-save cannot truncate user.ltx.
+    crate::configs::atomic_write(&self.file_path, &out).with_context(|| format!("Failed to write config file: {}", self.file_path))?;
 
     Ok(())
   }
@@ -197,7 +198,8 @@ impl GameConfig {
     if !out.is_empty() {
       out.push('\n');
     }
-    fs::write(&self.file_path, out).with_context(|| format!("Failed to write config file: {}", self.file_path))?;
+    // Atomic tmp+rename so a crash mid-save cannot truncate user.ltx.
+    crate::configs::atomic_write(&self.file_path, &out).with_context(|| format!("Failed to write config file: {}", self.file_path))?;
     Ok(())
   }
 

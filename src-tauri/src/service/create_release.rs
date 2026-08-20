@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use crate::service::main::Service;
 use anyhow::Result;
-use regex::Regex;
 use tokio::time::sleep;
 
 pub trait ServiceRelease {
@@ -57,7 +56,7 @@ async fn __create_release_repos_gitlablike(s: &Service, name: &str, parent_id: &
 }
 async fn __create_release_repos_githublike(s: &Service, name: &str, parent_id: &u32, main_cnt: &u16, updates_cnt: &u16) -> Result<()> {
   let api = s.api_client.current_provider()?;
-  let code_name = Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string();
+  let code_name = crate::utils::parse_strings::WHITESPACE_RE.replace_all(name, "-").to_string();
 
   for i in 1..main_cnt.to_owned() + 1 {
     let repo_name = format!("{}_main_{}", &code_name, &i);

@@ -33,9 +33,15 @@ export async function initDownloadListeners() {
     const [speedValue, sfxValue] = formatSpeedBytesPerSec(speed);
 
     updateVersionProgress(versionName, (version) => {
-      const map = new Map(version.filesProgress);
-      let totalSpeed = 0;
-      let downloadFilesTotalBytes = 0;
+      // Mutate the EXISTING filesProgress map (single entry) instead of
+      // copying the whole manifest map per event — O(1) instead of O(files),
+      // which froze the UI on manifests with thousands of files. The version
+      // object itself is still replaced by updateVersionProgress, so the UI
+      // refreshes as before.
+      const map = version.filesProgress ?? new Map();
+      const prev = map.get(fileName);
+      const prevBytes = prev?.downloadedFileBytes ?? 0;
+      const prevSpeed = prev?.downloadSpeed ?? 0;
 
       map.set(fileName, {
         downloadProgress: totalBytes > 0 ? (bytes / totalBytes) * 100 : 0,
@@ -48,10 +54,10 @@ export async function initDownloadListeners() {
         status: 1,
       });
 
-      for (const [name, progress] of map) {
-        totalSpeed += progress.downloadSpeed;
-        downloadFilesTotalBytes += progress.downloadedFileBytes;
-      }
+      // Incremental aggregates: adjust the totals by this file's delta
+      // instead of re-iterating the whole map.
+      const downloadFilesTotalBytes = (version.downloadedFileBytes ?? 0) - prevBytes + bytes;
+      const totalSpeed = Math.max(0, (version.downloadSpeed ?? 0) - prevSpeed + speed);
 
       const [totalSpeedValue, totalSfxValue] = formatSpeedBytesPerSec(totalSpeed);
 
@@ -118,8 +124,24 @@ export async function initDownloadListeners() {
         }
       }
 
+      // Re-sync the version-level aggregate with the rebuilt map. The speed
+      // handler (download-speed-status) updates it INCREMENTALLY from this
+      // base — without the resync a resumed download restarted the total
+      // progress bar from 0 even though most bytes were already on disk.
+      let downloadedFilesTotalBytes = 0;
+      for (const progress of map.values()) {
+        downloadedFilesTotalBytes += progress.downloadedFileBytes;
+      }
+
+      let downloadProgressVersion = version.downloadProgress;
+      if (version.manifest && version.manifest.compressed_size > 0) {
+        downloadProgressVersion = (downloadedFilesTotalBytes / version.manifest.compressed_size) * 100;
+      }
+
       return {
         filesProgress: map,
+        downloadedFileBytes: downloadedFilesTotalBytes,
+        downloadProgress: downloadProgressVersion,
       };
     });
   }));

@@ -32,7 +32,7 @@
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
   import Spin from "../Components/Spin.svelte";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
@@ -46,6 +46,30 @@
   let installingPatch = $state<{ version: string; patch: string } | null>(null);
   let patchDownloadInfo = $state<{ file: string; bytes: number; totalBytes: number; speedValue: number; sfxValue: string } | null>(null);
   let patchErrors = $state<Map<string, string>>(new Map());
+
+  // Process tracking for "Launch" buttons on local versions
+  let runningVersionPid: number | null = $state(null);
+  let runningVersionName: string | null = $state(null);
+  let runningVersionAlive = $state(false);
+  let versionPollInterval: number | undefined = undefined;
+
+  const clearVersionPoll = () => {
+    if (versionPollInterval !== undefined) {
+      clearInterval(versionPollInterval);
+      versionPollInterval = undefined;
+    }
+  };
+
+  const checkVersionProcess = async (): Promise<boolean> => {
+    if (!runningVersionPid || runningVersionPid === -1) return false;
+    runningVersionAlive = await invoke<boolean>("is_process_alive", { pid: runningVersionPid });
+    if (!runningVersionAlive) {
+      clearVersionPoll();
+      runningVersionPid = null;
+      runningVersionName = null;
+    }
+    return runningVersionAlive;
+  };
 
   function parseSize(size: number | null): string {
     if (!size) return "";
@@ -63,7 +87,9 @@
         patchDownloadInfo = { file: fileName, bytes, totalBytes, speedValue, sfxValue };
       }
     });
-    return () => { unlisten.then((u) => u()); };
+    return () => {
+      unlisten.then((u) => u());
+    };
   });
   // Clear download info once the install leaves the download stage.
   $effect(() => {
@@ -159,7 +185,9 @@
 
   async function fetchVersionManifest(releaseName: string) {
     const found = $versions.find((v) => v.name === releaseName);
-    if (found?.manifest) {
+    // A manifest without `files` is the index stub (aggregate sizes only) —
+    // it is not enough for the download queue rows, so fetch the full one.
+    if (found?.manifest && found.manifest.files.length > 0) {
       if (!found.filesProgress || found.filesProgress.size === 0) {
         updateVersionProgress(releaseName, (version) => ({
           filesProgress: filesProgressFromManifest(found.manifest!, version.filesProgress),
@@ -296,9 +324,17 @@
       return;
     }
 
-    const manifest = version.manifest;
-    if (!manifest) {
-      return;
+    // The index stub manifest (no per-file list) cannot build the download
+    // queue — fetch the full manifest before starting.
+    let manifest = version.manifest;
+    if (!manifest || manifest.files.length === 0) {
+      try {
+        manifest = await invoke<ReleaseManifest>("get_release_manifest", { releaseName });
+        updateVersionProgress(releaseName, () => ({ manifest }));
+      } catch (e) {
+        console.error("get_release_manifest failed:", e);
+        return;
+      }
     }
 
     // Any install/download path is now allowed (Cyrillic/spacesincl.): the launcher handles non-ASCII via a subst virtual drive, so the old
@@ -415,7 +451,22 @@
   async function runVersion(event: Event, version: Version) {
     event.stopPropagation();
 
-    await invoke<number>("run_game", { versionName: version.name, useMain: false });
+    // If this version is already running, do nothing
+    if (runningVersionAlive && runningVersionName === version.name) return;
+
+    try {
+      clearVersionPoll();
+      const pid = await invoke<number>("run_game", { versionName: version.name, useMain: false });
+      runningVersionPid = pid;
+      runningVersionName = version.name;
+      await checkVersionProcess();
+      versionPollInterval = setInterval(checkVersionProcess, 1000);
+    } catch (err) {
+      console.error("Failed to spawn process:", err);
+      runningVersionPid = null;
+      runningVersionName = null;
+      runningVersionAlive = false;
+    }
   }
   async function deleteVersion(event: Event, version: Version) {
     event.stopPropagation();
@@ -498,7 +549,7 @@
     $expandedIndex = $expandedIndex;
   });
 
-  onMount(() => {
+  onMount(async () => {
     // Versions.svelte is destroyed and remounted on every view switch (App.svelte
     // uses a keyed each block). Don't blindly collapse the panel on mount: if a
     // version is actively downloading or paused, re-expand it so the progress UI
@@ -506,6 +557,26 @@
     // default collapsed state.
     const inProgressIdx = $versions.findIndex((v) => v.inProgress || v.isStoped);
     $expandedIndex = inProgressIdx >= 0 ? inProgressIdx + $localVersions.size : null;
+
+    // Check if a game process is already running (e.g. launched from Home page)
+    try {
+      const config = await invoke<AppConfig>("get_config");
+      if (config.latest_pid != null && config.latest_pid >= 0) {
+        const alive = await invoke<boolean>("is_process_alive", { pid: config.latest_pid });
+        if (alive) {
+          runningVersionPid = config.latest_pid;
+          runningVersionName = config.selected_version ?? null;
+          runningVersionAlive = true;
+          versionPollInterval = setInterval(checkVersionProcess, 1000);
+        }
+      }
+    } catch (e) {
+      // Ignore — process tracking is best-effort
+    }
+  });
+
+  onDestroy(() => {
+    clearVersionPoll();
   });
 </script>
 
@@ -542,8 +613,17 @@
               {$_("app.releases.toSelect")}
             {/if}
           </button>
-          <button type="button" onclick={(e) => runVersion(e, version)} class="choose-btn" style="margin-left: auto; margin-right: 10px">
-            {$_("app.releases.runVersion")}
+          <button
+            type="button"
+            onclick={(e) => runVersion(e, version)}
+            class="choose-btn"
+            class:choose-btn-inactive={runningVersionAlive && runningVersionName === name}
+            style="margin-left: auto; margin-right: 10px; white-space: nowrap">
+            {#if runningVersionAlive && runningVersionName === name}
+              {$_("app.launch.inGame")}
+            {:else}
+              {$_("app.releases.runVersion")}
+            {/if}
           </button>
         </div>
         {#if $expandedIndex === i}
@@ -605,9 +685,7 @@
                 <div class="patch-subsection">{$_("app.patches.installed")}</div>
                 {#each version.installed_updates as patch}
                   <div class="patch-row">
-                    <span
-                      class="patch-name clickable"
-                      onclick={() => openPatchNotes(patch.name, patch.notes ?? null)}>
+                    <span class="patch-name clickable" onclick={() => openPatchNotes(patch.name, patch.notes ?? null)}>
                       {patch.name}
                     </span>
                     <span class="patch-date">{formatInstalledDate(patch.installed_at)}</span>
@@ -622,9 +700,7 @@
                   <div class="patch-subsection">{$_("app.patches.available")}</div>
                   {#each check.patches.filter((p) => check.missing.includes(p.name)) as patch}
                     <div class="patch-row" class:patch-next={patch.is_next}>
-                      <span
-                        class="patch-name clickable"
-                        onclick={() => openPatchNotes(patch.name, patch.notes)}>
+                      <span class="patch-name clickable" onclick={() => openPatchNotes(patch.name, patch.notes)}>
                         {patch.name}
                       </span>
                       <span class="patch-size">{parseSize(patch.size)}</span>
@@ -659,9 +735,12 @@
                       {$_("app.patches.stageDownload")} — {patchDownloadInfo.file}
                     </div>
                     <div class="patch-dl-info">
-                      {parseBytes(patchDownloadInfo.bytes)[0]} {$_(`app.common.${parseBytes(patchDownloadInfo.bytes)[1]}`)}
-                      / {parseBytes(patchDownloadInfo.totalBytes)[0]} {$_(`app.common.${parseBytes(patchDownloadInfo.totalBytes)[1]}`)}
-                      · {patchDownloadInfo.speedValue} {patchDownloadInfo.sfxValue}
+                      {parseBytes(patchDownloadInfo.bytes)[0]}
+                      {$_(`app.common.${parseBytes(patchDownloadInfo.bytes)[1]}`)}
+                      / {parseBytes(patchDownloadInfo.totalBytes)[0]}
+                      {$_(`app.common.${parseBytes(patchDownloadInfo.totalBytes)[1]}`)}
+                      · {patchDownloadInfo.speedValue}
+                      {patchDownloadInfo.sfxValue}
                     </div>
                     <Progress progress={(patchDownloadInfo.bytes / Math.max(patchDownloadInfo.totalBytes, 1)) * 100} />
                   {:else}
@@ -682,12 +761,9 @@
                     <Progress progress={$patchInstallProgress.total_progress} />
                   {/if}
                   {#if $patchInstallProgress.stage === "download"}
-                  <button
-                    type="button"
-                    class="cancel-btn choose-btn patch-cancel-btn"
-                    onclick={() => handleCancelInstall(name)}>
-                    {$_("app.patches.cancel")}
-                  </button>
+                    <button type="button" class="cancel-btn choose-btn patch-cancel-btn" onclick={() => handleCancelInstall(name)}>
+                      {$_("app.patches.cancel")}
+                    </button>
                   {/if}
                 </div>
               {/if}
@@ -935,6 +1011,8 @@
                   </div>
                   {#if version.inProgress || version.isStoped}
                     {#each version.filesProgress as [name, progress], i}
+                      {@const dl = parseBytes(progress.downloadedFileBytes)}
+                      {@const tot = parseBytes(progress.totalFileBytes)}
                       <div class="file-row">
                         <span style="justify-self: end; align-content: center;">
                           {#if progress.status === 0}
@@ -962,10 +1040,7 @@
                           {/if}
                         </div>
 
-                        <span style="justify-self: end;"
-                          >{parseBytes(progress.downloadedFileBytes)[0]}
-                          {$_(`app.common.${parseBytes(progress.downloadedFileBytes)[1]}`)} / {parseBytes(progress.totalFileBytes)[0]}
-                          {$_(`app.common.${parseBytes(progress.totalFileBytes)[1]}`)}</span>
+                        <span style="justify-self: end;">{dl[0]} {$_(`app.common.${dl[1]}`)} / {tot[0]} {$_(`app.common.${tot[1]}`)}</span>
 
                         <span style="justify-self: end;">{progress.speedValue} {progress.sfxValue}</span>
                       </div>
@@ -1067,6 +1142,10 @@
   .file-row {
     display: grid;
     grid-template-columns: 20px 100px 1fr 160px 100px;
+    /* Cheap virtualization: the browser skips layout/paint of offscreen
+       rows — the file list can hold thousands of manifest entries. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 28px;
   }
 
   .one-column {
@@ -1167,6 +1246,14 @@
   }
   .choose-btn:hover {
     background-color: rgba(61, 93, 236, 1);
+  }
+  .choose-btn.choose-btn-inactive {
+    cursor: default;
+    background-color: rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+  }
+  .choose-btn.choose-btn-inactive:hover {
+    background-color: rgba(0, 0, 0, 0.8);
   }
 
   .expanded-content {

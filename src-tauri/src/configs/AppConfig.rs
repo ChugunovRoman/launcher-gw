@@ -145,6 +145,16 @@ pub struct RunParams {
   pub fov: f64,
   #[serde(default)]
   pub hud_fov: f64,
+  #[serde(default)]
+  pub god_mode: bool,
+  #[serde(default)]
+  pub unlimited_ammo: bool,
+  #[serde(default)]
+  pub show_fps: bool,
+  #[serde(default)]
+  pub show_ids: bool,
+  #[serde(default)]
+  pub font_legacy: bool,
 }
 
 impl Default for RunParams {
@@ -165,6 +175,11 @@ impl Default for RunParams {
       lang: LangType::Rus,
       fov: 82.0,
       hud_fov: 0.6,
+      god_mode: false,
+      unlimited_ammo: false,
+      show_fps: false,
+      show_ids: false,
+      font_legacy: false,
     }
   }
 }
@@ -310,7 +325,7 @@ impl AppConfig {
       .resolve(BASE_DIR, BaseDirectory::AppConfig)
       .context("Failed to resolve config directory")?
       .parent()
-      .unwrap()
+      .context("Resolved config directory path has no parent")?
       .to_path_buf();
 
     fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
@@ -531,7 +546,9 @@ impl AppConfig {
   pub fn save(&self) -> Result<()> {
     ensure!(!self.path.is_empty(), "Config path is not set");
     let json = serde_json::to_string_pretty(self).context("Failed to serialize config to JSON")?;
-    fs::write(&self.path, json).context("Failed to write config file")?;
+    // Atomic tmp+rename: config.json is rewritten very often (progress updates),
+    // a hard kill mid-write must not corrupt it.
+    crate::configs::atomic_write(&self.path, &json)?;
     Ok(())
   }
 }

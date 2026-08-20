@@ -122,9 +122,8 @@ fn index_raw_url(provider_id: &str) -> Result<String> {
 pub async fn load_index(provider_id: &str) -> Result<ReleaseIndex> {
     let url = index_raw_url(provider_id)?;
 
-    let client = reqwest::Client::new();
     let cached = crate::utils::http_cache::fetch(
-        &client,
+        &crate::utils::http_cache::SHARED_CLIENT,
         &url,
         Duration::from_secs(INDEX_CACHE_TTL_SECS),
     )

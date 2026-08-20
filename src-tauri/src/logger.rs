@@ -46,24 +46,40 @@ impl Default for LogLevel {
 
 #[derive(Clone)]
 pub struct Logger {
-  log_file_path: PathBuf,
+  /// None — no writable log file found; console-only logging.
+  log_file_path: Option<PathBuf>,
   min_level: LogLevel,
 }
 
 impl Logger {
-  pub fn new(min_level: LogLevel) -> Result<Self, Box<dyn std::error::Error>> {
-    let log_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+  /// Never fails: prefers CWD, falls back to the temp dir (CWD may be
+  /// read-only, e.g. Program Files or a service spawn), then degrades to
+  /// console-only. The logger must not take the whole app down.
+  pub fn new(min_level: LogLevel) -> Self {
+    let candidates = [
+      std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+      std::env::temp_dir(),
+    ];
 
-    std::fs::create_dir_all(&log_dir)?;
+    let mut chosen: Option<PathBuf> = None;
+    for dir in candidates {
+      let path = dir.join("launcher.log");
+      if std::fs::create_dir_all(&dir).is_err() {
+        continue;
+      }
+      // Rotation: start each run with a fresh log.
+      let _ = std::fs::remove_file(&path);
+      if OpenOptions::new().create(true).write(true).append(true).open(&path).is_ok() {
+        chosen = Some(path);
+        break;
+      }
+    }
 
-    let log_file_path = log_dir.join("launcher.log");
+    if chosen.is_none() {
+      eprintln!("Logger: cannot open launcher.log in CWD or temp dir — console-only logging");
+    }
 
-    std::fs::remove_file(&log_file_path).unwrap_or_else(|_| println!("Cannot remove log file"));
-
-    // Убедимся, что файл существует
-    std::fs::OpenOptions::new().create(true).write(true).append(true).open(&log_file_path)?;
-
-    Ok(Logger { log_file_path, min_level })
+    Logger { log_file_path: chosen, min_level }
   }
 
   fn should_log(&self, level: &LogLevel) -> bool {
@@ -84,14 +100,23 @@ impl Logger {
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let line = format!("[{}] {} - {}\n", timestamp, level.as_str(), message);
 
-    // Открываем, пишем, закрываем — как вы просили
-    let mut file = OpenOptions::new()
-      .write(true)
-      .append(true)
-      .open(&self.log_file_path)
-      .expect("Failed to open log file");
-
     print!("{}", &line);
+
+    let Some(log_file_path) = &self.log_file_path else {
+      return;
+    };
+
+    // Открываем, пишем, закрываем — как вы просили
+    // A locked/read-only log file must degrade to stderr instead of
+    // panicking inside log::Log (which would poison the logger mutex and
+    // kill every subsequent log call).
+    let mut file = match OpenOptions::new().write(true).append(true).open(log_file_path) {
+      Ok(file) => file,
+      Err(e) => {
+        eprintln!("Failed to open log file {:?}: {}", log_file_path, e);
+        return;
+      }
+    };
 
     if let Err(e) = writeln!(file, "{}", line.trim_end()) {
       eprintln!("Failed to write to log: {}", e);
@@ -121,8 +146,8 @@ impl Logger {
   }
 
   /// Получить текущий путь к лог-файлу (для отладки или экспорта)
-  pub fn log_path(&self) -> &Path {
-    &self.log_file_path
+  pub fn log_path(&self) -> Option<&Path> {
+    self.log_file_path.as_deref()
   }
 }
 

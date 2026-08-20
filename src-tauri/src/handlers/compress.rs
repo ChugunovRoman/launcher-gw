@@ -39,6 +39,26 @@ pub async fn pack_split_archives(
   exePath: Option<String>,
   patch_meta: Option<PatchMeta>,
 ) -> Result<ReleaseManifest, String> {
+  // Zip+zstd packing of tens of GB is pure sync CPU/IO — run it on the
+  // blocking pool so it does not stall the async runtime (and every IPC
+  // command with it) for minutes.
+  let app = app.clone();
+  tokio::task::spawn_blocking(move || {
+    pack_split_archives_blocking(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, patch_meta)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+}
+
+fn pack_split_archives_blocking(
+  app: &tauri::AppHandle,
+  sourceDir: String,
+  targetPath: String,
+  chunkSize: u64,
+  excludePatterns: Vec<String>,
+  exePath: Option<String>,
+  patch_meta: Option<PatchMeta>,
+) -> Result<ReleaseManifest, String> {
   let src_dir = Path::new(&sourceDir);
   let out_dir = Path::new(&targetPath);
   fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
@@ -65,7 +85,7 @@ pub async fn pack_split_archives(
     },
   );
 
-  println!("[DEBUG] Start copmress. Searching files in: {}", &sourceDir);
+  log::debug!("Start copmress. Searching files in: {}", &sourceDir);
   for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
     let full_path = entry.path();
     let relative_path = full_path.strip_prefix(src_dir).map_err(|e| e.to_string())?;
@@ -80,8 +100,8 @@ pub async fn pack_split_archives(
       all_files.push((full_path.to_path_buf(), relative_path.to_path_buf(), size));
     }
   }
-  println!(
-    "[DEBUG] Search files completed ! all_files: {} total_size: {}",
+  log::debug!(
+    "Search files completed ! all_files: {} total_size: {}",
     &all_files.len(),
     total_size
   );
@@ -143,7 +163,7 @@ pub async fn pack_split_archives(
     .compression_level(Some(3));
 
   for (full_path, entry_name, size) in all_files {
-    let current_archive_size = *current_archive_size_ref.lock().unwrap();
+    let current_archive_size = *crate::utils::locks::lock(&current_archive_size_ref);
 
     if current_archive_size > max_size && current_group_size > 0 {
       zip.finish().map_err(|e| e.to_string())?;

@@ -8,7 +8,7 @@ use crate::{
   handlers,
   providers::dto::ProviderStatus,
   service::main::Service,
-  utils::encoding::decode,
+  utils::encoding::{decode_token, mask_token},
 };
 
 #[tauri::command]
@@ -100,23 +100,28 @@ pub async fn get_tokens(app: tauri::AppHandle) -> Result<HashMap<String, String>
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let config_guard = state.lock().await;
 
-  let decoded_tokens: HashMap<String, String> = config_guard
+  // Tokens are write-only from the webview side: only masked values are ever
+  // returned, so an XSS in the frontend cannot leak the stored PATs.
+  let masked_tokens: HashMap<String, String> = config_guard
     .tokens
     .iter()
     .map(|(key, value)| {
-      if value == "" {
-        return (key.clone(), value.clone());
+      if value.is_empty() {
+        return (key.clone(), String::new());
       }
 
-      let decoded_value = match decode(value) {
-        Ok(decoded) => decoded,
-        Err(_) => value.clone(),
+      let masked = match decode_token(value) {
+        Ok(plain) => mask_token(&plain),
+        Err(e) => {
+          log::warn!("get_tokens: failed to decode stored token for '{}': {}", key, e);
+          "••••••••".to_string()
+        }
       };
-      (key.clone(), decoded_value)
+      (key.clone(), masked)
     })
     .collect();
 
-  Ok(decoded_tokens)
+  Ok(masked_tokens)
 }
 
 #[tauri::command]

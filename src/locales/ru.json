@@ -271,7 +271,8 @@
       },
       "hide": "Скрыть",
       "show": "Показать",
-      "save": "Сохранить"
+      "save": "Сохранить",
+      "current": "Текущий токен"
     },
     "releases": {
       "add": "Добавить новый релиз",
@@ -358,6 +359,11 @@
       "checks": "Включить проверки при запуске игры (-checks)",
       "checksnote": "(увеличивает время загрузки)",
       "dbgsspwn": "Включить debug_start_spawn (-dbgsspwn)",
+      "godMode": "Бессмертие (g_god)",
+      "unlimitedAmmo": "Бесконечные патроны (g_unlimitedammo)",
+      "showFps": "Отображение ФПС (rs_fps)",
+      "showIds": "Отображение свободных IDs (rs_ids)",
+      "fontLegacy": "Старые XRay шрифты (r_font_legacy)",
       "gameLang": "Язык:",
       "renderer": "Тип рендера:",
       "fov": "FOV",

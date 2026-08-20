@@ -10,7 +10,7 @@ use crate::{
   consts::*,
   providers::{
     Github::{Github::Github, issues::*, models::*},
-    dto::{Manifest, TreeItem},
+    dto::{BlobStreamWithOffset, Manifest, TreeItem},
   },
   utils::http_cache,
 };
@@ -30,7 +30,7 @@ pub async fn __get_blob_stream(
   project_id: &str,
   file_path: &str,
   seek: &Option<u64>,
-) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+) -> Result<BlobStreamWithOffset> {
   let url = format!("{}/{}/{}/raw/master/{}", GITHUB_HOST, GITHUB_ORG, project_id, file_path);
 
   __get_blob_by_url_stream(s, &url, seek).await
@@ -41,10 +41,13 @@ pub async fn __get_blob_direct_url(s: &Github, project_id: &str, file_path: &str
   url
 }
 
-pub async fn __get_blob_by_url_stream(s: &Github, url: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>> {
+pub async fn __get_blob_by_url_stream(s: &Github, url: &str, seek: &Option<u64>) -> Result<BlobStreamWithOffset> {
   crate::utils::paths::assert_download_url_allowed(url)?;
 
-  let response = match seek {
+  // Only ask for a Range when there is a real resume offset.
+  let resume_from = seek.filter(|bytes| *bytes > 0);
+
+  let response = match resume_from {
     Some(bytes) => s
       .get(url)
       .header("Range", format!("bytes={}-", bytes))
@@ -62,8 +65,31 @@ pub async fn __get_blob_by_url_stream(s: &Github, url: &str, seek: &Option<u64>)
     bail!("__get_blob_by_url_stream, Error API Github: {} – {}", status, body);
   }
 
-  Ok(Box::new(
-    response.bytes_stream().map(|res| res.context("Error reading chunk from response stream")),
+  // A server may ignore the Range header and answer 200 with the FULL body.
+  // Appending that body at the resume offset would corrupt the file, so report
+  // the real stream start and let the caller restart from scratch when needed.
+  let stream_start = if let Some(bytes) = resume_from {
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+      response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(crate::utils::parse_strings::parse_content_range_start)
+        .unwrap_or(bytes)
+    } else {
+      log::warn!(
+        "__get_blob_by_url_stream: server ignored Range (status {}), stream starts at 0",
+        response.status()
+      );
+      0
+    }
+  } else {
+    0
+  };
+
+  Ok((
+    Box::new(response.bytes_stream().map(|res| res.context("Error reading chunk from response stream"))),
+    stream_start,
   ))
 }
 
@@ -115,7 +141,7 @@ pub async fn __get_full_tree(s: &Github, repo_id: &str) -> Result<Vec<TreeItem>>
 }
 
 pub async fn __load_manifest(s: &Github) -> Result<()> {
-  let max_size = { s.manifest.lock().unwrap().max_size.clone() };
+  let max_size = { crate::utils::locks::lock(&s.manifest).max_size.clone() };
 
   if max_size > 0 {
     return Ok(());
@@ -136,7 +162,7 @@ pub async fn __load_manifest(s: &Github) -> Result<()> {
 
   let manifest: Manifest = serde_json::from_str(&issue[0].description)?;
 
-  *s.manifest.lock().unwrap() = manifest;
+  *crate::utils::locks::lock(&s.manifest) = manifest;
 
   Ok(())
 }

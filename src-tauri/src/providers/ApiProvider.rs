@@ -35,9 +35,9 @@ pub trait ApiProvider: Send + Sync {
     project_id: &str,
     blob_sha: &str,
     seek: &Option<u64>,
-  ) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
+  ) -> Result<BlobStreamWithOffset>;
   async fn get_blob_direct_url(&self, project_id: &str, blob_sha: &str) -> String;
-  async fn get_blob_by_url_stream(&self, link: &str, seek: &Option<u64>) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Unpin + Send>>;
+  async fn get_blob_by_url_stream(&self, link: &str, seek: &Option<u64>) -> Result<BlobStreamWithOffset>;
   async fn tree(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<TreeItem>>;
   async fn get_full_tree(&self, repo_id: String) -> Result<Vec<TreeItem>>;
   async fn get_file_content_size(&self, direct_url: &str) -> Result<u64>;

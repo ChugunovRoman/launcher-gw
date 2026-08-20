@@ -43,6 +43,13 @@
   let noPrefetch = $state(false);
   let windowedMode = $state(true);
 
+  // Cheats / debug user.ltx props
+  let godMode = $state(false);
+  let unlimitedAmmo = $state(false);
+  let showFps = $state(false);
+  let showIds = $state(false);
+  let fontLegacy = $state(false);
+
   // Моковые разрешения (замените на вызов Tauri команды позже)
   let resolutions = $state(["800x600 (60Hz)"]);
   let latestResolutions = $state("800x600 (60Hz)");
@@ -68,6 +75,11 @@
       render: renderersMap.getKey(selectedRenderer) || RenderType.RendererR4,
       fov,
       hud_fov: Number(Number(hudFov / 100).toFixed(2)),
+      god_mode: godMode,
+      unlimited_ammo: unlimitedAmmo,
+      show_fps: showFps,
+      show_ids: showIds,
+      font_legacy: fontLegacy,
     };
     await invoke<void>("update_run_params", { runParams });
     saving = true;
@@ -96,6 +108,11 @@
         selectedRenderer = renderersMap.getValue(config.run_params.render as RenderType)!;
         fov = config.run_params.fov;
         hudFov = Math.floor(config.run_params.hud_fov * 100);
+        godMode = config.run_params.god_mode;
+        unlimitedAmmo = config.run_params.unlimited_ammo;
+        showFps = config.run_params.show_fps;
+        showIds = config.run_params.show_ids;
+        fontLegacy = config.run_params.font_legacy;
       });
     }
   });
@@ -268,6 +285,56 @@
               </div>
               <span>
                 {$_("app.params.dbgsspwn")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={godMode} />
+              </div>
+              <span>
+                {$_("app.params.godMode")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={unlimitedAmmo} />
+              </div>
+              <span>
+                {$_("app.params.unlimitedAmmo")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={showFps} />
+              </div>
+              <span>
+                {$_("app.params.showFps")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={showIds} />
+              </div>
+              <span>
+                {$_("app.params.showIds")}
+              </span>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <div class="opt check">
+              <div class="checkbox-label">
+                <input type="checkbox" bind:checked={fontLegacy} />
+              </div>
+              <span>
+                {$_("app.params.fontLegacy")}
               </span>
             </div>
           </label>

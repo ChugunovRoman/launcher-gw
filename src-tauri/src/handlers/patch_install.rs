@@ -324,7 +324,7 @@ pub(crate) async fn get_version_patches_impl(
 /// Downloads and parses a manifest.json from a release asset URL.
 async fn download_manifest(api_client: &ApiClient, url: &str) -> Result<ReleaseManifest> {
   let api = api_client.current_provider()?;
-  let stream = api.get_blob_by_url_stream(url, &None).await?;
+  let (stream, _stream_start) = api.get_blob_by_url_stream(url, &None).await?;
   let bytes = stream
     .fold(Vec::new(), |mut acc, chunk| async {
       if let Ok(data) = chunk {
@@ -354,12 +354,12 @@ pub async fn start_install_patch(
 ) -> Result<(), String> {
   // Guard: only one install per version at a time.
   let cancel_key = format!("patch-install:{}", &versionName);
-  if cancel_map.lock().unwrap().contains_key(&cancel_key) {
+  if crate::utils::locks::lock(&cancel_map).contains_key(&cancel_key) {
     return Err("PATCH_INSTALL_ALREADY_RUNNING".to_string());
   }
   let (cancel_tx, _) = broadcast::channel::<()>(1);
-  cancel_map.lock().unwrap().insert(cancel_key.clone(), cancel_tx.clone());
-  scopeguard::defer! { cancel_map.lock().unwrap().remove(&cancel_key); };
+  crate::utils::locks::lock(&cancel_map).insert(cancel_key.clone(), cancel_tx.clone());
+  scopeguard::defer! { crate::utils::locks::lock(&cancel_map).remove(&cancel_key); };
 
   let result = start_install_patch_inner(
     &app,
@@ -644,7 +644,7 @@ pub async fn cancel_install_patch(
   versionName: String,
 ) -> Result<(), String> {
   let key = format!("patch-install:{}", &versionName);
-  if let Some(tx) = cancel_map.lock().unwrap().get(&key) {
+  if let Some(tx) = crate::utils::locks::lock(&cancel_map).get(&key) {
     let _ = tx.send(());
   }
   Ok(())

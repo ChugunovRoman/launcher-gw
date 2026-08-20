@@ -30,17 +30,17 @@ pub async fn continue_download_version(
 ) -> Result<(), String> {
   log::info!("Start continue_download_version, version: {:?}", &versionName);
 
-  if channel_map.lock().unwrap().contains_key(&versionName) {
+  if crate::utils::locks::lock(&channel_map).contains_key(&versionName) {
     return Err("DOWNLOAD_ALREADY_RUNNING".to_string());
   }
 
   // 1. Инициализация каналов отмены
   let (cancel_tx, _) = broadcast::channel::<()>(1);
   {
-    channel_map.lock().unwrap().insert(versionName.clone(), cancel_tx.clone());
+    crate::utils::locks::lock(&channel_map).insert(versionName.clone(), cancel_tx.clone());
   }
   scopeguard::defer! {
-    channel_map.lock().unwrap().remove(&versionName);
+    crate::utils::locks::lock(&channel_map).remove(&versionName);
   };
 
   // 2. Сбор статистики и подготовка данных

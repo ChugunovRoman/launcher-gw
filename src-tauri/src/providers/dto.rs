@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// Blob download stream plus the byte offset the stream actually starts from.
+/// Offset 0 means the server sent the full body. A server that ignores the
+/// Range header answers 200 (not 206) — the caller must restart the file from
+/// scratch instead of appending at the requested resume offset.
+pub type BlobStreamWithOffset = (
+  Box<dyn futures_util::Stream<Item = anyhow::Result<bytes::Bytes>> + Unpin + Send>,
+  u64,
+);
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum ReleasePlatform {
   Windows,

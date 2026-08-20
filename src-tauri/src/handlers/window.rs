@@ -35,7 +35,7 @@ pub async fn graceful_shutdown(app: &tauri::AppHandle) {
   // Cancel all active downloads so workers stop writing and flush their .part files.
   if let Some(channel_map) = app.try_state::<CancelMap>() {
     let senders: Vec<tokio::sync::broadcast::Sender<()>> = {
-      let map = channel_map.lock().unwrap();
+      let map = crate::utils::locks::lock(&channel_map);
       map.iter().map(|(_, v)| v.clone()).collect()
     };
 
@@ -47,7 +47,7 @@ pub async fn graceful_shutdown(app: &tauri::AppHandle) {
   // Cancel all active uploads as well.
   if let Some(upload_map) = app.try_state::<UploadCancelMap>() {
     let senders: Vec<tokio::sync::broadcast::Sender<()>> = {
-      let map = upload_map.lock().unwrap();
+      let map = crate::utils::locks::lock(&upload_map);
       map.iter().map(|(_, v)| v.clone()).collect()
     };
 
@@ -60,11 +60,11 @@ pub async fn graceful_shutdown(app: &tauri::AppHandle) {
   for _ in 0..20 {
     let downloads_busy = app
       .try_state::<CancelMap>()
-      .map(|m| !m.lock().unwrap().is_empty())
+      .map(|m| !crate::utils::locks::lock(&m).is_empty())
       .unwrap_or(false);
     let uploads_busy = app
       .try_state::<UploadCancelMap>()
-      .map(|m| !m.lock().unwrap().is_empty())
+      .map(|m| !crate::utils::locks::lock(&m).is_empty())
       .unwrap_or(false);
     if !downloads_busy && !uploads_busy {
       break;

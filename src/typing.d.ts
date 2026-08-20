@@ -113,6 +113,11 @@ declare interface RunParams {
   lang: string;
   fov: number;
   hud_fov: number;
+  god_mode: boolean;
+  unlimited_ammo: boolean;
+  show_fps: boolean;
+  show_ids: boolean;
+  font_legacy: boolean;
   [index: string]: unknown;
 }
 declare interface AppConfig {

@@ -32,7 +32,7 @@ pub type CancelMap = Arc<StdMutex<HashMap<String, broadcast::Sender<()>>>>;
 
 #[tauri::command]
 pub async fn cancel_download_version(channel_map: tauri::State<'_, CancelMap>, releaseName: String) -> Result<(), String> {
-  if let Some(tx) = channel_map.lock().unwrap().remove(&releaseName) {
+  if let Some(tx) = crate::utils::locks::lock(&channel_map).remove(&releaseName) {
     let _ = tx.send(());
   }
 
@@ -48,7 +48,7 @@ pub async fn cancel_all_downloads_and_save(
   app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
 ) -> Result<(), String> {
   let senders: Vec<broadcast::Sender<()>> = {
-    let map = channel_map.lock().unwrap();
+    let map = crate::utils::locks::lock(&channel_map);
     map.iter().map(|(_, v)| v.clone()).collect()
   };
 
@@ -80,7 +80,7 @@ pub async fn start_download_version(
   versionId: Option<u32>,
 ) -> Result<(), String> {
   // Guard before insert so a second start cannot orphan the first cancel channel.
-  if channel_map.lock().unwrap().contains_key(&versionName) {
+  if crate::utils::locks::lock(&channel_map).contains_key(&versionName) {
     return Err("DOWNLOAD_ALREADY_RUNNING".to_string());
   }
 
@@ -92,11 +92,11 @@ pub async fn start_download_version(
   // to by the workers.
   let (cancel_tx, mut rx) = broadcast::channel::<()>(1);
   {
-    channel_map.lock().unwrap().insert(versionName.clone(), cancel_tx.clone());
+    crate::utils::locks::lock(&channel_map).insert(versionName.clone(), cancel_tx.clone());
   }
   // Удаляем запись после завершения (успешного или нет)
   scopeguard::defer! {
-    channel_map.lock().unwrap().remove(&versionName);
+    crate::utils::locks::lock(&channel_map).remove(&versionName);
   };
 
   let cfg = app_config.lock().await.clone();

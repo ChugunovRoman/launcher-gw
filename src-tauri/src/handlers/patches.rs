@@ -67,7 +67,7 @@ pub async fn collect_patch(source_dir: String, exclude_patterns: Vec<String>) ->
 #[tauri::command]
 pub async fn cancel_patch_upload(cancel_map: tauri::State<'_, UploadCancelMap>, patchName: String) -> Result<(), String> {
   let key = format!("patch:{}", patchName);
-  if let Some(tx) = cancel_map.lock().unwrap().get(&key) {
+  if let Some(tx) = crate::utils::locks::lock(&cancel_map).get(&key) {
     let _ = tx.send(());
   }
   Ok(())
@@ -106,12 +106,12 @@ pub async fn upload_patch(
 
   // Cancel map guard (keyed distinctly from full-release uploads).
   let cancel_key = format!("patch:{}", tag_name);
-  if cancel_map.lock().unwrap().contains_key(&cancel_key) {
+  if crate::utils::locks::lock(&cancel_map).contains_key(&cancel_key) {
     return Err("PATCH_UPLOAD_ALREADY_RUNNING".to_string());
   }
   let (cancel_tx, _) = broadcast::channel::<()>(1);
-  cancel_map.lock().unwrap().insert(cancel_key.clone(), cancel_tx.clone());
-  scopeguard::defer! { cancel_map.lock().unwrap().remove(&cancel_key); };
+  crate::utils::locks::lock(&cancel_map).insert(cancel_key.clone(), cancel_tx.clone());
+  scopeguard::defer! { crate::utils::locks::lock(&cancel_map).remove(&cancel_key); };
 
   // Get api_client (drop Service guard immediately, mirrors upload_v2).
   let api_client = {
@@ -217,12 +217,7 @@ pub async fn upload_patch(
     .files
     .iter()
     .map(|file| {
-      let url = api
-        .get_asset_url()
-        .replace("<PROJECT_ID>", &project_id)
-        .replace("<NAME_SPACE>", "gw_releases")
-        .replace("<VERSION>", &tag_name)
-        .replace("<FILE_NAME>", &file.name);
+      let url = crate::handlers::upload_v2::build_asset_url(&api.get_asset_url(), &project_id, "gw_releases", &tag_name, &file.name);
       CreateReleaseAsset {
         file_name: file.name.clone(),
         file_download_url: url,
@@ -263,7 +258,7 @@ pub async fn upload_patch(
       }
     }
 
-    let asset_url = build_asset_url(&upload_template, &project_id, &tag_name, &file.name);
+    let asset_url = build_asset_url(&upload_template, &project_id, "gw_releases", &tag_name, &file.name);
     let asset_name = file.name.clone();
     let asset_name_for_stream = asset_name.clone();
     let total_size = file.size;

@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use futures_util::Stream;
-use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
@@ -28,7 +27,7 @@ const NAMESPACE: &str = "gw_releases";
 /// Cancels an in-progress upload by release name.
 #[tauri::command]
 pub async fn cancel_upload(cancel_map: tauri::State<'_, UploadCancelMap>, name: String) -> Result<(), String> {
-  if let Some(tx) = cancel_map.lock().unwrap().get(&name) {
+  if let Some(tx) = crate::utils::locks::lock(&cancel_map).get(&name) {
     let _ = tx.send(());
   }
   Ok(())
@@ -51,16 +50,19 @@ struct UploadContext {
 
 /// Compute the tag name from a release name (whitespace → dashes).
 pub(crate) fn make_tag_name(name: &str) -> String {
-  Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string()
+  crate::utils::parse_strings::WHITESPACE_RE.replace_all(name, "-").to_string()
 }
 
 /// Build asset URLs for a file from a template `upload_url` (with <FILE_NAME>).
-pub(crate) fn build_asset_url(upload_template: &str, project_id: &str, tag_name: &str, file_name: &str) -> String {
+/// Substituted values are percent-encoded: a file name with `#`, `?` or
+/// spaces used to break the request URL (query param on GitHub, path
+/// segment in GitLab generic packages).
+pub(crate) fn build_asset_url(upload_template: &str, project_id: &str, namespace: &str, tag_name: &str, file_name: &str) -> String {
   upload_template
-    .replace("<PROJECT_ID>", project_id)
-    .replace("<NAME_SPACE>", NAMESPACE)
-    .replace("<VERSION>", tag_name)
-    .replace("<FILE_NAME>", file_name)
+    .replace("<PROJECT_ID>", &urlencoding::encode(project_id))
+    .replace("<NAME_SPACE>", &urlencoding::encode(namespace))
+    .replace("<VERSION>", &urlencoding::encode(tag_name))
+    .replace("<FILE_NAME>", &urlencoding::encode(file_name))
 }
 
 /// ------------------------------------------------------------------
@@ -119,7 +121,7 @@ async fn step_create_release(ctx: &UploadContext, api: &(dyn crate::providers::A
     .files
     .iter()
     .map(|file| {
-      let url = api.get_asset_url().replace("<PROJECT_ID>", &ctx.project_id).replace("<NAME_SPACE>", NAMESPACE).replace("<VERSION>", &ctx.tag_name).replace("<FILE_NAME>", &file.name);
+      let url = build_asset_url(&api.get_asset_url(), &ctx.project_id, NAMESPACE, &ctx.tag_name, &file.name);
       CreateReleaseAsset { file_name: file.name.clone(), file_download_url: url }
     })
     .collect();
@@ -226,7 +228,7 @@ async fn step_upload_assets(ctx: &UploadContext, api: &(dyn crate::providers::Ap
       }
     }
 
-    let asset_url = build_asset_url(&upload_template, &ctx.project_id, &ctx.tag_name, &file.name);
+    let asset_url = build_asset_url(&upload_template, &ctx.project_id, NAMESPACE, &ctx.tag_name, &file.name);
     let asset_name = file.name.clone();
     let asset_name_for_log = asset_name.clone();
     let asset_name_for_stream = asset_name.clone();
@@ -359,15 +361,15 @@ pub async fn upload_v2_release(
   }
 
   // Guard before insert — otherwise contains_key always sees our own entry.
-  if cancel_map.lock().unwrap().contains_key(&name) {
+  if crate::utils::locks::lock(&cancel_map).contains_key(&name) {
     return Err("UPLOAD_ALREADY_RUNNING".to_string());
   }
 
   let (cancel_tx, _) = broadcast::channel::<()>(1);
   {
-    cancel_map.lock().unwrap().insert(name.clone(), cancel_tx.clone());
+    crate::utils::locks::lock(&cancel_map).insert(name.clone(), cancel_tx.clone());
   }
-  scopeguard::defer! { cancel_map.lock().unwrap().remove(&name); };
+  scopeguard::defer! { crate::utils::locks::lock(&cancel_map).remove(&name); };
 
   let base_dir = Path::new(&path);
   let manifest_path = base_dir.join(MANIFEST_NAME);
@@ -485,14 +487,14 @@ pub async fn continue_upload_v2(
   // Guard: refuse if another upload command is already running for this name.
   // Without this, two concurrent resume sessions would both read the same
   // uploaded_files list and push duplicate entries for each uploaded file.
-  if cancel_map.lock().unwrap().contains_key(&name) {
+  if crate::utils::locks::lock(&cancel_map).contains_key(&name) {
     return Err("UPLOAD_ALREADY_RUNNING".to_string());
   }
 
   // Cancel setup.
   let (cancel_tx, _) = broadcast::channel::<()>(1);
-  { cancel_map.lock().unwrap().insert(name.clone(), cancel_tx.clone()); }
-  scopeguard::defer! { cancel_map.lock().unwrap().remove(&name); };
+  { crate::utils::locks::lock(&cancel_map).insert(name.clone(), cancel_tx.clone()); }
+  scopeguard::defer! { crate::utils::locks::lock(&cancel_map).remove(&name); };
 
   // Read saved progress.
   let progress = {

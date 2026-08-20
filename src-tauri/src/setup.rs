@@ -18,6 +18,7 @@ use crate::service::keybind_manager::KeybindManager;
 use crate::service::unpack::ServiceUnpacker;
 use crate::service::updater::ServiceUpdater;
 use crate::service::wake_detector::WakeDetector;
+use crate::utils::encoding::{decode_token, encode_token, is_legacy_token};
 use crate::utils::errors::log_full_error;
 use crate::utils::http_cache;
 use crate::{
@@ -134,15 +135,21 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   tauri::async_runtime::spawn(async move {
     let result = async {
       // 1. Регистрация провайдеров
+      // Each network phase takes the Service lock separately so UI commands
+      // (provider switch, uploads) can run between them instead of waiting
+      // for the whole startup chain.
       {
-        let mut service = service_clone.lock().await;
-        service.register_all_providers().await?;
+        {
+          let mut service = service_clone.lock().await;
+          service.register_all_providers().await?;
+        }
 
         // load_manifest: GitLab uses a hardcoded JSON (no network, safe to
         // always call).  GitHub calls the Search API which counts against
         // the rate limit — skip it for anonymous players (the static
         // release index provides everything the player flow needs).
         {
+          let mut service = service_clone.lock().await;
           let (is_gitlab, has_token) = match service.api_client.current_provider() {
             Ok(api) => (api.is_suppot_subgroups(), !api.get_token().is_empty()),
             Err(_) => (false, false),
@@ -154,14 +161,21 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
           }
         }
 
-        let releases = service.get_releases(false).await?;
+        let releases = {
+          let mut service = service_clone.lock().await;
+          service.get_releases(false).await?
+        };
 
         {
           let mut config_guard = config_arc_clone.lock().await;
           config_guard.versions = releases.clone();
           config_guard.save()?;
 
-          let _ = app_handle_bg.emit("config-loaded", config_guard.clone());
+          // Never ship provider tokens into the webview (get_config clears
+          // them, get_tokens masks them — the startup event must not leak).
+          let mut cfg_snapshot = config_guard.clone();
+          cfg_snapshot.tokens.clear();
+          let _ = app_handle_bg.emit("config-loaded", cfg_snapshot);
         }
 
         let _ = app_handle_bg.emit("versions-loaded", releases);
@@ -225,6 +239,28 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         service_clone_guard.set_tokens(data.1).await?;
         service_clone_guard.get_user(data.0).await?
       };
+      // Migrate legacy XOR-encoded tokens to the DPAPI-backed storage.
+      {
+        let mut cfg = config_arc_clone.lock().await;
+        let mut migrated = false;
+        for (id, stored) in cfg.tokens.iter_mut() {
+          if is_legacy_token(stored) {
+            match decode_token(stored) {
+              Ok(plain) => {
+                *stored = encode_token(&plain);
+                migrated = true;
+                log::info!("Migrated stored token of provider '{}' to DPAPI storage", id);
+              }
+              Err(e) => log::warn!("Token migration skipped for '{}': {}", id, e),
+            }
+          }
+        }
+        if migrated {
+          if let Err(e) = cfg.save() {
+            log::error!("Failed to persist token migration: {}", e);
+          }
+        }
+      }
       // Обновляем состояние
       {
         let mut user_data_guard = user_data_bg.lock().await;

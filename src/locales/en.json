@@ -271,7 +271,8 @@
       },
       "hide": "Hide",
       "show": "Show",
-      "save": "Save"
+      "save": "Save",
+      "current": "Current token"
     },
     "releases": {
       "add": "Add new release",
@@ -358,6 +359,11 @@
       "checks": "Enable start-up checks (-checks)",
       "checksnote": "(increases loading time)",
       "dbgsspwn": "Enable debug_start_spawn (-dbgsspwn)",
+      "godMode": "God mode (g_god)",
+      "unlimitedAmmo": "Unlimited ammo (g_unlimitedammo)",
+      "showFps": "Show FPS (rs_fps)",
+      "showIds": "Show free IDs (rs_ids)",
+      "fontLegacy": "Legacy XRay fonts (r_font_legacy)",
       "gameLang": "Game language:",
       "renderer": "Renderer type:",
       "fov": "FOV",

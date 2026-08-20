@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -34,6 +34,11 @@ static FETCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 fn fetch_lock() -> &'static Mutex<()> {
     FETCH_LOCK.get_or_init(|| Mutex::new(()))
 }
+
+/// Shared client for ad-hoc metadata GETs/HEADs (release index, manifests,
+/// bg etag). One connection pool instead of a fresh TLS context per call
+/// site — `reqwest::Client::new()` was created on the fly in 6 places.
+pub static SHARED_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 // ---------------------------------------------------------------------------
 // Public types

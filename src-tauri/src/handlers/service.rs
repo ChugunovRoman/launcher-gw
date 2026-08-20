@@ -154,10 +154,13 @@ pub async fn get_launcher_bg(
   }
 
   // Slow path: fetch via the ETag disk cache.
-  let client = reqwest::Client::new();
-  let cached = crate::utils::http_cache::fetch(&client, &url, std::time::Duration::from_secs(crate::consts::CACHE_TTL_BACKGROUND_SECS))
-    .await
-    .map_err(|e| format!("Cannot fetch launcher bg: {}", e))?;
+  let cached = crate::utils::http_cache::fetch(
+    &crate::utils::http_cache::SHARED_CLIENT,
+    &url,
+    std::time::Duration::from_secs(crate::consts::CACHE_TTL_BACKGROUND_SECS),
+  )
+  .await
+  .map_err(|e| format!("Cannot fetch launcher bg: {}", e))?;
 
   // Persist the served etag for the fast path next time.
   if let Some(etag) = crate::utils::http_cache::read_etag(&url) {
@@ -190,7 +193,7 @@ pub async fn set_token_for_provider(app: tauri::AppHandle, token: String, provid
     return Err(msg);
   }
 
-  let encoded_token = encode(&token);
+  let encoded_token = encode_token(&token);
   log::info!("set_token_for_provider: id: {}", &providerId);
   {
     let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("AppConfig not initialized")?;
@@ -296,7 +299,7 @@ pub async fn move_version(
     cfg
       .installed_versions
       .get(&versionName)
-      .expect(&format!("move_version() version not found: {} !", &versionName))
+      .ok_or_else(|| format!("move_version() version not found: {} !", &versionName))?
       .clone()
   };
 
@@ -304,20 +307,39 @@ pub async fn move_version(
   options.overwrite = true;
   options.content_only = true;
 
-  let _ = move_dir_with_progress(&version.installed_path, &dest, &options, |process_info: TransitProcess| {
-    let percentage = (process_info.copied_bytes as f64 / process_info.total_bytes as f64) * 100.0;
+  // Validate the IPC-provided destination BEFORE the OverwriteAll move:
+  // blocks drive roots, system directories and moving a version into itself.
+  crate::utils::paths::assert_move_destination(Path::new(&version.installed_path), Path::new(&dest))?;
 
-    let payload = ProgressPayload {
-      version_name: version.name.clone(),
-      file_name: process_info.file_name,
-      bytes_moved: process_info.copied_bytes,
-      total_bytes: process_info.total_bytes,
-      percentage,
-    };
+  // Moving gigabytes is sync IO — run it on the blocking pool so other
+  // commands keep responding while the move is in progress.
+  let version_name_for_progress = version.name.clone();
+  let app_for_progress = app.clone();
+  let src = version.installed_path.clone();
+  let dest_for_move = dest.clone();
+  tokio::task::spawn_blocking(move || {
+    move_dir_with_progress(&src, &dest_for_move, &options, move |process_info: TransitProcess| {
+      // Guard division by zero for empty dirs (Bug E fix pattern).
+      let percentage = if process_info.total_bytes > 0 {
+        (process_info.copied_bytes as f64 / process_info.total_bytes as f64) * 100.0
+      } else {
+        0.0
+      };
 
-    let _ = app.emit("move-version", payload);
-    TransitProcessResult::OverwriteAll
+      let payload = ProgressPayload {
+        version_name: version_name_for_progress.clone(),
+        file_name: process_info.file_name,
+        bytes_moved: process_info.copied_bytes,
+        total_bytes: process_info.total_bytes,
+        percentage,
+      };
+
+      let _ = app_for_progress.emit("move-version", payload);
+      TransitProcessResult::OverwriteAll
+    })
   })
+  .await
+  .map_err(|e| e.to_string())?
   .map_err(|e| e.to_string())?;
 
   let payload = ProgressPayload {
@@ -335,7 +357,7 @@ pub async fn move_version(
     let v = cfg
       .installed_versions
       .get_mut(&versionName)
-      .expect(&format!("move_version() version not found: {} !", &versionName));
+      .ok_or_else(|| format!("move_version() version not found: {} !", &versionName))?;
 
     v.installed_path = dest;
     cfg.save().map_err(|e| e.to_string())?;

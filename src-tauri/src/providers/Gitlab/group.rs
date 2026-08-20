@@ -7,13 +7,12 @@ use crate::providers::{
 };
 
 use anyhow::{Context, Result, bail};
-use regex::Regex;
 
 pub async fn __create_group(s: &Gitlab, name: &str, parent_id: &u32) -> Result<CreategGroupResponse> {
   let url = format!("{}/groups", s.host);
   let data = CreategGroupBodyGitlab {
     name: name.to_owned(),
-    path: Regex::new(r"\s+").unwrap().replace_all(name, "-").to_string(),
+    path: crate::utils::parse_strings::WHITESPACE_RE.replace_all(name, "-").to_string(),
     lfs_enabled: true,
     visibility: Visibility::Private,
     parent_id: parent_id.clone(),
