@@ -5,6 +5,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// Keep at most this many launcher sessions in the log file.
+const MAX_LOG_SESSIONS: usize = 50;
+const SESSION_SEPARATOR: &str = "========== Launcher started:";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum LogLevel {
   #[serde(rename = "debug")]
@@ -67,8 +71,7 @@ impl Logger {
       if std::fs::create_dir_all(&dir).is_err() {
         continue;
       }
-      // Rotation: start each run with a fresh log.
-      let _ = std::fs::remove_file(&path);
+      // Append to existing log file (session rotation is handled separately).
       if OpenOptions::new().create(true).write(true).append(true).open(&path).is_ok() {
         chosen = Some(path);
         break;
@@ -79,7 +82,49 @@ impl Logger {
       eprintln!("Logger: cannot open launcher.log in CWD or temp dir — console-only logging");
     }
 
+    // Trim old sessions and write a new session header.
+    if let Some(ref path) = chosen {
+      Self::trim_old_sessions(path);
+      Self::write_session_header(path);
+    }
+
     Logger { log_file_path: chosen, min_level }
+  }
+
+  /// Remove the oldest session(s) when the log file exceeds MAX_LOG_SESSIONS.
+  /// Keeps the last (MAX_LOG_SESSIONS - 1) sessions so that after appending
+  /// the new session header the total is exactly MAX_LOG_SESSIONS.
+  fn trim_old_sessions(path: &Path) {
+    let Ok(content) = std::fs::read_to_string(path) else { return };
+
+    let positions: Vec<usize> = content
+      .match_indices(SESSION_SEPARATOR)
+      .map(|(pos, _)| pos)
+      .collect();
+
+    if positions.len() < MAX_LOG_SESSIONS {
+      return;
+    }
+
+    // Drop the oldest session: keep from the 2nd separator onwards.
+    let trim_from = positions[1];
+    let trimmed = &content[trim_from..];
+
+    // Atomic replace: write to a temp file then rename.
+    let tmp_path = path.with_extension("log.tmp");
+    if std::fs::write(&tmp_path, trimmed).is_err() {
+      return;
+    }
+    let _ = std::fs::rename(&tmp_path, path);
+  }
+
+  /// Append a session header with the current timestamp.
+  fn write_session_header(path: &Path) {
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let header = format!("\n{} {} ==========\n", SESSION_SEPARATOR, timestamp);
+    if let Ok(mut file) = OpenOptions::new().append(true).open(path) {
+      let _ = write!(file, "{}", header);
+    }
   }
 
   fn should_log(&self, level: &LogLevel) -> bool {
