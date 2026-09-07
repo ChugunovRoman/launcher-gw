@@ -34,8 +34,10 @@
       "removeProfile": "Remove profile ",
       "add": "Add",
       "yes": "Yes",
-      "ok": "Окак",
-      "no": "No"
+      "ok": "Ok",
+      "no": "No",
+      "presetMaxPerformanceWarning": "Warning! This profile may cause minor visual bugs with light and shadows.",
+      "dontShowAgain": "Do not show again"
     },
     "input": {
       "checks": {
@@ -366,9 +368,18 @@
       "fontLegacy": "Legacy XRay fonts (r_font_legacy)",
       "gameLang": "Game language:",
       "renderer": "Renderer type:",
+      "preset": "Preset:",
+      "applyPresetOnLaunch": "Apply preset when starting the game",
       "fov": "FOV",
       "hudFov": "HUD FOV",
       "applyKeyProfile": "Apply the selected profile when starting the game"
+    },
+    "presets": {
+      "placeholder": "Select a preset",
+      "max_performance": "Max performance",
+      "performance": "Performance",
+      "balanced": "Balanced",
+      "quality": "Image quality"
     },
     "download": {
       "loadData": "Loading data...",

@@ -6,6 +6,7 @@
   import ApplyProfileOk from "./ApplyProfileOk.svelte";
   import AddVersion from "./AddVersion.svelte";
   import PatchNotes from "./PatchNotes.svelte";
+  import MaxPerformancePresetWarning from "./MaxPerformancePresetWarning.svelte";
 </script>
 
 <RestartApp />
@@ -15,5 +16,6 @@
 <ApplyProfileOk />
 <AddVersion maxWidth="90%" />
 <PatchNotes />
+<MaxPerformancePresetWarning />
 
 <style></style>

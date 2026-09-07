@@ -15,6 +15,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::get_config,
     handlers::configs::save_config,
     handlers::configs::update_run_params,
+    handlers::configs::get_presets,
     handlers::configs::get_lang,
     handlers::configs::set_lang,
     handlers::configs::set_pack_paths,
@@ -27,6 +28,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::configs::set_default_download_path,
     handlers::configs::set_current_game_version,
     handlers::configs::set_current_api_provider,
+    handlers::configs::set_hide_max_perf_preset_warning,
     handlers::configs::get_api_providers_stats,
     // user.ltx
     handlers::user_ltx::userltx_set_path,

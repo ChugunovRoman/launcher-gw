@@ -35,7 +35,9 @@
       "add": "Добавить",
       "yes": "Да",
       "ok": "Ok",
-      "no": "нет"
+      "no": "нет",
+      "presetMaxPerformanceWarning": "Внимание! При данном профиле могу появляться небольшие визуальные баги со светом и тенями",
+      "dontShowAgain": "Больше не показывать"
     },
     "input": {
       "checks": {
@@ -366,9 +368,18 @@
       "fontLegacy": "Старые XRay шрифты (r_font_legacy)",
       "gameLang": "Язык:",
       "renderer": "Тип рендера:",
+      "preset": "Пресет:",
+      "applyPresetOnLaunch": "Применять пресет при запуске игры",
       "fov": "FOV",
       "hudFov": "FOV Худа",
       "applyKeyProfile": "Применять выбранный профиль при старте игры"
+    },
+    "presets": {
+      "placeholder": "Выберите пресет",
+      "max_performance": "Макс. производительность",
+      "performance": "Производительность",
+      "balanced": "Баланс",
+      "quality": "Качество картинки"
     },
     "download": {
       "loadData": "Загрузка данных...",

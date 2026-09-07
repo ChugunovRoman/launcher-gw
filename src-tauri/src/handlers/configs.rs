@@ -1,13 +1,12 @@
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tauri::Manager;
 use tokio::sync::Mutex;
 
 use crate::{
   configs::{AppConfig::AppConfig, RunParams},
-  consts::MANIFEST_NAME,
   handlers,
   providers::dto::ProviderStatus,
-  service::main::Service,
+  service::{index::IndexPreset, main::Service},
   utils::encoding::{decode_token, mask_token},
 };
 
@@ -31,11 +30,35 @@ pub async fn save_config(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn update_run_params(app: tauri::AppHandle, run_params: RunParams) -> Result<(), String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
-  let mut config_guard = state.lock().await;
-  config_guard.run_params = run_params;
-  config_guard.save().map_err(|e| e.to_string())?;
-  // Also patch active version user.ltx (launch will patch again for the selected game).
-  handlers::user_ltx::apply_run_params_to_version_ltx(&config_guard)
+  let config_snapshot = {
+    let mut config_guard = state.lock().await;
+    config_guard.run_params = run_params;
+    config_guard.save().map_err(|e| e.to_string())?;
+    config_guard.clone()
+  };
+  handlers::user_ltx::apply_run_params_to_version_ltx(&config_snapshot).await
+}
+
+#[tauri::command]
+pub async fn get_presets(service: tauri::State<'_, Arc<Mutex<Service>>>) -> Result<Vec<IndexPreset>, String> {
+  let provider_id = {
+    let service_guard = service.lock().await;
+    match service_guard.api_client.current_provider() {
+      Ok(provider) => provider.id().to_string(),
+      Err(e) => {
+        log::warn!("get_presets: current provider is unavailable: {}", e);
+        return Ok(Vec::new());
+      }
+    }
+  };
+
+  match crate::service::index::load_index(&provider_id).await {
+    Ok(index) => Ok(index.presets),
+    Err(e) => {
+      log::warn!("get_presets: cannot load index for '{}': {}", provider_id, e);
+      Ok(Vec::new())
+    }
+  }
 }
 
 #[tauri::command]
@@ -176,6 +199,14 @@ pub async fn set_current_api_provider(
   };
 
   Ok(())
+}
+
+#[tauri::command]
+pub async fn set_hide_max_perf_preset_warning(app: tauri::AppHandle, value: bool) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let mut config_guard = state.lock().await;
+  config_guard.hide_max_perf_preset_warning = value;
+  config_guard.save().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

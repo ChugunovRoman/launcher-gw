@@ -97,6 +97,10 @@ declare interface FileProgress {
   size: number;
   total_size: number;
 }
+declare interface IndexPreset {
+  id: string;
+  options: Dict<string>;
+}
 declare interface RunParams {
   cmd_params: string;
   check_spawner: boolean;
@@ -118,6 +122,8 @@ declare interface RunParams {
   show_fps: boolean;
   show_ids: boolean;
   font_legacy: boolean;
+  selected_preset_id: string;
+  apply_preset_on_launch: boolean;
   [index: string]: unknown;
 }
 declare interface AppConfig {
@@ -147,6 +153,7 @@ declare interface AppConfig {
   selected_provider_id?: string;
   installed_versions: Dict<Version>;
   tokens: Dict<string>;
+  hide_max_perf_preset_warning: boolean;
   progress_upload?: VersionProgressUpload;
   progress_download: Dict<VersionProgress>;
 }

@@ -25,12 +25,13 @@
     margin-bottom: 14px;
   }
   .check {
-    grid-template-columns: 4vw 1fr;
+    grid-template-columns: 3vw 1fr;
   }
   .opt > span {
     justify-self: end;
     padding-right: 14px;
     align-self: center;
+    color: #fff;
   }
   .opt > div {
     justify-self: start;

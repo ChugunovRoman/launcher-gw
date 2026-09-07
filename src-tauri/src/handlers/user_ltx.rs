@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use crate::{
   configs::{AppConfig::AppConfig, AppConfig::Version, GameConfig::GameConfig, RunParams, TmpLtx, UserLtx},
   consts::*,
-  service::{get_release::ServiceGetRelease, keybind_manager::KeybindManager, main::Service},
+  service::{get_release::ServiceGetRelease, index::IndexPreset, keybind_manager::KeybindManager, main::Service},
   utils::resources::game_exe,
 };
 
@@ -87,14 +87,42 @@ fn resolve_active_version(config: &AppConfig) -> Option<Version> {
   None
 }
 
+async fn load_presets(provider_id: Option<&str>) -> Vec<IndexPreset> {
+  let provider_id = provider_id.unwrap_or(GITHUB_PID);
+  match crate::service::index::load_index(provider_id).await {
+    Ok(index) => index.presets,
+    Err(e) => {
+      log::warn!("load_presets: cannot load index for '{}': {}", provider_id, e);
+      Vec::new()
+    }
+  }
+}
+
+async fn apply_selected_preset(ltx: &mut GameConfig, run_params: &RunParams, provider_id: Option<&str>) {
+  if !run_params.apply_preset_on_launch || run_params.selected_preset_id.is_empty() {
+    return;
+  }
+
+  let presets = load_presets(provider_id).await;
+  let Some(preset) = presets.iter().find(|p| p.id == run_params.selected_preset_id) else {
+    return;
+  };
+
+  for (key, value) in &preset.options {
+    ltx.set(key.clone(), value.clone());
+  }
+}
+
 /// Patch launcher-managed run_params cvars into an ltx file (preserves other keys).
-pub fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams) -> Result<(), String> {
+pub async fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams, provider_id: Option<&str>) -> Result<(), String> {
   if let Some(parent) = ltx_path.parent() {
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
   }
 
   let mut ltx = GameConfig::new(ltx_path);
   ltx.load().map_err(|e| e.to_string())?;
+
+  apply_selected_preset(&mut ltx, run_params, provider_id).await;
 
   ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
   ltx.set("renderer".to_string(), render_to_ltx(run_params.render.clone()));
@@ -107,46 +135,28 @@ pub fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams) -> Resul
     "keypress_on_start".to_string(),
     if run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
   );
-  ltx.set(
-    "rs_v_sync".to_string(),
-    if run_params.check_vsync { "1" } else { "0" }.to_string(),
-  );
-  ltx.set(
-    "rs_fullscreen".to_string(),
-    if run_params.windowed_mode { "0" } else { "1" }.to_string(),
-  );
-  ltx.set(
-    "g_god".to_string(),
-    if run_params.god_mode { "on" } else { "off" }.to_string(),
-  );
+  ltx.set("rs_v_sync".to_string(), if run_params.check_vsync { "1" } else { "0" }.to_string());
+  ltx.set("rs_fullscreen".to_string(), if run_params.windowed_mode { "0" } else { "1" }.to_string());
+  ltx.set("g_god".to_string(), if run_params.god_mode { "on" } else { "off" }.to_string());
   ltx.set(
     "g_unlimitedammo".to_string(),
     if run_params.unlimited_ammo { "on" } else { "off" }.to_string(),
   );
-  ltx.set(
-    "rs_fps".to_string(),
-    if run_params.show_fps { "on" } else { "off" }.to_string(),
-  );
-  ltx.set(
-    "rs_ids".to_string(),
-    if run_params.show_ids { "on" } else { "off" }.to_string(),
-  );
-  ltx.set(
-    "r_font_legacy".to_string(),
-    if run_params.font_legacy { "1" } else { "0" }.to_string(),
-  );
+  ltx.set("rs_fps".to_string(), if run_params.show_fps { "on" } else { "off" }.to_string());
+  ltx.set("rs_ids".to_string(), if run_params.show_ids { "on" } else { "off" }.to_string());
+  ltx.set("r_font_legacy".to_string(), if run_params.font_legacy { "1" } else { "0" }.to_string());
 
   ltx.save().map_err(|e| e.to_string())
 }
 
-pub fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<(), String> {
+pub async fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<(), String> {
   let Some((user_path, tmp_path)) = resolve_ltx_paths(config) else {
     log::warn!("apply_run_params_to_version_ltx: no active version path; skip user.ltx");
     return Ok(());
   };
 
-  apply_run_params_to_ltx(&user_path, &config.run_params)?;
-  apply_run_params_to_ltx(&tmp_path, &config.run_params)?;
+  apply_run_params_to_ltx(&user_path, &config.run_params, config.selected_provider_id.as_deref()).await?;
+  apply_run_params_to_ltx(&tmp_path, &config.run_params, config.selected_provider_id.as_deref()).await?;
   log::info!("Patched run_params into {:?} and {:?}", user_path, tmp_path);
   Ok(())
 }
@@ -157,19 +167,18 @@ pub async fn prepare_ltx_for_launch(
   user_ltx_path: &Path,
   tmp_ltx_path: &Path,
   run_params: &RunParams,
+  provider_id: Option<&str>,
   keybind_manager: &KeybindManager,
   selected_profile: Option<&str>,
 ) -> Result<(), String> {
-  apply_run_params_to_ltx(user_ltx_path, run_params)?;
-  apply_run_params_to_ltx(tmp_ltx_path, run_params)?;
+  apply_run_params_to_ltx(user_ltx_path, run_params, provider_id).await?;
+  apply_run_params_to_ltx(tmp_ltx_path, run_params, provider_id).await?;
 
   if let Some(profile_name) = selected_profile {
     let profiles = keybind_manager.get_profiles().await;
     if let Some(profile_config) = profiles.get(profile_name) {
       let mut target = GameConfig::new(user_ltx_path);
-      target
-        .load()
-        .map_err(|e| format!("Ошибка загрузки {}: {}", user_ltx_path.display(), e))?;
+      target.load().map_err(|e| format!("Ошибка загрузки {}: {}", user_ltx_path.display(), e))?;
       target.merge(profile_config);
       target
         .save()
@@ -183,11 +192,7 @@ pub async fn prepare_ltx_for_launch(
   Ok(())
 }
 
-pub async fn apply_selected_profile_to_version_ltx(
-  config: &AppConfig,
-  keybind_manager: &KeybindManager,
-  profile_name: &str,
-) -> Result<(), String> {
+pub async fn apply_selected_profile_to_version_ltx(config: &AppConfig, keybind_manager: &KeybindManager, profile_name: &str) -> Result<(), String> {
   let Some((user_path, _)) = resolve_ltx_paths(config) else {
     log::warn!("apply_selected_profile_to_version_ltx: no active version path; skip");
     return Ok(());
@@ -205,9 +210,7 @@ pub async fn apply_selected_profile_to_version_ltx(
   let mut target = GameConfig::new(&user_path);
   target.load().map_err(|e| format!("Ошибка загрузки {}: {}", user_path.display(), e))?;
   target.merge(profile_config);
-  target
-    .save()
-    .map_err(|e| format!("Ошибка сохранения {}: {}", user_path.display(), e))?;
+  target.save().map_err(|e| format!("Ошибка сохранения {}: {}", user_path.display(), e))?;
 
   log::info!("Applied profile '{}' to {:?}", profile_name, user_path);
   Ok(())

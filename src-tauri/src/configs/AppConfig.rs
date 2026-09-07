@@ -1,7 +1,7 @@
 use crate::consts::{BASE_DIR, CONFIG_NAME, CUSTOM_BIND_LTX, VERSIONS_DIR};
 use crate::handlers::dto::ReleaseManifest;
-use crate::utils::patch_markers::InstalledPatch;
 use crate::logger::LogLevel;
+use crate::utils::patch_markers::InstalledPatch;
 use crate::utils::video::get_available_resolutions;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -115,6 +115,10 @@ pub enum RenderType {
   RendererRgl,
 }
 
+fn default_true() -> bool {
+  true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunParams {
   #[serde(default)]
@@ -155,6 +159,10 @@ pub struct RunParams {
   pub show_ids: bool,
   #[serde(default)]
   pub font_legacy: bool,
+  #[serde(default)]
+  pub selected_preset_id: String,
+  #[serde(default = "default_true")]
+  pub apply_preset_on_launch: bool,
 }
 
 impl Default for RunParams {
@@ -180,6 +188,8 @@ impl Default for RunParams {
       show_fps: false,
       show_ids: false,
       font_legacy: false,
+      selected_preset_id: String::new(),
+      apply_preset_on_launch: true,
     }
   }
 }
@@ -262,6 +272,8 @@ pub struct AppConfig {
   /// from disk with zero network requests.
   #[serde(default)]
   pub bg_etag: Option<String>,
+  #[serde(default)]
+  pub hide_max_perf_preset_warning: bool,
 
   // SKIPED PROPS
   #[serde(skip)]
@@ -307,6 +319,7 @@ impl Default for AppConfig {
       tokens: HashMap::new(),
       user_data_cache: None,
       bg_etag: None,
+      hide_max_perf_preset_warning: false,
       progress_upload: None,
       choosed_version_path: None,
     }
@@ -356,11 +369,7 @@ impl AppConfig {
     let mut json_value: Value = match serde_json::from_str(&content) {
       Ok(c) => c,
       Err(e) => {
-        let bak_path = config_dir.join(format!(
-          "{}.bak.{}",
-          CONFIG_NAME,
-          chrono::Local::now().format("%Y%m%d-%H%M%S")
-        ));
+        let bak_path = config_dir.join(format!("{}.bak.{}", CONFIG_NAME, chrono::Local::now().format("%Y%m%d-%H%M%S")));
         if let Err(copy_err) = fs::copy(&config_path, &bak_path) {
           log::error!(
             "Cannot parse {} ({:?}) and failed to backup to {:?}: {}",
@@ -369,12 +378,7 @@ impl AppConfig {
             bak_path,
             copy_err
           );
-          bail!(
-            "Cannot parse {}: {}. Backup also failed: {}",
-            CONFIG_NAME,
-            e,
-            copy_err
-          );
+          bail!("Cannot parse {}: {}. Backup also failed: {}", CONFIG_NAME, e, copy_err);
         }
         log::error!(
           "Cannot parse {} ({:?}); backed up to {:?} and creating a fresh default",
@@ -456,29 +460,12 @@ impl AppConfig {
     let mut config = match serde_json::from_value::<AppConfig>(json_value.clone()) {
       Ok(cfg) => cfg,
       Err(e) => {
-        let bak_path = config_dir.join(format!(
-          "{}.bak.{}",
-          CONFIG_NAME,
-          chrono::Local::now().format("%Y%m%d-%H%M%S")
-        ));
+        let bak_path = config_dir.join(format!("{}.bak.{}", CONFIG_NAME, chrono::Local::now().format("%Y%m%d-%H%M%S")));
         if let Err(copy_err) = fs::copy(&config_path, &bak_path) {
-          log::error!(
-            "Failed to parse config.json ({}); backup to {:?} also failed: {}",
-            e,
-            bak_path,
-            copy_err
-          );
-          bail!(
-            "Failed to parse config.json (outdated schema?): {}. Backup failed: {}",
-            e,
-            copy_err
-          );
+          log::error!("Failed to parse config.json ({}); backup to {:?} also failed: {}", e, bak_path, copy_err);
+          bail!("Failed to parse config.json (outdated schema?): {}. Backup failed: {}", e, copy_err);
         }
-        log::error!(
-          "Failed to parse config.json (outdated schema?): {}; backed up to {:?}",
-          e,
-          bak_path
-        );
+        log::error!("Failed to parse config.json (outdated schema?): {}; backed up to {:?}", e, bak_path);
 
         let preserved_uuid = if let Value::Object(map) = &json_value {
           match map.get("client_uuid") {

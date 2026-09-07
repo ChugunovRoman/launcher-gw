@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { providersWasInited } from "../store/main";
+  import { appConfig, providersWasInited, showDlgMaxPerformancePresetWarning } from "../store/main";
   import { LangType, RenderType } from "../consts";
   import { BiMap } from "../utils/BiMap";
 
@@ -21,6 +21,8 @@
     [RenderType.RendererRgl, "renderer_rgl"],
   ]);
 
+  const MAX_PERFORMANCE_PRESET_ID = "max_performance";
+
   let saving = $state(false);
   let saving2 = $state(false);
 
@@ -32,6 +34,9 @@
   let vsyncEnabled = $state(true);
   let selectedLang = $state(langMap.getValue(LangType.Rus) || "");
   let selectedRenderer = $state(renderersMap.getValue(RenderType.RendererR4) || "");
+  let presets = $state<IndexPreset[]>([]);
+  let selectedPresetId = $state("");
+  let applyPresetOnLaunch = $state(true);
 
   // Флаги
   let uiDebug = $state(false);
@@ -58,6 +63,12 @@
     launchArgs = "";
   }
 
+  async function handlePresetChange() {
+    if (selectedPresetId !== MAX_PERFORMANCE_PRESET_ID) return;
+    if ($appConfig.hide_max_perf_preset_warning) return;
+    $showDlgMaxPerformancePresetWarning = true;
+  }
+
   async function handleSave() {
     const runParams: RunParams = {
       cmd_params: launchArgs,
@@ -80,6 +91,8 @@
       show_fps: showFps,
       show_ids: showIds,
       font_legacy: fontLegacy,
+      selected_preset_id: selectedPresetId,
+      apply_preset_on_launch: applyPresetOnLaunch,
     };
     await invoke<void>("update_run_params", { runParams });
     saving = true;
@@ -90,7 +103,8 @@
 
   $effect(() => {
     if ($providersWasInited) {
-      invoke<AppConfig>("get_config").then((config) => {
+      Promise.all([invoke<AppConfig>("get_config"), invoke<IndexPreset[]>("get_presets")]).then(([config, loadedPresets]) => {
+        presets = loadedPresets;
         resolutions = config.vid_modes;
         latestResolutions = config.vid_mode_latest;
         launchArgs = config.run_params.cmd_params;
@@ -113,6 +127,8 @@
         showFps = config.run_params.show_fps;
         showIds = config.run_params.show_ids;
         fontLegacy = config.run_params.font_legacy;
+        selectedPresetId = config.run_params.selected_preset_id || "";
+        applyPresetOnLaunch = config.run_params.apply_preset_on_launch;
       });
     }
   });
@@ -177,6 +193,27 @@
               </label>
             </div>
           </div>
+          {#if presets.length > 0}
+            <div class="opt">
+              <span>
+                {$_("app.params.preset")}
+              </span>
+              <div class="options-row">
+                <label class="checkbox-label">
+                  <select bind:value={selectedPresetId} onchange={handlePresetChange}>
+                    <option value="" disabled>{$_("app.presets.placeholder")}</option>
+                    {#each presets as preset}
+                      <option value={preset.id}>{$_(`app.presets.${preset.id}`)}</option>
+                    {/each}
+                  </select>
+                </label>
+              </div>
+            </div>
+            <label class="checkbox-label checkbox-label-preset-toggle">
+              <input type="checkbox" bind:checked={applyPresetOnLaunch} />
+              <span>{$_("app.params.applyPresetOnLaunch")}</span>
+            </label>
+          {/if}
 
           <div class="opt">
             <span>
@@ -476,6 +513,11 @@
   }
   .checkbox-label:hover {
     cursor: pointer;
+  }
+
+  .checkbox-label-preset-toggle {
+    justify-content: center;
+    margin-bottom: 14px;
   }
 
   /* Скрыть стандартный чекбокс */

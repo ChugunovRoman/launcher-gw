@@ -23,20 +23,13 @@ mod subst_workaround {
   // lower letters that often map to removable media). find() short-circuits,
   // so on a typical system this only touches 'Z'.
   fn find_free_drive_letter() -> Option<char> {
-    ('D'..='Z')
-      .rev()
-      .find(|&letter| !Path::new(&format!("{}:\\", letter)).exists())
+    ('D'..='Z').rev().find(|&letter| !Path::new(&format!("{}:\\", letter)).exists())
   }
 
   // Mount `target` at a free drive letter via `subst` and return that letter.
   pub fn setup_for(target: &str) -> std::io::Result<char> {
-    let drive = find_free_drive_letter().ok_or_else(|| {
-      std::io::Error::new(std::io::ErrorKind::Other, "no free drive letter available for subst")
-    })?;
-    let output = Command::new("subst")
-      .arg(format!("{}:", drive))
-      .arg(target)
-      .output()?;
+    let drive = find_free_drive_letter().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no free drive letter available for subst"))?;
+    let output = Command::new("subst").arg(format!("{}:", drive)).arg(target).output()?;
     if !output.status.success() {
       let stderr = String::from_utf8_lossy(&output.stderr);
       return Err(std::io::Error::new(
@@ -49,10 +42,7 @@ mod subst_workaround {
 
   // Unmount a previously created subst drive. Best-effort; errors are ignored.
   pub fn remove(drive: char) {
-    let _ = Command::new("subst")
-      .arg(format!("{}:", drive))
-      .arg("/D")
-      .output();
+    let _ = Command::new("subst").arg(format!("{}:", drive)).arg("/D").output();
   }
 }
 
@@ -187,21 +177,14 @@ fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, instal
     std::thread::sleep(Duration::from_millis(50));
   }
 
-  log::warn!(
-    "resolve_engine_pid: engine not found; falling back to wrapper pid {}",
-    wrapper_pid
-  );
+  log::warn!("resolve_engine_pid: engine not found; falling back to wrapper pid {}", wrapper_pid);
   wrapper_pid
 }
 
 /// Whether a process with the given pid is still running (best-effort).
 fn pid_alive(pid: u32) -> bool {
   let mut system = System::new();
-  system.refresh_processes_specifics(
-    ProcessesToUpdate::Some(&[Pid::from(pid as usize)]),
-    true,
-    ProcessRefreshKind::nothing(),
-  );
+  system.refresh_processes_specifics(ProcessesToUpdate::Some(&[Pid::from(pid as usize)]), true, ProcessRefreshKind::nothing());
   system.process(Pid::from(pid as usize)).is_some()
 }
 
@@ -218,7 +201,7 @@ pub async fn run_game(
   // the launch path does sync fs work (user.ltx), process spawning and up to
   // ~2s of engine pid polling — holding the lock through all of that froze
   // every other config command for the whole launch sequence.
-  let (version, run_params_snapshot, profile_for_launch) = {
+  let (version, run_params_snapshot, profile_for_launch, provider_id_for_launch) = {
     let config_guard = state.lock().await;
 
     let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false)).await?;
@@ -231,7 +214,12 @@ pub async fn run_game(
       None
     };
 
-    (version, config_guard.run_params.clone(), profile_for_launch)
+    (
+      version,
+      config_guard.run_params.clone(),
+      profile_for_launch,
+      config_guard.selected_provider_id.clone(),
+    )
   };
 
   let target_path = version.installed_path.clone();
@@ -248,6 +236,7 @@ pub async fn run_game(
     &user_ltx_path,
     &tmp_ltx_path,
     &run_params_snapshot,
+    provider_id_for_launch.as_deref(),
     &keybind_manager,
     profile_for_launch.as_deref(),
   )
@@ -288,12 +277,7 @@ pub async fn run_game(
   // exist ONLY on the command line — they cannot be expressed via user.ltx.
   // The wrapper always exits 0 right after spawning the engine (with or without
   // args); resolve_engine_pid finds the real engine PID after that quick exit.
-  log::info!(
-    "Start game exe: {:?} with params: {:?} target_path: {:?}",
-    &exe,
-    &run_params,
-    target_path
-  );
+  log::info!("Start game exe: {:?} with params: {:?} target_path: {:?}", &exe, &run_params, target_path);
 
   // Direct xray-engine launches (tiers 2 and 5) resolve $fs_root$ from the CWD
   // via the ANSI Win32 API and decode it as UTF-8, so a non-ASCII CWD corrupts
@@ -363,11 +347,9 @@ pub async fn run_game(
 
   let installed_for_pid = installed_path.clone();
   let cwd_for_pid = effective_cwd.clone();
-  let mut engine_pid = tokio::task::spawn_blocking(move || {
-    resolve_engine_pid(wrapper_pid, is_xray_engine, &cwd_for_pid, &installed_for_pid)
-  })
-  .await
-  .map_err(|e| e.to_string())?;
+  let mut engine_pid = tokio::task::spawn_blocking(move || resolve_engine_pid(wrapper_pid, is_xray_engine, &cwd_for_pid, &installed_for_pid))
+    .await
+    .map_err(|e| e.to_string())?;
 
   // A Stalker-* wrapper stub may exit immediately with code 0 without
   // starting the engine when spawned via CreateProcess from the launcher
@@ -377,9 +359,7 @@ pub async fn run_game(
   // a non-ASCII CWD needs the subst workaround which is tied to the wrapper
   // decision above.
   if !is_xray_engine && engine_pid == wrapper_pid && effective_cwd.to_string_lossy().is_ascii() {
-    let wrapper_still_running = tokio::task::spawn_blocking(move || pid_alive(wrapper_pid))
-      .await
-      .unwrap_or(false);
+    let wrapper_still_running = tokio::task::spawn_blocking(move || pid_alive(wrapper_pid)).await.unwrap_or(false);
 
     if wrapper_still_running {
       log::info!("launch: wrapper {} is still running (launcher UI?); keeping its pid", wrapper_pid);
@@ -447,11 +427,7 @@ pub async fn run_game(
         let mut system = System::new();
         let pid_sys = Pid::from(wait_pid as usize);
         loop {
-          system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid_sys]),
-            true,
-            ProcessRefreshKind::nothing(),
-          );
+          system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid_sys]), true, ProcessRefreshKind::nothing());
           if !system.processes().contains_key(&pid_sys) {
             break;
           }
@@ -497,10 +473,7 @@ pub fn open_explorer(path: String, createDir: Option<bool>) -> Result<(), String
 
   #[cfg(target_os = "windows")]
   {
-    Command::new("explorer")
-      .arg(path)
-      .spawn()
-      .map_err(|e| e.to_string())?;
+    Command::new("explorer").arg(path).spawn().map_err(|e| e.to_string())?;
   }
 
   #[cfg(target_os = "macos")]
@@ -510,10 +483,7 @@ pub fn open_explorer(path: String, createDir: Option<bool>) -> Result<(), String
 
   #[cfg(target_os = "linux")]
   {
-    Command::new("xdg-open")
-      .arg(path)
-      .spawn()
-      .map_err(|e| e.to_string())?;
+    Command::new("xdg-open").arg(path).spawn().map_err(|e| e.to_string())?;
   }
 
   Ok(())
