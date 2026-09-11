@@ -94,20 +94,45 @@ fn resolve_active_version(config: &AppConfig) -> Option<Version> {
     });
   }
 
-  if let Some(name) = &config.selected_version {
-    if let Some(v) = config.installed_versions.get(name) {
-      return Some(v.clone());
-    }
-    if let Some(v) = config.versions.iter().find(|v| &v.name == name) {
-      return Some(v.clone());
-    }
-  }
+  let candidate = config
+    .selected_version
+    .as_deref()
+    .and_then(|name| find_version_by_name(&config.installed_versions, &config.versions, name))
+    .or_else(|| {
+      if config.installed_versions.len() == 1 {
+        config.installed_versions.values().next()
+      } else {
+        None
+      }
+    });
 
-  if config.installed_versions.len() == 1 {
-    return config.installed_versions.values().next().cloned();
-  }
+  // Never hand back a version without an install path: every caller joins it
+  // into a file path, and an empty base silently produces a *relative* one
+  // (user.ltx landing in `appdata/` next to the launcher, alife.ltx skipped
+  // as "not found") instead of touching the real game directory.
+  candidate.filter(|v| !v.installed_path.is_empty()).cloned()
+}
 
-  None
+/// Look up a version by `selected_version`, which stores the version *name*.
+///
+/// `installed_versions` is keyed by `path` (spaces replaced with dashes), so a
+/// name like "Global War Dev" never matches the key "Global-War-Dev" — hence
+/// the search over values by both fields before the key lookup. Remote entries
+/// from `versions` are accepted only when they carry an install path: the
+/// release list stores `installed_path: ""` for versions that are not
+/// installed locally.
+///
+/// Same lookup order as `resolve_version_for_launch` (handlers/process.rs).
+fn find_version_by_name<'a>(
+  installed_versions: &'a std::collections::HashMap<String, Version>,
+  versions: &'a [Version],
+  name: &str,
+) -> Option<&'a Version> {
+  installed_versions
+    .values()
+    .find(|v| v.name == name || v.path == name)
+    .or_else(|| installed_versions.get(name))
+    .or_else(|| versions.iter().find(|v| (v.name == name || v.path == name) && !v.installed_path.is_empty()))
 }
 
 async fn load_presets(provider_id: Option<&str>) -> Vec<IndexPreset> {
@@ -309,5 +334,56 @@ fn render_to_ltx(renderer: crate::configs::AppConfig::RenderType) -> String {
     crate::configs::AppConfig::RenderType::RendererR3 => "renderer_r3".to_string(),
     crate::configs::AppConfig::RenderType::RendererR4 => "renderer_r4".to_string(),
     crate::configs::AppConfig::RenderType::RendererRgl => "renderer_rgl".to_string(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::collections::HashMap;
+
+  fn version(name: &str, path: &str, installed_path: &str) -> Version {
+    Version {
+      id: 0,
+      name: name.to_string(),
+      path: path.to_string(),
+      installed_path: installed_path.to_string(),
+      engine_path: None,
+      fsgame_path: None,
+      userltx_path: None,
+      exe_path: None,
+      download_path: String::new(),
+      installed_updates: vec![],
+      is_local: true,
+      manifest: None,
+    }
+  }
+
+  const INSTALL_DIR: &str = r"D:\Games\GlobalWar\versions\Global-War-Dev";
+
+  #[test]
+  fn finds_installed_version_by_name_when_map_is_keyed_by_path() {
+    // `selected_version` stores "Global War Dev", the map key is "Global-War-Dev".
+    let mut installed = HashMap::new();
+    installed.insert(
+      "Global-War-Dev".to_string(),
+      version("Global War Dev", "Global-War-Dev", INSTALL_DIR),
+    );
+    // The remote release list holds the same name with an empty install path.
+    let remote = vec![version("Global War Dev", "Global-War-Dev", "")];
+
+    let by_name = find_version_by_name(&installed, &remote, "Global War Dev").expect("lookup by name");
+    assert_eq!(by_name.installed_path, INSTALL_DIR);
+
+    let by_path = find_version_by_name(&installed, &remote, "Global-War-Dev").expect("lookup by path");
+    assert_eq!(by_path.installed_path, INSTALL_DIR);
+  }
+
+  #[test]
+  fn skips_remote_entries_without_install_path() {
+    // Not installed locally: joining "" would yield a relative ltx path.
+    let remote = vec![version("Global War Dev", "Global-War-Dev", "")];
+
+    assert!(find_version_by_name(&HashMap::new(), &remote, "Global War Dev").is_none());
   }
 }
