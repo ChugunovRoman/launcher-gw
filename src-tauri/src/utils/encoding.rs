@@ -162,3 +162,12 @@ pub fn read_cp1251_file<P: AsRef<Path>>(path: P) -> Result<String> {
 
   Ok(res.into_owned())
 }
+
+/// Encode a string into Windows-1251. Unencodable characters are an error.
+pub fn encode_cp1251(text: &str) -> Result<Vec<u8>> {
+  let (bytes, _encoding_used, has_errors) = WINDOWS_1251.encode(text);
+  if has_errors {
+    bail!("Ошибка кодирования в cp1251: строка содержит непредставимые символы");
+  }
+  Ok(bytes.into_owned())
+}

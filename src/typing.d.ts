@@ -100,6 +100,7 @@ declare interface FileProgress {
 declare interface IndexPreset {
   id: string;
   options: Dict<string>;
+  alife: Dict<string>;
 }
 declare interface RunParams {
   cmd_params: string;

@@ -1,3 +1,4 @@
+pub mod AlifeConfig;
 pub mod AppConfig;
 pub mod GameConfig;
 
@@ -13,5 +14,15 @@ pub fn atomic_write(path: &str, data: &str) -> Result<()> {
   let tmp_path = format!("{}.tmp", path);
   std::fs::write(&tmp_path, data).with_context(|| format!("Failed to write temp file: {}", tmp_path))?;
   std::fs::rename(&tmp_path, path).with_context(|| format!("Failed to replace config file: {}", path))?;
+  Ok(())
+}
+
+/// Byte-oriented variant of `atomic_write` (needed for cp1251 files that must
+/// not round-trip through lossy UTF-8 text).
+pub fn atomic_write_bytes<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> Result<()> {
+  let path = path.as_ref();
+  let tmp_path = path.with_extension("ltx.tmp");
+  std::fs::write(&tmp_path, data).with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
+  std::fs::rename(&tmp_path, path).with_context(|| format!("Failed to replace config file: {}", path.display()))?;
   Ok(())
 }

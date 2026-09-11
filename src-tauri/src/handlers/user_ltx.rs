@@ -6,7 +6,7 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 
 use crate::{
-  configs::{AppConfig::AppConfig, AppConfig::Version, GameConfig::GameConfig, RunParams, TmpLtx, UserLtx},
+  configs::{AlifeConfig::AlifeConfig, AppConfig::AppConfig, AppConfig::Version, GameConfig::GameConfig, RunParams, TmpLtx, UserLtx},
   consts::*,
   service::{get_release::ServiceGetRelease, index::IndexPreset, keybind_manager::KeybindManager, main::Service},
   utils::resources::game_exe,
@@ -49,6 +49,29 @@ pub fn resolve_ltx_paths(config: &AppConfig) -> Option<(PathBuf, PathBuf)> {
   };
   let tmp = installed.join(APPDATA_DIR).join(TMP_LTX);
   Some((user, tmp))
+}
+
+/// Game root for the version: the directory holding fsgame.ltx when set
+/// manually, otherwise the install directory. Matches the CWD picked by
+/// `resolve_launch_target` (handlers/process.rs).
+pub fn resolve_game_root(version: &Version) -> PathBuf {
+  if let Some(fsgame) = version.fsgame_path.as_ref() {
+    if let Some(parent) = Path::new(fsgame).parent().filter(|p| !p.as_os_str().is_empty()) {
+      return parent.to_path_buf();
+    }
+  }
+  PathBuf::from(&version.installed_path)
+}
+
+/// Path to gamedata/configs/alife.ltx of the active version.
+pub fn resolve_alife_ltx_path(config: &AppConfig) -> Option<PathBuf> {
+  let version = resolve_active_version(config)?;
+  Some(alife_ltx_path_in(&resolve_game_root(&version)))
+}
+
+/// gamedata/configs/alife.ltx inside the given game root.
+pub fn alife_ltx_path_in(game_root: &Path) -> PathBuf {
+  game_root.join(GAMEDATA_DIR).join(CONFIGS_DIR).join(ALIFE_LTX)
 }
 
 fn resolve_active_version(config: &AppConfig) -> Option<Version> {
@@ -98,13 +121,19 @@ async fn load_presets(provider_id: Option<&str>) -> Vec<IndexPreset> {
   }
 }
 
-async fn apply_selected_preset(ltx: &mut GameConfig, run_params: &RunParams, provider_id: Option<&str>) {
+/// Find the selected preset in the index. `None` — applying is disabled,
+/// no preset is selected, the index is unavailable or the preset id is unknown.
+async fn load_selected_preset(run_params: &RunParams, provider_id: Option<&str>) -> Option<IndexPreset> {
   if !run_params.apply_preset_on_launch || run_params.selected_preset_id.is_empty() {
-    return;
+    return None;
   }
 
   let presets = load_presets(provider_id).await;
-  let Some(preset) = presets.iter().find(|p| p.id == run_params.selected_preset_id) else {
+  presets.into_iter().find(|p| p.id == run_params.selected_preset_id)
+}
+
+async fn apply_selected_preset(ltx: &mut GameConfig, run_params: &RunParams, provider_id: Option<&str>) {
+  let Some(preset) = load_selected_preset(run_params, provider_id).await else {
     return;
   };
 
@@ -161,11 +190,56 @@ pub async fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<(), S
   Ok(())
 }
 
+/// Write the selected preset's alife settings into gamedata/configs/alife.ltx.
+///
+/// The file is NOT created when missing: the engine reads some keys of the
+/// [alife] section via `r_float`/`r_u32` with an assert, and a file holding
+/// only the preset keys would crash the game at startup.
+pub async fn apply_preset_to_alife_ltx(alife_path: &Path, run_params: &RunParams, provider_id: Option<&str>) -> Result<(), String> {
+  let Some(preset) = load_selected_preset(run_params, provider_id).await else {
+    return Ok(());
+  };
+
+  if preset.alife.is_empty() {
+    return Ok(());
+  }
+
+  let Some(mut ltx) = AlifeConfig::load(alife_path).map_err(|e| e.to_string())? else {
+    log::warn!("apply_preset_to_alife_ltx: файл не найден, пропуск: {:?}", alife_path);
+    return Ok(());
+  };
+
+  let mut applied = 0usize;
+  for (key, value) in &preset.alife {
+    if ltx.set_in_section(ALIFE_SECTION, key, value) {
+      applied += 1;
+    } else {
+      log::warn!("apply_preset_to_alife_ltx: нет секции [{}] в {:?}", ALIFE_SECTION, alife_path);
+      return Ok(());
+    }
+  }
+
+  ltx.save().map_err(|e| e.to_string())?;
+  log::info!("Применён preset '{}': {} ключей alife в {:?}", preset.id, applied, alife_path);
+  Ok(())
+}
+
+/// Same as above, but the path is resolved from the active version in the config.
+pub async fn apply_preset_to_version_alife_ltx(config: &AppConfig) -> Result<(), String> {
+  let Some(alife_path) = resolve_alife_ltx_path(config) else {
+    log::warn!("apply_preset_to_version_alife_ltx: активная версия не определена; пропуск alife.ltx");
+    return Ok(());
+  };
+
+  apply_preset_to_alife_ltx(&alife_path, &config.run_params, config.selected_provider_id.as_deref()).await
+}
+
 /// Pre-launch: patch run_params (+ optional keybind profile) into the target version's ltx files.
 /// Does not touch files after the game exits.
 pub async fn prepare_ltx_for_launch(
   user_ltx_path: &Path,
   tmp_ltx_path: &Path,
+  alife_ltx_path: &Path,
   run_params: &RunParams,
   provider_id: Option<&str>,
   keybind_manager: &KeybindManager,
@@ -173,6 +247,11 @@ pub async fn prepare_ltx_for_launch(
 ) -> Result<(), String> {
   apply_run_params_to_ltx(user_ltx_path, run_params, provider_id).await?;
   apply_run_params_to_ltx(tmp_ltx_path, run_params, provider_id).await?;
+
+  // alife.ltx errors must not block the game launch.
+  if let Err(e) = apply_preset_to_alife_ltx(alife_ltx_path, run_params, provider_id).await {
+    log::warn!("prepare_ltx_for_launch: не удалось записать alife.ltx: {}", e);
+  }
 
   if let Some(profile_name) = selected_profile {
     let profiles = keybind_manager.get_profiles().await;

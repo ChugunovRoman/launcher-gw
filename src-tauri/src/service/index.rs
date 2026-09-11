@@ -86,8 +86,12 @@ pub struct ReleaseIndexEntry {
 #[serde(rename_all = "snake_case")]
 pub struct IndexPreset {
   pub id: String,
+  /// `key value` pairs for appdata/user.ltx (written as-is).
   #[serde(default)]
   pub options: HashMap<String, String>,
+  /// `key = value` pairs for gamedata/configs/alife.ltx, section [alife] (written as-is).
+  #[serde(default)]
+  pub alife: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

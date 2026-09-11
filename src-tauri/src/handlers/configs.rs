@@ -36,7 +36,14 @@ pub async fn update_run_params(app: tauri::AppHandle, run_params: RunParams) -> 
     config_guard.save().map_err(|e| e.to_string())?;
     config_guard.clone()
   };
-  handlers::user_ltx::apply_run_params_to_version_ltx(&config_snapshot).await
+  handlers::user_ltx::apply_run_params_to_version_ltx(&config_snapshot).await?;
+
+  // alife.ltx is non-critical: its failure must not break saving the settings.
+  if let Err(e) = handlers::user_ltx::apply_preset_to_version_alife_ltx(&config_snapshot).await {
+    log::warn!("update_run_params: не удалось записать alife.ltx: {}", e);
+  }
+
+  Ok(())
 }
 
 #[tauri::command]

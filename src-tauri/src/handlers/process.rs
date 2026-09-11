@@ -231,10 +231,12 @@ pub async fn run_game(
     None => Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX),
   };
   let tmp_ltx_path = Path::new(&target_path).join(APPDATA_DIR).join(TMP_LTX);
+  let alife_ltx_path = crate::handlers::user_ltx::alife_ltx_path_in(&cwd);
 
   crate::handlers::user_ltx::prepare_ltx_for_launch(
     &user_ltx_path,
     &tmp_ltx_path,
+    &alife_ltx_path,
     &run_params_snapshot,
     provider_id_for_launch.as_deref(),
     &keybind_manager,
