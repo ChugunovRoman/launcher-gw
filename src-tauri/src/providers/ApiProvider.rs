@@ -50,7 +50,6 @@ pub trait ApiProvider: Send + Sync {
   ) -> Result<()>;
 
   async fn find_issue(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>>;
-  async fn find_user(&self, repo_id: &str, uuid: &str) -> Result<Option<Issue>>;
 
   async fn create_tag(&self, repo_id: &str, tag_name: &str, branch: &str) -> Result<()>;
   async fn create_release(&self, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse>;

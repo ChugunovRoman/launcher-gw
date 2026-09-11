@@ -1,29 +1,28 @@
-use std::time::Duration;
-
 use crate::{
-  configs::AppConfig::AppConfig,
-  consts::{REPO_LAUNCGER_ID, USER_CACHE_TTL_POSITIVE_SECS, USER_CACHE_TTL_NEGATIVE_SECS},
-  service::{dto::{UserData, UserDataCache}, main::Service},
+  service::{dto::UserData, index::{IndexUserData, ReleaseIndex}, main::Service},
 };
 use anyhow::Result;
 
-const USER_CACHE_TTL_POSITIVE: Duration = Duration::from_secs(USER_CACHE_TTL_POSITIVE_SECS);
-const USER_CACHE_TTL_NEGATIVE: Duration = Duration::from_secs(USER_CACHE_TTL_NEGATIVE_SECS);
-
-/// Check the persisted `user_data_cache` in `AppConfig` and return the data
-/// if the TTL has not expired.  Pure local read, no network.
-pub fn cached_user_data(config: &AppConfig) -> Option<UserData> {
-  if let Some(ref cached) = config.user_data_cache {
-    if let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&cached.fetched_at) {
-      let age = chrono::Utc::now() - fetched_at.with_timezone(&chrono::Utc);
-      let ttl = if cached.is_negative { USER_CACHE_TTL_NEGATIVE } else { USER_CACHE_TTL_POSITIVE };
-      if age.to_std().unwrap_or(Duration::ZERO) < ttl {
-        log::info!("cached_user_data: cache hit (negative={}, age={:?})", cached.is_negative, age);
-        return Some(cached.data.clone());
-      }
-    }
+/// Build `UserData` for a specific uuid from an already-loaded release index.
+fn user_data_from_index(index: &ReleaseIndex, uuid: &str) -> UserData {
+  match index.users.get(uuid) {
+    Some(u) => UserData {
+      uuid: uuid.to_string(),
+      flags: u.flags.clone(),
+    },
+    None => UserData::default(),
   }
-  None
+}
+
+/// Synchronous fast path for the startup pre-fill: read the last cached
+/// `index.json` from disk without any network and extract the user flags.
+/// Mirrors the old `AppConfig.user_data_cache` pre-fill, but uses the same
+/// stale-fallback cache as the rest of the index reader.
+pub fn cached_user_data_sync(provider_id: &str, uuid: &str) -> Option<UserData> {
+  let url = crate::service::index::index_raw_url(provider_id).ok()?;
+  let bytes = crate::utils::http_cache::read_body(&url)?;
+  let index: ReleaseIndex = serde_json::from_slice(&bytes).ok()?;
+  Some(user_data_from_index(&index, uuid))
 }
 
 pub trait ServiceClient {
@@ -31,135 +30,69 @@ pub trait ServiceClient {
 }
 
 impl ServiceClient for Service {
+  /// `Err` here means the index itself could not be resolved (no current
+  /// provider, or `load_index` failed with no stale cache to fall back to)
+  /// — a real "we don't know this player's flags" outcome, not merely "not
+  /// found in the index" (that case returns `Ok(UserData::default())`, same
+  /// as an unknown uuid). Callers use the `Err` case to drive the
+  /// `StartupState.user_data` phase instead of assuming success.
   async fn get_user(&self, uuid: String) -> Result<UserData> {
-    // --- Check persisted cache first ---
-    {
-      let cfg = self.config.lock().await;
-      if let Some(data) = cached_user_data(&cfg) {
-        return Ok(data);
-      }
-    }
+    let api = self.api_client.current_provider().map_err(|error| {
+      log::warn!("get_user: provider unavailable: {:?}", error);
+      error
+    })?;
 
-    // --- Cache miss / expired: call the API ---
-    let api = match self.api_client.current_provider() {
-      Ok(data) => data,
-      Err(error) => {
-        log::warn!("get_user: provider unavailable, returning default UserData. Error: {:?}", error);
-        return Ok(UserData::default());
-      }
-    };
+    let index = crate::service::index::load_index(api.id()).await.map_err(|error| {
+      log::warn!("get_user: index unavailable: {:?}", error);
+      error
+    })?;
 
-    let issues = match api.find_user(&REPO_LAUNCGER_ID.to_string(), &uuid).await {
-      Ok(data) => data,
-      Err(error) => {
-        log::warn!("get_user: find_user failed, returning default UserData. Error: {:?}", error);
-        return Ok(UserData::default());
-      }
-    };
-
-    let exact_match = issues.into_iter().find(|i| i.title == uuid);
-
-    let (user_data, is_negative) = match exact_match {
-      Some(issue) => {
-        match serde_json::from_str::<UserData>(&issue.description) {
-          Ok(data) => {
-            log::info!("User FOUND! Flags: {:?}", data.flags);
-            (data, false)
-          }
-          Err(error) => {
-            log::warn!("get_user: cannot parse issue.description as JSON, returning default. Error: {:?}", error);
-            (UserData::default(), true)
-          }
-        }
-      }
-      None => {
-        log::warn!("get_user: UserData not found in issues, returning default");
-        (UserData::default(), true)
-      }
-    };
-
-    // --- Persist to config ---
-    {
-      let mut cfg = self.config.lock().await;
-      cfg.user_data_cache = Some(UserDataCache {
-        data: user_data.clone(),
-        fetched_at: chrono::Utc::now().to_rfc3339(),
-        is_negative,
-      });
-      let _ = cfg.save();
-    }
-
-    Ok(user_data)
+    Ok(user_data_from_index(&index, &uuid))
   }
 }
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashMap;
+
   use super::*;
 
-  fn make_config(cache: Option<UserDataCache>) -> AppConfig {
-    // Deserialize from an empty object: every field has a serde default, and
-    // this skips AppConfig::default() which probes display resolutions via
-    // winit (panics outside the main thread on Windows).
-    let mut cfg: AppConfig = serde_json::from_str("{}").unwrap();
-    cfg.user_data_cache = cache;
-    cfg
-  }
-
-  fn cache(fetched_at: chrono::DateTime<chrono::Utc>, is_negative: bool) -> UserDataCache {
-    UserDataCache {
-      data: UserData {
-        uuid: "test-uuid".to_string(),
+  fn sample_index() -> ReleaseIndex {
+    let mut users = HashMap::new();
+    users.insert(
+      "6e0ead30-48de-4421-99db-cc8b381ad0b3".to_string(),
+      IndexUserData {
         flags: vec!["allowPackMod".to_string()],
       },
-      fetched_at: fetched_at.to_rfc3339(),
-      is_negative,
+    );
+
+    ReleaseIndex {
+      schema: 1,
+      generated_at: chrono::Utc::now().to_rfc3339(),
+      launcher: crate::service::index::LauncherIndex {
+        version: "0.0.0".to_string(),
+        assets: vec![],
+        bg_etag: None,
+      },
+      presets: vec![],
+      users,
+      releases: vec![],
     }
   }
 
   #[test]
-  fn cached_user_data_positive_within_ttl() {
-    let cfg = make_config(Some(cache(chrono::Utc::now(), false)));
-    let data = cached_user_data(&cfg);
-    assert!(data.is_some());
-    assert_eq!(data.unwrap().uuid, "test-uuid");
+  fn user_data_from_index_known_uuid() {
+    let index = sample_index();
+    let data = user_data_from_index(&index, "6e0ead30-48de-4421-99db-cc8b381ad0b3");
+    assert_eq!(data.uuid, "6e0ead30-48de-4421-99db-cc8b381ad0b3");
+    assert_eq!(data.flags, vec!["allowPackMod".to_string()]);
   }
 
   #[test]
-  fn cached_user_data_positive_expired() {
-    // 25h ago — beyond the 24h positive TTL.
-    let stale = chrono::Utc::now() - chrono::Duration::hours(25);
-    let cfg = make_config(Some(cache(stale, false)));
-    assert!(cached_user_data(&cfg).is_none());
-  }
-
-  #[test]
-  fn cached_user_data_negative_within_ttl() {
-    // Negative results use a shorter 6h TTL — 3h old is still valid.
-    let fresh_negative = chrono::Utc::now() - chrono::Duration::hours(3);
-    let cfg = make_config(Some(cache(fresh_negative, true)));
-    assert!(cached_user_data(&cfg).is_some());
-  }
-
-  #[test]
-  fn cached_user_data_negative_expired() {
-    // 7h old negative — beyond the 6h TTL.
-    let stale_negative = chrono::Utc::now() - chrono::Duration::hours(7);
-    let cfg = make_config(Some(cache(stale_negative, true)));
-    assert!(cached_user_data(&cfg).is_none());
-  }
-
-  #[test]
-  fn cached_user_data_no_cache() {
-    let cfg = make_config(None);
-    assert!(cached_user_data(&cfg).is_none());
-  }
-
-  #[test]
-  fn cached_user_data_malformed_timestamp() {
-    let mut bad = cache(chrono::Utc::now(), false);
-    bad.fetched_at = "not-a-date".to_string();
-    let cfg = make_config(Some(bad));
-    assert!(cached_user_data(&cfg).is_none());
+  fn user_data_from_index_unknown_uuid() {
+    let index = sample_index();
+    let data = user_data_from_index(&index, "unknown-uuid");
+    assert_eq!(data.uuid, "");
+    assert!(data.flags.is_empty());
   }
 }

@@ -151,11 +151,6 @@ declare interface UserData {
   uuid: string;
   flags: string[];
 }
-declare interface UserDataCache {
-  data: UserData;
-  fetched_at: string;
-  is_negative: boolean;
-}
 
 declare interface AppConfig {
   first_run: boolean;
@@ -187,7 +182,6 @@ declare interface AppConfig {
   progress_upload?: VersionProgressUpload;
   progress_download: Dict<VersionProgress>;
   tracked_game?: TrackedGame | null;
-  user_data_cache?: UserDataCache | null;
   bg_etag?: string | null;
 }
 

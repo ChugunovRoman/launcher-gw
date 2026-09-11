@@ -264,11 +264,6 @@ pub struct AppConfig {
   #[serde(default)]
   pub tokens: HashMap<String, String>,
 
-  /// Cached `get_user` result so the Search API is not called on every launch.
-  /// 24 h TTL for positive results, 6 h for negative (no issue found).
-  #[serde(default)]
-  pub user_data_cache: Option<crate::service::dto::UserDataCache>,
-
   /// ETag of the launcher background image (bg.jpg) served to the player.
   /// Compared with `index.launcher.bg_etag` — if they match the bg is read
   /// from disk with zero network requests.
@@ -324,7 +319,6 @@ impl Default for AppConfig {
       versions: vec![],
       progress_download: HashMap::new(),
       tokens: HashMap::new(),
-      user_data_cache: None,
       bg_etag: None,
       hide_max_perf_preset_warning: false,
       tracked_game: None,

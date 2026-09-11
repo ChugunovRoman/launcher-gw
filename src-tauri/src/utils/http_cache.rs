@@ -399,6 +399,37 @@ pub fn read_body(url: &str) -> Option<Vec<u8>> {
     std::fs::read(dir.join(format!("{}.body", hash_url(url)))).ok()
 }
 
+/// Overwrite the on-disk cache entry for `url` with `bytes`, as if it had
+/// just been fetched over the network (`fetched_at = now`, no ETag).
+///
+/// Used right after writing `bytes` to the remote resource itself (e.g.
+/// committing a new `index.json`) so a `fetch` call made moments later sees
+/// the fresh content immediately — without waiting out the TTL and without
+/// depending on the origin's own CDN having already propagated the commit
+/// (raw.githubusercontent.com in particular can lag a push by a few seconds).
+/// No ETag is stored, so the next real revalidation after TTL expiry falls
+/// back to a plain GET instead of a conditional one — a one-time cost.
+pub fn store(url: &str, bytes: &[u8]) -> Result<()> {
+    let dir = cache_dir()?;
+    let key = hash_url(url);
+    let meta_path = dir.join(format!("{}.meta.json", key));
+    let body_path = dir.join(format!("{}.body", key));
+
+    let tmp_body = body_path.with_extension("body.tmp");
+    fs::write(&tmp_body, bytes)?;
+    fs::rename(&tmp_body, &body_path)?;
+
+    write_meta(&meta_path, &CacheMeta {
+        etag: None,
+        fetched_at: Utc::now().to_rfc3339(),
+        url: url.to_string(),
+    })?;
+
+    enforce_size_limit(dir)?;
+
+    Ok(())
+}
+
 /// Read the stored ETag for a URL from disk.
 pub fn read_etag(url: &str) -> Option<String> {
     let dir = cache_dir().ok()?;

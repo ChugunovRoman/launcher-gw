@@ -70,11 +70,9 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let config = AppConfig::load_or_create(app.handle())?;
   http_cache::init(app.handle())?;
 
-  // Pre-fill user_data from the persisted cache (if TTL is still valid)
-  // so the frontend can call allow_pack_mod immediately, before network init.
-  let cached_ud = crate::service::client::cached_user_data(&config);
-  // Capture the saved provider selection before the config is moved into the Arc.
+  // Capture the saved provider selection and uuid before the config is moved into the Arc.
   let saved_provider_id = config.selected_provider_id.clone();
+  let client_uuid = config.client_uuid.clone();
 
   let config_arc = Arc::new(Mutex::new(config));
   let config_arc_clone = config_arc.clone();
@@ -107,6 +105,16 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   // Register providers locally (sync, no network) so get_provider_ids etc.
   // work immediately for the frontend bootstrap.
   service.register_providers_local(saved_provider_id.as_deref());
+  // Pre-fill user_data from the cached index so the frontend can call
+  // allow_pack_mod immediately, before any network I/O. Use the provider
+  // register_providers_local actually resolved (falls back to "github" when
+  // nothing was saved yet), not the raw saved_provider_id — otherwise a
+  // player who never opened Settings gets no instant value at all.
+  let cached_ud = service
+    .api_client
+    .current_provider()
+    .ok()
+    .and_then(|api| crate::service::client::cached_user_data_sync(api.id(), &client_uuid));
   // Pre-fill provider stats with placeholders (available=false) so Settings
   // can list both providers right away; real statuses arrive after ping.
   let placeholder_stats: Vec<(&'static str, crate::providers::dto::ProviderStatus)> = service
@@ -350,12 +358,16 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
           let guard = config_arc_clone_b.lock().await;
           (guard.client_uuid.clone(), guard.tokens.clone())
         };
-        let user_data = {
+        let user_data_result = {
           let svc = service_clone.lock().await;
           if let Err(e) = svc.set_tokens(data.1).await {
             log::warn!("set_tokens failed: {}", e);
           }
-          svc.get_user(data.0).await.unwrap_or_default()
+          svc.get_user(data.0).await
+        };
+        let (user_data, user_data_error) = match user_data_result {
+          Ok(data) => (data, None),
+          Err(e) => (UserData::default(), Some(e.to_string())),
         };
         // Migrate legacy XOR-encoded tokens to the DPAPI-backed storage.
         {
@@ -386,10 +398,12 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
         log::info!("User data fetched");
         let _ = app_handle_bg_b.emit("user-data-loaded", ());
-        // When providers are unreachable, get_user() returned a default —
-        // reflect that in the phase instead of a false Ok.
+        // Reflect get_user()'s own outcome, not the provider ping result:
+        // the index (and therefore user flags) can be reachable via its own
+        // stale-fallback cache even when every provider just failed to ping
+        // (e.g. github.com unresolvable but raw.githubusercontent.com fine).
         startup_tracker_b.set(|s| {
-          s.user_data = match &providers_error {
+          s.user_data = match &user_data_error {
             Some(err) => crate::service::startup_state::Phase::Error(err.clone()),
             None => crate::service::startup_state::Phase::Ok,
           };

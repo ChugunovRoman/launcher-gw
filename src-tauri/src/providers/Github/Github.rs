@@ -251,9 +251,6 @@ impl ApiProvider for Github {
   async fn find_issue(&self, repo_id: &str, search_params: HashMap<String, String>) -> Result<Vec<Issue>> {
     __find_issue(self, repo_id, search_params).await
   }
-  async fn find_user(&self, repo_id: &str, uuid: &str) -> Result<Option<Issue>> {
-    __find_user(self, repo_id, uuid).await
-  }
 
   // Repo API
   async fn create_repo(&self, name: &str, description: &str, parent_id: &str) -> Result<CreateRepoResponse> {

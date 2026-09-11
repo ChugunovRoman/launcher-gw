@@ -96,12 +96,21 @@ pub struct IndexPreset {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub struct IndexUserData {
+  #[serde(default)]
+  pub flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ReleaseIndex {
   pub schema: u32,
   pub generated_at: String,
   pub launcher: LauncherIndex,
   #[serde(default)]
   pub presets: Vec<IndexPreset>,
+  #[serde(default)]
+  pub users: HashMap<String, IndexUserData>,
   pub releases: Vec<ReleaseIndexEntry>,
 }
 
@@ -110,7 +119,7 @@ pub struct ReleaseIndex {
 // ---------------------------------------------------------------------------
 
 /// Resolve the raw URL for the static release index of the given provider.
-fn index_raw_url(provider_id: &str) -> Result<String> {
+pub(crate) fn index_raw_url(provider_id: &str) -> Result<String> {
   match provider_id {
     GITHUB_PID => Ok(GITHUB_INDEX_RAW_URL.to_string()),
     GITLAB_PID => {
@@ -157,4 +166,49 @@ pub async fn load_index(provider_id: &str) -> Result<ReleaseIndex> {
   );
 
   Ok(index)
+}
+
+#[cfg(test)]
+mod tests {
+  use std::collections::HashMap;
+
+  use super::*;
+
+  #[test]
+  fn release_index_users_round_trip() {
+    let mut users = HashMap::new();
+    users.insert(
+      "6e0ead30-48de-4421-99db-cc8b381ad0b3".to_string(),
+      IndexUserData {
+        flags: vec!["allowPackMod".to_string()],
+      },
+    );
+
+    let index = ReleaseIndex {
+      schema: INDEX_SCHEMA_VERSION,
+      generated_at: chrono::Utc::now().to_rfc3339(),
+      launcher: LauncherIndex {
+        version: "0.0.0".to_string(),
+        assets: vec![],
+        bg_etag: None,
+      },
+      presets: vec![],
+      users,
+      releases: vec![],
+    };
+
+    let json = serde_json::to_string(&index).unwrap();
+    let parsed: ReleaseIndex = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed.users.len(), 1);
+    let user = parsed.users.get("6e0ead30-48de-4421-99db-cc8b381ad0b3").unwrap();
+    assert_eq!(user.flags, vec!["allowPackMod".to_string()]);
+  }
+
+  #[test]
+  fn release_index_users_default_when_missing() {
+    let json = r#"{"schema":1,"generated_at":"2026-09-11T00:00:00Z","launcher":{"version":"0.0.0","assets":[]},"releases":[]}"#;
+    let parsed: ReleaseIndex = serde_json::from_str(json).unwrap();
+    assert!(parsed.users.is_empty());
+  }
 }

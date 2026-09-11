@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use urlencoding::encode;
 
 use crate::{
-  consts::{GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME, CACHE_TTL_SEARCH_API_SECS},
+  consts::CACHE_TTL_SEARCH_API_SECS,
   providers::{
     Github::{Github::Github, models::*},
     dto::Issue,
@@ -45,20 +45,3 @@ pub async fn __find_issue(s: &Github, _repo_id: &str, search_params: HashMap<Str
   Ok(common)
 }
 
-pub async fn __find_user(s: &Github, repo_id: &str, uuid: &str) -> Result<Option<Issue>> {
-  let search_params = HashMap::from([(
-    "q".to_owned(),
-    format!(
-      "{} in:title repo:{}/{} is:issue author:{}",
-      uuid, MAIN_DEVELOPER_NAME, GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME
-    ),
-  )]);
-
-  let issues = __find_issue(s, repo_id, search_params).await?;
-
-  if issues.len() > 0 {
-    return Ok(Some(issues[0].clone()));
-  }
-
-  Ok(None)
-}

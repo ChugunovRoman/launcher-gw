@@ -46,18 +46,3 @@ pub async fn __find_issue(s: &Gitlab, repo_id: &str, search_params: HashMap<Stri
   Ok(common)
 }
 
-pub async fn __find_user(s: &Gitlab, repo_id: &str, uuid: &str) -> Result<Option<Issue>> {
-  let mut search_params = HashMap::new();
-  search_params.insert("search".to_string(), encode(uuid).to_string());
-  search_params.insert("in".to_string(), "title".to_string());
-
-  let issues = __find_issue(s, repo_id, search_params.clone()).await?;
-
-  // log::debug!("Gitlab __find_user, search_params: {:?} issues: {:?}", &search_params, &issues);
-
-  if issues.len() > 0 {
-    return Ok(Some(issues[0].clone()));
-  }
-
-  Ok(None)
-}

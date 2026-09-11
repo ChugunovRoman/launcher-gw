@@ -60,18 +60,14 @@ pub const INDEX_CACHE_TTL_SECS: u64 = 600; // 10 min
 pub const CACHE_TTL_ORG_REPOS_SECS: u64 = 3600; // 1 hour
 /// Single release metadata (releases/latest, /repos/.../releases).
 pub const CACHE_TTL_RELEASE_SECS: u64 = 600; // 10 min
-/// Search API (/search/issues) — user data and manifest lookup.
+/// Search API (/search/issues) — legacy manifest.json issue lookup.
+/// (User data no longer goes through Search — see `service::client::get_user`,
+/// which reads the `users` map in the static release index instead.)
 pub const CACHE_TTL_SEARCH_API_SECS: u64 = 86400; // 24 hours
 /// Raw files (manifest.json and similar).
 pub const CACHE_TTL_RAW_FILE_SECS: u64 = 600; // 10 min
 /// Launcher background image.
 pub const CACHE_TTL_BACKGROUND_SECS: u64 = 86400; // 24 hours
-
-// User data cache TTLs (persisted in config.json, separate from http_cache).
-/// Positive cache hit (user found with flags).
-pub const USER_CACHE_TTL_POSITIVE_SECS: u64 = 86400; // 24 hours
-/// Negative cache hit (no issue found).
-pub const USER_CACHE_TTL_NEGATIVE_SECS: u64 = 21600; // 6 hours
 
 /// Default git branch used when uploading the manifest and creating a tag.
 /// TODO: this is a temporary crutch. The correct fix is to fetch the repo's

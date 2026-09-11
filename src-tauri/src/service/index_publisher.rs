@@ -10,7 +10,7 @@
 // errors are logged but never abort the finished upload).
 // Also exposed as a manual "Re-publish index" button in the Releases view.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde_json;
@@ -26,7 +26,7 @@ use crate::{
 /// Used for preview in the UI before the dev confirms the commit.
 pub async fn collect_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<String> {
   let index = collect_release_index(api).await?;
-  let index = merge_existing_presets(api, index).await?;
+  let index = merge_existing_dev_managed_fields(api, index).await?;
   serde_json::to_string_pretty(&index).context("index: serialize")
 }
 
@@ -53,6 +53,25 @@ pub async fn commit_index_json(api: &(dyn ApiProvider + Send + Sync), json: &str
       .await
       .context("index: add_file_to_repo (GitHub)")?;
   }
+
+  // Reflect the just-committed content in the local disk cache immediately.
+  // Without this, a `load_index` call within the next INDEX_CACHE_TTL_SECS
+  // (e.g. another publish_index right after a manual commit_index) would see
+  // the OLD cached body and silently overwrite the fields that were just
+  // hand-edited and committed (`presets`, `users`) — the origin's raw-file
+  // CDN can also lag a push by a few seconds, so even a forced re-fetch is
+  // not reliable immediately after commit. Failure here is non-fatal: the
+  // remote commit already succeeded, and the cache will simply revalidate
+  // normally after TTL expiry.
+  match crate::service::index::index_raw_url(api.id()) {
+    Ok(url) => {
+      if let Err(e) = crate::utils::http_cache::store(&url, json.as_bytes()) {
+        log::warn!("commit_index_json: failed to refresh local cache for '{}': {}", url, e);
+      }
+    }
+    Err(e) => log::warn!("commit_index_json: cannot resolve index URL to refresh cache: {}", e),
+  }
+
   Ok(())
 }
 
@@ -221,16 +240,29 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     generated_at: chrono::Utc::now().to_rfc3339(),
     launcher: launcher_index,
     presets: Vec::new(),
+    users: HashMap::new(),
     releases: release_entries,
   })
 }
 
-async fn merge_existing_presets(api: &(dyn ApiProvider + Send + Sync), mut index: ReleaseIndex) -> Result<ReleaseIndex> {
-  let existing = crate::service::index::load_index(api.id()).await;
-  if let Ok(existing_index) = existing {
+async fn merge_existing_dev_managed_fields(api: &(dyn ApiProvider + Send + Sync), index: ReleaseIndex) -> Result<ReleaseIndex> {
+  let existing = crate::service::index::load_index(api.id()).await.ok();
+  Ok(apply_dev_managed_fields(index, existing))
+}
+
+/// Pure merge step, split out of `merge_existing_dev_managed_fields` so it is
+/// testable without a mock `ApiProvider` (the trait has 30+ methods) or any
+/// network/cache I/O: copy the dev-managed fields (`presets`, `users`) from
+/// the previously published index onto a freshly collected one. A freshly
+/// collected index always starts with these fields empty (see
+/// `collect_release_index`) — without this step, every publish would wipe
+/// out presets/user flags that are edited by hand via the raw JSON preview.
+fn apply_dev_managed_fields(mut index: ReleaseIndex, existing: Option<ReleaseIndex>) -> ReleaseIndex {
+  if let Some(existing_index) = existing {
     index.presets = existing_index.presets;
+    index.users = existing_index.users;
   }
-  Ok(index)
+  index
 }
 
 /// Rebuild `index.json` from live API data and commit it to the provider's
@@ -239,7 +271,7 @@ async fn merge_existing_presets(api: &(dyn ApiProvider + Send + Sync), mut index
 pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> {
   log::info!("Publishing release index (provider: {})...", api.id());
   let index = collect_release_index(api).await?;
-  let index = merge_existing_presets(api, index).await?;
+  let index = merge_existing_dev_managed_fields(api, index).await?;
   let content = serde_json::to_string_pretty(&index).context("index: serialize")?;
   commit_index_json(api, &content).await?;
   log::info!("Release index published for '{}' ({} releases)", api.id(), index.releases.len());
@@ -382,4 +414,83 @@ fn order_patches_by_chain(patches: Vec<IndexPatch>) -> Vec<IndexPatch> {
   }
 
   ordered
+}
+
+#[cfg(test)]
+mod dev_managed_fields_tests {
+  use super::*;
+  use std::collections::HashMap;
+
+  fn empty_index() -> ReleaseIndex {
+    ReleaseIndex {
+      schema: INDEX_SCHEMA_VERSION,
+      generated_at: chrono::Utc::now().to_rfc3339(),
+      launcher: LauncherIndex {
+        version: "0.0.0".to_string(),
+        assets: vec![],
+        bg_etag: None,
+      },
+      presets: Vec::new(),
+      users: HashMap::new(),
+      releases: Vec::new(),
+    }
+  }
+
+  #[test]
+  fn copies_presets_and_users_from_existing_index() {
+    let fresh = empty_index();
+
+    let mut existing = empty_index();
+    existing.presets.push(IndexPreset {
+      id: "hardcore".to_string(),
+      options: HashMap::new(),
+      alife: HashMap::new(),
+    });
+    existing.users.insert(
+      "6e0ead30-48de-4421-99db-cc8b381ad0b3".to_string(),
+      IndexUserData {
+        flags: vec!["allowPackMod".to_string()],
+      },
+    );
+
+    let merged = apply_dev_managed_fields(fresh, Some(existing));
+
+    assert_eq!(merged.presets.len(), 1);
+    assert_eq!(merged.presets[0].id, "hardcore");
+    assert_eq!(merged.users.len(), 1);
+    assert_eq!(
+      merged.users.get("6e0ead30-48de-4421-99db-cc8b381ad0b3").unwrap().flags,
+      vec!["allowPackMod".to_string()]
+    );
+  }
+
+  #[test]
+  fn keeps_fields_empty_when_no_existing_index() {
+    // First-ever publish (or the existing index could not be loaded): a
+    // freshly collected index already has empty presets/users, and there is
+    // nothing to merge in — must not panic or fabricate data.
+    let fresh = empty_index();
+    let merged = apply_dev_managed_fields(fresh, None);
+
+    assert!(merged.presets.is_empty());
+    assert!(merged.users.is_empty());
+  }
+
+  #[test]
+  fn fresh_fields_are_fully_replaced_not_merged() {
+    // A freshly collected index that (hypothetically) already carried some
+    // presets/users of its own must still end up with EXACTLY the existing
+    // index's fields, not a union — dev-managed fields are a copy, not a merge.
+    let mut fresh = empty_index();
+    fresh.presets.push(IndexPreset {
+      id: "stale-preset".to_string(),
+      options: HashMap::new(),
+      alife: HashMap::new(),
+    });
+
+    let existing = empty_index();
+    let merged = apply_dev_managed_fields(fresh, Some(existing));
+
+    assert!(merged.presets.is_empty());
+  }
 }
