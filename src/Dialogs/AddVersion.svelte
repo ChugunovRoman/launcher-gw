@@ -9,6 +9,7 @@
   import { join } from "@tauri-apps/api/path";
   import { invoke } from "@tauri-apps/api/core";
   import { selectedVersion } from "../store/upload";
+  import { warnIfTempPath } from "../lib/main";
   import { get } from "svelte/store";
 
   let { maxWidth = "500px" } = $props();
@@ -66,6 +67,8 @@
     }
 
     newVersionPath = selected;
+    // Warn (do not block) when the local version lives in a temp folder.
+    await warnIfTempPath(selected);
     newVersionBinPath = await join(newVersionPath, "bin", "xrEngine.exe");
     const binFileExists = await invoke("check_file_exists", { path: newVersionBinPath });
     if (!binFileExists) {

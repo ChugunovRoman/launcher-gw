@@ -1,6 +1,7 @@
 pub mod client;
 pub mod create_release;
 pub mod dto;
+pub mod game_tracker;
 pub mod files;
 pub mod get_release;
 pub mod index;

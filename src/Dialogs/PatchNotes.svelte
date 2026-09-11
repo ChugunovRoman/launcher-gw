@@ -24,9 +24,13 @@
         )
       : "",
   );
+
+  function handleClose() {
+    console.log("Dlg was closed");
+  }
 </script>
 
-<Modal bind:showModal={$showDlgPatchNotes} maxWidth="90%">
+<Modal bind:showModal={$showDlgPatchNotes} onClose={handleClose} maxWidth="90%">
   {#snippet header()}
     <span class="modal-title">{$_("app.patches.notes")}</span>
   {/snippet}

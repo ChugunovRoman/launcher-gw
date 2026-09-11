@@ -1,5 +1,6 @@
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
+use std::path::Path;
 use std::{
   panic,
   sync::{Arc, Mutex as StdMutex},
@@ -13,6 +14,7 @@ use crate::handlers::patch_install::check_patches_available;
 use crate::handlers::start_download_version::CancelMap;
 use crate::handlers::upload_v2::UploadCancelMap;
 use crate::service::files::ServiceFiles;
+use crate::service::game_tracker::{probe, GameTracker};
 use crate::service::get_release::ServiceGetRelease;
 use crate::service::keybind_manager::KeybindManager;
 use crate::service::unpack::ServiceUnpacker;
@@ -116,7 +118,8 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   wake.start_watcher(5.0);
 
   // Регистрируем всё в стейте
-  app.manage(config_arc);
+  let game_tracker_arc = Arc::new(GameTracker::new());
+  app.manage(config_arc.clone());
   app.manage(Arc::new(Mutex::new(user_ltx_config)));
   app.manage(Arc::new(Mutex::new(tmp_ltx_config)));
   app.manage(user_data_placeholder.clone());
@@ -125,10 +128,53 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(service_files_arc);
   app.manage(service_unpack_arc);
   app.manage(service_updater_arc);
+  app.manage(game_tracker_arc.clone());
   app.manage(Arc::new(StdMutex::new(HashMap::new())) as CancelMap);
   app.manage(Arc::new(StdMutex::new(HashMap::new())) as UploadCancelMap);
 
   log::info!("init App State Completed");
+
+  // Restore the persisted game record (survives launcher restarts while the
+  // game is running): probe it once — keep live records, clear dead ones and
+  // unmount their leftover subst drives.
+  {
+    let tracker_restore = game_tracker_arc.clone();
+    let config_restore = config_arc.clone();
+    let app_restore = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+      let game = { config_restore.lock().await.tracked_game.clone() };
+      let Some(game) = game else {
+        return;
+      };
+
+      let probe_game = game.clone();
+      let alive = tauri::async_runtime::spawn_blocking(move || probe(&probe_game)).await.unwrap_or(false);
+
+      if alive {
+        log::info!("game_tracker: restored live game '{}' (pid {})", game.version_name, game.pid);
+        tracker_restore.set(game).await;
+        let _ = app_restore.emit("game-status", tracker_restore.status().await);
+      } else {
+        log::info!(
+          "game_tracker: persisted record of '{}' (pid {}) is dead; clearing",
+          game.version_name,
+          game.pid
+        );
+        if let Some(drive) = game.subst_drive {
+          #[cfg(target_os = "windows")]
+          crate::handlers::process::subst_workaround::remove(drive);
+        }
+        let mut config_guard = config_restore.lock().await;
+        config_guard.tracked_game = None;
+        if let Err(e) = config_guard.save() {
+          log::error!("game_tracker: failed to persist cleared tracked_game: {}", e);
+        }
+      }
+    });
+  }
+
+  // Watcher: detects game exit, cleans up subst drives, notifies the frontend.
+  crate::service::game_tracker::start_watcher(app.handle().clone(), game_tracker_arc.clone(), config_arc.clone());
 
   let user_data_bg = user_data_placeholder.clone();
 
@@ -280,6 +326,16 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
       let _ = app_handle_bg.emit("background-init-failed", e.to_string());
     } else {
       let _ = app_handle_bg.emit("background-init-success", ());
+
+      // Warn when the launcher itself runs from a temp folder (e.g. started
+      // straight from the WinRAR window): that folder is deleted on close,
+      // taking the installed game with it. Warning only, never a block.
+      let install_path = { config_arc_clone.lock().await.install_path.clone() };
+      let codes = crate::utils::paths::is_temp_path(Path::new(&install_path));
+      if !codes.is_empty() {
+        log::warn!("launcher runs from a temp directory: {:?} ({:?})", install_path, codes);
+        let _ = app_handle_bg.emit("launcher-in-temp-dir", codes);
+      }
     }
   });
 

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, radioApiProvider, moveProgress } from '../store/main';
+import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, radioApiProvider, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind } from '../store/main';
 import { ConnectStatus, DownloadStatus } from "../consts";
 import { selectedVersion, versions } from '../store/upload';
 import { get } from 'svelte/store';
@@ -10,6 +10,32 @@ import { getVersion } from '@tauri-apps/api/app';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
+/// Tauri rejects invoke promises with arbitrary values (string, object, ...).
+/// Normalize anything into the backend's { code, detail } shape.
+export function normalizeLaunchError(e: unknown): LaunchError {
+  if (e && typeof e === "object" && "code" in e && typeof (e as any).code === "string") {
+    return {
+      code: (e as any).code,
+      detail: String((e as any).detail ?? ""),
+    };
+  }
+  return { code: "unknown", detail: String(e) };
+}
+
+/// Shared warning flow for install paths inside temp directories.
+export async function warnIfTempPath(path: string) {
+  try {
+    const codes = await invoke<string[]>("check_install_path", { path });
+    if (codes.length > 0) {
+      tempPathWarningKind.set("install");
+      tempPathWarningCodes.set(codes);
+      showDlgTempPathWarning.set(true);
+    }
+  } catch (e) {
+    console.error("check_install_path failed:", e);
+  }
+}
+
 export async function initMainListeners() {
   unlisten.set('background-init-success', await listen('background-init-success', (event: Event<void>) => {
     console.log("background-init-success !");
@@ -17,6 +43,11 @@ export async function initMainListeners() {
     providersWasInited.set(true);
     connectStatus.set(ConnectStatus.Connnected);
     fontColor.set("rgba(69, 240, 97, 1)");
+
+    // Initial game state (may already be "running" after a launcher restart).
+    invoke<GameStatus>("get_game_status")
+      .then((status) => gameStatus.set(status))
+      .catch((e) => console.error("get_game_status failed:", e));
   }));
   unlisten.set('background-init-failed', await listen('background-init-failed', (event: Event<string>) => {
     console.log("background-init-failed !, error: ", event.payload);
@@ -29,6 +60,15 @@ export async function initMainListeners() {
     console.log("user-data-loaded ! ");
 
     invoke<boolean>("allow_pack_mod").then((value) => allowPackMod.set(value));
+  }));
+  unlisten.set('game-status', await listen('game-status', (event: Event<GameStatus>) => {
+    gameStatus.set(event.payload);
+  }));
+  unlisten.set('launcher-in-temp-dir', await listen('launcher-in-temp-dir', (event: Event<string[]>) => {
+    console.warn("launcher runs from a temp dir: ", event.payload);
+    tempPathWarningKind.set("launcher");
+    tempPathWarningCodes.set(event.payload);
+    showDlgTempPathWarning.set(true);
   }));
   unlisten.set('versions-loaded', await listen('versions-loaded', async (event: Event<Version[]>) => {
     console.log("versions-loaded ! payload: ", event.payload);

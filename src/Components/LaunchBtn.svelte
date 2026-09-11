@@ -1,8 +1,8 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { localVersions, providersWasInited, refreshLocalVersion } from "../store/main";
-  import { onDestroy, onMount } from "svelte";
+  import { gameStatus, launchError, localVersions, providersWasInited, refreshLocalVersion, showDlgLaunchError } from "../store/main";
+  import { onMount } from "svelte";
   import { currentView } from "../store/menu";
   import {
     hasAnyLocalVersion,
@@ -14,26 +14,20 @@
     totalFiles,
     uploadedFiles,
   } from "../store/upload";
+  import { normalizeLaunchError } from "../lib/main";
 
-  let pid: number | null = $state(null);
-  let isProcessAlive = $state(false);
-  let interval: number | undefined = undefined;
-
-  const clearPidInterval = () => {
-    if (interval !== undefined) {
-      clearInterval(interval);
-      interval = undefined;
-    }
-  };
-
+  // Game liveness is owned by the backend GameTracker ($gameStatus mirrors it);
+  // the button only sends run_game and shows errors.
   const launchApp = async () => {
     if (!$mainVersion && !$selectedVersion) {
       currentView.select("versions");
       return;
     }
-    if (pid && pid > 0 && (await checkProcess())) return;
+    if ($gameStatus.running) return;
 
-    const useMain = !!$mainVersion;
+    // Only treat the launch as "main version" when the selection IS the main
+    // version — otherwise run the explicitly selected installed version.
+    const useMain = !!$mainVersion && $selectedVersion === $mainVersion.name;
     const versionName = useMain ? null : $selectedVersion;
     if (!useMain && !versionName) {
       currentView.select("versions");
@@ -45,26 +39,11 @@
     }
 
     try {
-      clearPidInterval();
-      pid = await invoke<number>("run_game", { versionName, useMain });
-      await checkProcess();
-      interval = setInterval(checkProcess, 1000);
-    } catch (err) {
-      console.error("Failed to spawn process:", err);
+      await invoke<GameStatus>("run_game", { versionName, useMain });
+    } catch (e) {
+      launchError.set(normalizeLaunchError(e));
+      showDlgLaunchError.set(true);
     }
-  };
-
-  const checkProcess = async () => {
-    if (!pid || pid === -1) return false;
-
-    isProcessAlive = await invoke<boolean>("is_process_alive", { pid });
-
-    if (interval !== undefined && !isProcessAlive) {
-      clearPidInterval();
-      pid = null;
-    }
-
-    return isProcessAlive;
   };
 
   $effect(() => {
@@ -75,8 +54,6 @@
     invoke<AppConfig>("get_config")
       .then(async (config) => {
         if (cancelled) return;
-
-        pid = config.latest_pid;
 
         if (config.selected_version) {
           $selectedVersion = config.selected_version;
@@ -91,21 +68,11 @@
 
         refreshLocalVersion();
         refreshVersions();
-
-        if (pid != null && pid >= 0) {
-          await checkProcess();
-        }
-
-        if (!cancelled) {
-          clearPidInterval();
-          interval = setInterval(checkProcess, 1000);
-        }
       })
       .catch((err) => console.error("LaunchBtn get_config failed:", err));
 
     return () => {
       cancelled = true;
-      clearPidInterval();
     };
   });
 
@@ -113,18 +80,18 @@
     mainVersion.set(await invoke<Version | undefined>("get_main_version"));
     if ($mainVersion) {
       localVersions.setItem($mainVersion.name, $mainVersion);
-      selectedVersion.set($mainVersion.name);
+      // The store holds ONLY the version next to the launcher; the user's
+      // chosen version wins unless nothing is selected yet.
+      if (!$selectedVersion) {
+        selectedVersion.set($mainVersion.name);
+      }
       hasAnyLocalVersion.set(true);
     }
   });
-
-  onDestroy(() => {
-    clearPidInterval();
-  });
 </script>
 
-<span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={isProcessAlive} onclick={launchApp}>
-  {#if !isProcessAlive}
+<span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={$gameStatus.running} onclick={launchApp}>
+  {#if !$gameStatus.running}
     {#if $selectedVersion}
       {$_("app.launch.start")} {$selectedVersion}
     {:else}

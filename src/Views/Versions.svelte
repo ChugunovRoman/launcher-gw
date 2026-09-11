@@ -6,6 +6,8 @@
   import { listen } from "@tauri-apps/api/event";
   import {
     connectStatus,
+    gameStatus,
+    launchError,
     localVersions,
     versionsWillBeLoaded,
     expandedIndex,
@@ -15,6 +17,7 @@
     moveProgress,
     updateLocalVersion,
     showDlgAddVersion,
+    showDlgLaunchError,
     appConfig,
     patchCheckResults,
     patchInstallProgress,
@@ -22,7 +25,8 @@
     patchNotesData,
     fetchLocalVersions,
   } from "../store/main";
-  import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
+  import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion } from "../store/upload";
+  import { normalizeLaunchError, warnIfTempPath } from "../lib/main";
   import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
   import { FileDown } from "lucide-svelte";
@@ -32,7 +36,7 @@
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
   import Spin from "../Components/Spin.svelte";
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
 
   let input1Checks = $state<string | null>(null);
   let input2Checks = $state<string | null>(null);
@@ -46,30 +50,6 @@
   let installingPatch = $state<{ version: string; patch: string } | null>(null);
   let patchDownloadInfo = $state<{ file: string; bytes: number; totalBytes: number; speedValue: number; sfxValue: string } | null>(null);
   let patchErrors = $state<Map<string, string>>(new Map());
-
-  // Process tracking for "Launch" buttons on local versions
-  let runningVersionPid: number | null = $state(null);
-  let runningVersionName: string | null = $state(null);
-  let runningVersionAlive = $state(false);
-  let versionPollInterval: number | undefined = undefined;
-
-  const clearVersionPoll = () => {
-    if (versionPollInterval !== undefined) {
-      clearInterval(versionPollInterval);
-      versionPollInterval = undefined;
-    }
-  };
-
-  const checkVersionProcess = async (): Promise<boolean> => {
-    if (!runningVersionPid || runningVersionPid === -1) return false;
-    runningVersionAlive = await invoke<boolean>("is_process_alive", { pid: runningVersionPid });
-    if (!runningVersionAlive) {
-      clearVersionPoll();
-      runningVersionPid = null;
-      runningVersionName = null;
-    }
-    return runningVersionAlive;
-  };
 
   function parseSize(size: number | null): string {
     if (!size) return "";
@@ -369,6 +349,10 @@
 
     console.log("Start handleStartDownload");
 
+    // Warn (do not block) when the install path is inside a temp folder —
+    // e.g. running the launcher straight from the WinRAR window.
+    await warnIfTempPath(version.installed_path);
+
     updateVersionProgress(releaseName, () => ({
       inProgress: true,
       isStoped: false,
@@ -431,6 +415,8 @@
         installed_path: path,
         download_path: `${path}_data`,
       }));
+
+      await warnIfTempPath(path);
     });
   }
   async function chooseDownloadDataPath(event: Event, version: Version) {
@@ -445,27 +431,20 @@
     event.stopPropagation();
 
     await invoke<void>("set_current_game_version", { versionName: version.name });
-    mainVersion.set(version);
     selectedVersion.set(version.name);
   }
   async function runVersion(event: Event, version: Version) {
     event.stopPropagation();
 
-    // If this version is already running, do nothing
-    if (runningVersionAlive && runningVersionName === version.name) return;
+    // The backend tracker is the single source of "is running"; while any
+    // game session is live, no other version can be launched.
+    if ($gameStatus.running) return;
 
     try {
-      clearVersionPoll();
-      const pid = await invoke<number>("run_game", { versionName: version.name, useMain: false });
-      runningVersionPid = pid;
-      runningVersionName = version.name;
-      await checkVersionProcess();
-      versionPollInterval = setInterval(checkVersionProcess, 1000);
-    } catch (err) {
-      console.error("Failed to spawn process:", err);
-      runningVersionPid = null;
-      runningVersionName = null;
-      runningVersionAlive = false;
+      await invoke<GameStatus>("run_game", { versionName: version.name, useMain: false });
+    } catch (e) {
+      launchError.set(normalizeLaunchError(e));
+      showDlgLaunchError.set(true);
     }
   }
   async function deleteVersion(event: Event, version: Version) {
@@ -557,26 +536,6 @@
     // default collapsed state.
     const inProgressIdx = $versions.findIndex((v) => v.inProgress || v.isStoped);
     $expandedIndex = inProgressIdx >= 0 ? inProgressIdx + $localVersions.size : null;
-
-    // Check if a game process is already running (e.g. launched from Home page)
-    try {
-      const config = await invoke<AppConfig>("get_config");
-      if (config.latest_pid != null && config.latest_pid >= 0) {
-        const alive = await invoke<boolean>("is_process_alive", { pid: config.latest_pid });
-        if (alive) {
-          runningVersionPid = config.latest_pid;
-          runningVersionName = config.selected_version ?? null;
-          runningVersionAlive = true;
-          versionPollInterval = setInterval(checkVersionProcess, 1000);
-        }
-      }
-    } catch (e) {
-      // Ignore — process tracking is best-effort
-    }
-  });
-
-  onDestroy(() => {
-    clearVersionPoll();
   });
 </script>
 
@@ -617,9 +576,10 @@
             type="button"
             onclick={(e) => runVersion(e, version)}
             class="choose-btn"
-            class:choose-btn-inactive={runningVersionAlive && runningVersionName === name}
+            class:choose-btn-inactive={$gameStatus.running && $gameStatus.version_name === name}
+            disabled={$gameStatus.running && $gameStatus.version_name !== name}
             style="margin-left: auto; margin-right: 10px; white-space: nowrap">
-            {#if runningVersionAlive && runningVersionName === name}
+            {#if $gameStatus.running && $gameStatus.version_name === name}
               {$_("app.launch.inGame")}
             {:else}
               {$_("app.releases.runVersion")}
@@ -1253,6 +1213,14 @@
     pointer-events: none;
   }
   .choose-btn.choose-btn-inactive:hover {
+    background-color: rgba(0, 0, 0, 0.8);
+  }
+  .choose-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+    background-color: rgba(0, 0, 0, 0.8);
+  }
+  .choose-btn:disabled:hover {
     background-color: rgba(0, 0, 0, 0.8);
   }
 

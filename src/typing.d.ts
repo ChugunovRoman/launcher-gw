@@ -127,8 +127,27 @@ declare interface RunParams {
   apply_preset_on_launch: boolean;
   [index: string]: unknown;
 }
+// Game process tracking (backend GameTracker).
+declare interface TrackedGame {
+  pid: number;
+  start_time: number;
+  exe_path: string | null;
+  version_name: string;
+  subst_drive: string | null;
+}
+declare interface GameStatus {
+  running: boolean;
+  pid: number | null;
+  version_name: string | null;
+}
+// run_game rejects with { code, detail }; code is one of the
+// app.launchError.* localization keys or "unknown".
+declare interface LaunchError {
+  code: string;
+  detail: string;
+}
+
 declare interface AppConfig {
-  latest_pid: number;
   first_run: boolean;
   install_path: string;
   default_installed_path: string;
@@ -157,6 +176,7 @@ declare interface AppConfig {
   hide_max_perf_preset_warning: boolean;
   progress_upload?: VersionProgressUpload;
   progress_download: Dict<VersionProgress>;
+  tracked_game?: TrackedGame | null;
 }
 
 

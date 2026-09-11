@@ -37,6 +37,20 @@ export const launcherDwnBytes = writable(0);
 export const launcherDwnTotalBytes = writable(0);
 export const launcherDwnProgress = writable(0);
 
+// Game process state. Single source of truth is the backend GameTracker:
+// the frontend only mirrors `game-status` events / `get_game_status` here.
+export const gameStatus = writable<GameStatus>({ running: false, pid: null, version_name: null });
+
+// Launch error dialog: backend returns { code, detail }.
+export const showDlgLaunchError = writable(false);
+export const launchError = writable<LaunchError | null>(null);
+
+// Temp-path warning dialog ("install" = chosen install path, "launcher" = the
+// launcher itself runs from a temp folder).
+export const showDlgTempPathWarning = writable(false);
+export const tempPathWarningCodes = writable<string[]>([]);
+export const tempPathWarningKind = writable<"install" | "launcher">("install");
+
 export const providers = writable<[string, ProviderStatus][]>([]);
 export const radioApiProvider = writable<string>("github");
 

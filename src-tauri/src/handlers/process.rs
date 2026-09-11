@@ -1,21 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::configs::AppConfig::{AppConfig, Version};
 use crate::consts::*;
+use crate::service::game_tracker::{snapshot_process, GameStatus, GameTracker, TrackedGame};
 use crate::service::get_release::ServiceGetRelease;
 use crate::service::keybind_manager::KeybindManager;
-use crate::utils::errors::log_full_error;
-use crate::utils::resources::game_exe;
+use crate::utils::resources::{game_exe, STALKER_LAUNCHER_STEMS};
 use crate::utils::split_args::split_args;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
-mod subst_workaround {
+pub(crate) mod subst_workaround {
   use std::path::Path;
   use std::process::Command;
 
@@ -46,22 +46,107 @@ mod subst_workaround {
   }
 }
 
-// Resolve the launch target (exe, working dir, is_xray_engine) by priority tiers:
-//   1. version.exe_path          — explicit launcher exe (e.g. Stalker-CoC.exe from manifest)
+/// Structured launch error: serialized to `{ code, detail }` so the frontend
+/// can show a localized title per `code` and the raw `detail` below it.
+#[derive(Debug, Clone)]
+pub enum LaunchError {
+  AlreadyRunning,
+  VersionNotFound(String),
+  ExeNotFound(String),
+  SpawnFailed(String),
+  ExitedImmediately(String),
+  LtxPrepareFailed(String),
+  ConfigLocked(String),
+}
+
+impl LaunchError {
+  pub fn code(&self) -> &'static str {
+    match self {
+      LaunchError::AlreadyRunning => "already_running",
+      LaunchError::VersionNotFound(_) => "version_not_found",
+      LaunchError::ExeNotFound(_) => "exe_not_found",
+      LaunchError::SpawnFailed(_) => "spawn_failed",
+      LaunchError::ExitedImmediately(_) => "exited_immediately",
+      LaunchError::LtxPrepareFailed(_) => "ltx_prepare_failed",
+      LaunchError::ConfigLocked(_) => "config_locked",
+    }
+  }
+
+  pub fn detail(&self) -> String {
+    match self {
+      LaunchError::AlreadyRunning => "Another game session is already running".to_string(),
+      LaunchError::VersionNotFound(d)
+      | LaunchError::ExeNotFound(d)
+      | LaunchError::SpawnFailed(d)
+      | LaunchError::ExitedImmediately(d)
+      | LaunchError::LtxPrepareFailed(d)
+      | LaunchError::ConfigLocked(d) => d.clone(),
+    }
+  }
+}
+
+impl Serialize for LaunchError {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    use serde::ser::SerializeStruct;
+    let mut state = serializer.serialize_struct("LaunchError", 2)?;
+    state.serialize_field("code", self.code())?;
+    state.serialize_field("detail", &self.detail())?;
+    state.end()
+  }
+}
+
+/// Every launch failure is logged on the Rust side before it is returned.
+fn log_launch_error(e: LaunchError) -> LaunchError {
+  log::error!("run_game failed [{}]: {}", e.code(), e.detail());
+  e
+}
+
+/// True when the file name of `exe_path` is one of the known Stalker launcher
+/// stubs (Stalker-CoC.exe / Stalker-CoP.exe / Stalker-CS.exe / Stalker.exe).
+fn is_stalker_launcher_stub(exe_path: &str) -> bool {
+  let Some(file_name) = Path::new(exe_path).file_name().and_then(|n| n.to_str()) else {
+    return false;
+  };
+  STALKER_LAUNCHER_STEMS.iter().any(|stem| {
+    if cfg!(windows) {
+      file_name.eq_ignore_ascii_case(&format!("{stem}.exe"))
+    } else {
+      file_name.eq_ignore_ascii_case(stem)
+    }
+  })
+}
+
+// Resolve the launch target (exe, working dir) by priority tiers. The engine is
+// ALWAYS launched directly:
+//   1. version.exe_path          — manifest-provided engine exe. Stalker
+//                                  launcher stubs are ignored (see below)
 //   2. engine_path + fsgame_path — manual engine; CWD = directory of fsgame.ltx
-//   3-4. auto-detect Stalker-CoC/CoP/CS/Stalker.exe in installed_path
 //   5. default bin/xrEngine.exe
-// `is_xray_engine` gates the subst CWD workaround: only the xray engine has the
-// ANSI-CWD bug; Stalker launcher exes manage their own CWD.
-fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, PathBuf, bool) {
+//
+// The Stalker-CoC.exe / CoP / CS / Stalker stubs are compiled AutoHotkey
+// wrappers: they check the registry for an installed Call of Pripyat (and just
+// exit with code 0 when it is missing), then ShellExecute bin\xrEngine.exe with
+// RunAs — i.e. UAC elevation on every launch. An elevated engine also loses the
+// launcher's subst drives (separate drive table), which is what broke installs
+// in temp/rar$ paths and on machines without CoP. Launching the engine binary
+// directly avoids all of it, so the stubs are never used.
+fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, PathBuf) {
   // Tier 1: explicit exe_path (relative to installed_path; absolute also works via join)
   if let Some(exe_rel) = version.exe_path.as_ref() {
-    let candidate = installed_path.join(exe_rel);
-    if candidate.exists() {
-      log::info!("launch tier 1 (exe_path): {:?}", candidate);
-      return (candidate, installed_path.to_path_buf(), false);
+    if is_stalker_launcher_stub(exe_rel) {
+      // Never launch the wrapper stubs — see the comment above.
+      log::info!("launch tier 1: exe_path {:?} is a Stalker launcher stub, ignored", exe_rel);
+    } else {
+      let candidate = installed_path.join(exe_rel);
+      if candidate.exists() {
+        log::info!("launch tier 1 (exe_path): {:?}", candidate);
+        return (candidate, installed_path.to_path_buf());
+      }
+      log::warn!("exe_path set but not found: {:?}; falling through", candidate);
     }
-    log::warn!("exe_path set but not found: {:?}; falling through", candidate);
   }
 
   // Tier 2: manual engine_path + fsgame_path; CWD = directory of fsgame.ltx
@@ -73,26 +158,13 @@ fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, 
       .map(PathBuf::from)
       .unwrap_or_else(|| installed_path.to_path_buf());
     log::info!("launch tier 2 (engine_path): exe {:?}, cwd {:?}", exe, cwd);
-    return (exe, cwd, true);
-  }
-
-  // Tiers 3-4: auto-detect Stalker-CoC/CoP/CS/Stalker in installed_path.
-  // ASCII-only: Stalker-CoC.exe is a wrapper that starts the engine itself and
-  // handles non-ASCII install paths under manual double-click. But launched
-  // from the launcher it exits with code 0 on a Cyrillic path (unsolved why —
-  // double-click works, launcher does not), so for non-ASCII paths we skip it
-  // and fall through to the direct xrEngine + subst tier, which handles Cyrillic.
-  if installed_path.to_string_lossy().is_ascii() {
-    if let Some(launcher) = crate::utils::resources::find_stalker_launcher(installed_path) {
-      log::info!("launch tier 3/4 (stalker launcher): {:?}", launcher);
-      return (launcher, installed_path.to_path_buf(), false);
-    }
+    return (exe, cwd);
   }
 
   // Tier 5: default bin/xrEngine.exe
   let exe = installed_path.join(BIN_DIR).join(game_exe());
   log::info!("launch tier 5 (default engine): {:?}", exe);
-  (exe, installed_path.to_path_buf(), true)
+  (exe, installed_path.to_path_buf())
 }
 
 /// Resolve launch target on the backend — never trust a full Version from IPC.
@@ -129,82 +201,35 @@ async fn resolve_version_for_launch(
   Err(format!("Installed version not found: {}", name))
 }
 
-/// Find xrEngine PID after spawning a Stalker-* wrapper (exits quickly).
-/// Prefer child of `wrapper_pid`; else match exe under game roots.
-fn resolve_engine_pid(wrapper_pid: u32, is_xray_engine: bool, cwd: &Path, installed_path: &Path) -> u32 {
-  if is_xray_engine {
-    return wrapper_pid;
-  }
-
-  let engine_name = game_exe();
-  let expected_under_cwd = cwd.join(BIN_DIR).join(&engine_name);
-  let expected_under_install = installed_path.join(BIN_DIR).join(&engine_name);
-  let wrapper = Pid::from(wrapper_pid as usize);
-
-  let refresh = ProcessRefreshKind::nothing()
-    .with_exe(UpdateKind::OnlyIfNotSet)
-    .with_cmd(UpdateKind::OnlyIfNotSet);
-
-  for _ in 0..40 {
-    let mut system = System::new();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
-
-    let mut path_matches: Vec<u32> = Vec::new();
-
-    for (pid, proc) in system.processes() {
-      let name = proc.name().to_string_lossy();
-      if !name.eq_ignore_ascii_case(&engine_name) {
-        continue;
-      }
-
-      if proc.parent() == Some(wrapper) {
-        log::info!("resolve_engine_pid: child of wrapper {} -> {}", wrapper_pid, pid.as_u32());
-        return pid.as_u32();
-      }
-
-      if let Some(exe) = proc.exe() {
-        if exe == expected_under_cwd.as_path() || exe == expected_under_install.as_path() {
-          path_matches.push(pid.as_u32());
-        }
-      }
-    }
-
-    if let Some(pid) = path_matches.into_iter().next() {
-      log::info!("resolve_engine_pid: matched by exact path -> {}", pid);
-      return pid;
-    }
-
-    std::thread::sleep(Duration::from_millis(50));
-  }
-
-  log::warn!("resolve_engine_pid: engine not found; falling back to wrapper pid {}", wrapper_pid);
-  wrapper_pid
-}
-
-/// Whether a process with the given pid is still running (best-effort).
-fn pid_alive(pid: u32) -> bool {
-  let mut system = System::new();
-  system.refresh_processes_specifics(ProcessesToUpdate::Some(&[Pid::from(pid as usize)]), true, ProcessRefreshKind::nothing());
-  system.process(Pid::from(pid as usize)).is_some()
-}
-
 #[tauri::command]
 pub async fn run_game(
   app: tauri::AppHandle,
   keybind_manager: tauri::State<'_, Arc<KeybindManager>>,
   versionName: Option<String>,
   useMain: Option<bool>,
-) -> Result<u32, String> {
-  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+) -> Result<GameStatus, LaunchError> {
+  let tracker = app
+    .try_state::<Arc<GameTracker>>()
+    .ok_or_else(|| log_launch_error(LaunchError::ConfigLocked("Game tracker not initialized".to_string())))?;
+  let state = app
+    .try_state::<Arc<Mutex<AppConfig>>>()
+    .ok_or_else(|| log_launch_error(LaunchError::ConfigLocked("Config not initialized".to_string())))?;
+
+  // One game at a time: while the tracker holds a live process, refuse.
+  if tracker.status().await.running {
+    return Err(log_launch_error(LaunchError::AlreadyRunning));
+  }
 
   // Snapshot launch-critical fields and drop the config lock right away:
-  // the launch path does sync fs work (user.ltx), process spawning and up to
-  // ~2s of engine pid polling — holding the lock through all of that froze
-  // every other config command for the whole launch sequence.
+  // the launch path does sync fs work (user.ltx) and process spawning —
+  // holding the lock through all of that froze every other config command
+  // for the whole launch sequence.
   let (version, run_params_snapshot, profile_for_launch, provider_id_for_launch) = {
     let config_guard = state.lock().await;
 
-    let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false)).await?;
+    let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false))
+      .await
+      .map_err(|e| log_launch_error(LaunchError::VersionNotFound(e)))?;
 
     // Pre-launch only: patch launcher settings into the selected game's user.ltx.
     // Do NOT rewrite user.ltx after the game exits (engine owns saves during/after session).
@@ -225,7 +250,7 @@ pub async fn run_game(
   let target_path = version.installed_path.clone();
 
   let installed_path = PathBuf::from(&target_path);
-  let (exe, cwd, is_xray_engine) = resolve_launch_target(&version, &installed_path);
+  let (exe, cwd) = resolve_launch_target(&version, &installed_path);
   let user_ltx_path = match &version.userltx_path {
     Some(value) => Path::new(value).to_path_buf(),
     None => Path::new(&target_path).join(APPDATA_DIR).join(USER_LTX),
@@ -242,7 +267,14 @@ pub async fn run_game(
     &keybind_manager,
     profile_for_launch.as_deref(),
   )
-  .await?;
+  .await
+  .map_err(|e| log_launch_error(LaunchError::LtxPrepareFailed(e)))?;
+
+  // Fail early with a clear code when the engine binary is missing (e.g. a
+  // broken install) instead of a cryptic spawn failure.
+  if !exe.is_file() {
+    return Err(log_launch_error(LaunchError::ExeNotFound(exe.to_string_lossy().into_owned())));
+  }
 
   // Do NOT pass -fsltx: the engine resolves fsgame.ltx relative to the current
   // working directory (current_dir = game root below). That works with Cyrillic
@@ -272,24 +304,18 @@ pub async fn run_game(
   let users_args = split_args(&run_params_snapshot.cmd_params);
   run_params.extend(users_args);
 
-  // CLI args are passed on every tier. Direct xray launches (tiers 2, 5) parse
-  // them via Core.Params; the Stalker-* wrappers (tiers 1, 3, 4) re-pack their
-  // own command line (minus their private flags like -skip_reg) and
-  // ShellExecute bin\xrEngine.exe with it. Engine flags (-dbg, -uidbg, ...)
-  // exist ONLY on the command line — they cannot be expressed via user.ltx.
-  // The wrapper always exits 0 right after spawning the engine (with or without
-  // args); resolve_engine_pid finds the real engine PID after that quick exit.
+  // Engine flags (-dbg, -uidbg, ...) exist ONLY on the command line — they
+  // cannot be expressed via user.ltx.
   log::info!("Start game exe: {:?} with params: {:?} target_path: {:?}", &exe, &run_params, target_path);
 
-  // Direct xray-engine launches (tiers 2 and 5) resolve $fs_root$ from the CWD
-  // via the ANSI Win32 API and decode it as UTF-8, so a non-ASCII CWD corrupts
-  // it. Hide a non-ASCII CWD behind a virtual drive (subst) so the engine only
-  // sees ASCII. Stalker-CoC.exe (tiers 3/4) is launched directly without subst:
-  // it sets up the engine itself and handles non-ASCII paths.
+  // Direct engine launches resolve $fs_root$ from the CWD via the ANSI Win32
+  // API and decode it as UTF-8, so a non-ASCII CWD corrupts it. Hide a
+  // non-ASCII CWD behind a virtual drive (subst) so the engine only sees ASCII.
+  // Now applied to every launch because every launch is a direct engine launch.
   #[cfg(target_os = "windows")]
   let (effective_cwd, subst_drive): (PathBuf, Option<char>) = {
     let cwd_str = cwd.to_string_lossy();
-    if is_xray_engine && !cwd_str.is_ascii() {
+    if !cwd_str.is_ascii() {
       match subst_workaround::setup_for(&cwd_str) {
         Ok(drive) => {
           log::info!("subst: mounted non-ASCII CWD '{}' to {}:", cwd_str, drive);
@@ -311,9 +337,10 @@ pub async fn run_game(
   #[cfg(not(target_os = "windows"))]
   let (effective_cwd, subst_drive): (PathBuf, Option<char>) = (cwd.clone(), None);
 
-  // When a subst drive is active, launch the exe THROUGH it (e.g. Z:\Stalker-CoC.exe)
-  // so that the launched process and any child it spawns (Stalker-CoC.exe ->
-  // xrEngine.exe) see only ASCII paths via GetModuleFileName and inherited CWD.
+  // When a subst drive is active, launch the exe THROUGH it (e.g. Z:\bin\xrEngine.exe)
+  // so the launched process sees only ASCII paths via GetModuleFileName and the
+  // inherited CWD. The subst drive is unmounted by the game tracker watcher
+  // after the tracked process exits.
   let launch_exe = match subst_drive {
     Some(drive) => exe
       .strip_prefix(&cwd)
@@ -323,125 +350,80 @@ pub async fn run_game(
   };
 
   log::info!(
-    "run_game exe: {:?}, CWD: {:?} (is_xray_engine: {}, subst: {})",
+    "run_game exe: {:?}, CWD: {:?} (subst: {})",
     &launch_exe,
     &effective_cwd,
-    is_xray_engine,
     subst_drive.is_some()
   );
 
-  let child = Command::new(&launch_exe)
+  let child = match Command::new(&launch_exe)
     .args(&run_params)
     .current_dir(&effective_cwd)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
     .spawn()
-    .map_err(|e| e.to_string())?;
+  {
+    Ok(child) => child,
+    Err(e) => {
+      #[cfg(target_os = "windows")]
+      if let Some(drive) = subst_drive {
+        subst_workaround::remove(drive);
+      }
+      return Err(log_launch_error(LaunchError::SpawnFailed(format!("{} ({})", e, exe.display()))));
+    }
+  };
 
-  let wrapper_pid = child.id();
-  // Keep handle only when we need to wait (subst cleanup); otherwise drop so
-  // the process is fully detached from the launcher.
-  #[cfg(target_os = "windows")]
-  let child_for_subst = if subst_drive.is_some() { Some(child) } else { None };
-  #[cfg(not(target_os = "windows"))]
+  // The spawned process IS the engine (no wrapper in between). Detach it fully:
+  // the game must be independent of the launcher lifecycle.
+  let pid = child.id();
   drop(child);
 
-  let installed_for_pid = installed_path.clone();
-  let cwd_for_pid = effective_cwd.clone();
-  let mut engine_pid = tokio::task::spawn_blocking(move || resolve_engine_pid(wrapper_pid, is_xray_engine, &cwd_for_pid, &installed_for_pid))
+  // Snapshot (start_time, exe) right after spawn — the identity of the tracked
+  // process for all later liveness probes.
+  let snapshot = tauri::async_runtime::spawn_blocking(move || snapshot_process(pid))
     .await
-    .map_err(|e| e.to_string())?;
-
-  // A Stalker-* wrapper stub may exit immediately with code 0 without
-  // starting the engine when spawned via CreateProcess from the launcher
-  // (double-click works — a long-standing quirk of the GSC launcher stubs,
-  // see the note in resolve_launch_target). When that happens, retry once
-  // with the direct engine binary (tier-5 style launch). ASCII CWDs only:
-  // a non-ASCII CWD needs the subst workaround which is tied to the wrapper
-  // decision above.
-  if !is_xray_engine && engine_pid == wrapper_pid && effective_cwd.to_string_lossy().is_ascii() {
-    let wrapper_still_running = tokio::task::spawn_blocking(move || pid_alive(wrapper_pid)).await.unwrap_or(false);
-
-    if wrapper_still_running {
-      log::info!("launch: wrapper {} is still running (launcher UI?); keeping its pid", wrapper_pid);
-    } else {
-      log::warn!(
-        "launch: wrapper {} exited without starting the engine; retrying with the direct engine binary",
-        wrapper_pid
-      );
-
-      let engine_bin = installed_path.join(BIN_DIR).join(game_exe());
-      if engine_bin.is_file() {
-        match Command::new(&engine_bin)
-          .args(&run_params)
-          .current_dir(&effective_cwd)
-          .stdin(Stdio::null())
-          .stdout(Stdio::null())
-          .stderr(Stdio::null())
-          .spawn()
-        {
-          Ok(engine_child) => {
-            let direct_pid = engine_child.id();
-            // Detach: the engine must be fully independent of the launcher.
-            drop(engine_child);
-            log::info!("launch: direct engine started, pid {}", direct_pid);
-            engine_pid = direct_pid;
-          }
-          Err(e) => log::error!("launch: direct engine spawn failed ({}): {}", engine_bin.display(), e),
-        }
-      } else {
-        log::warn!("launch: direct engine binary not found at {}", engine_bin.display());
+    .map_err(|e| {
+      #[cfg(target_os = "windows")]
+      if let Some(drive) = subst_drive {
+        subst_workaround::remove(drive);
       }
-    }
-  }
+      log_launch_error(LaunchError::SpawnFailed(format!("snapshot task failed: {}", e)))
+    })?;
 
-  // After all retry attempts, verify the resolved PID is actually alive.
-  // If the wrapper exited and the fallback spawn failed (or the engine binary
-  // was not found), engine_pid still points to a dead process.  Returning it
-  // would make the frontend show "In Game…" for a process that already exited.
-  if !pid_alive(engine_pid) {
-    return Err(format!(
-      "Game process exited immediately after launch (pid {}). \
-       The engine may have failed to start. Check game logs for details.",
-      engine_pid
-    ));
-  }
+  let Some((start_time, exe_snapshot)) = snapshot else {
+    // Process died between spawn and snapshot — the engine failed to start.
+    #[cfg(target_os = "windows")]
+    if let Some(drive) = subst_drive {
+      subst_workaround::remove(drive);
+    }
+    return Err(log_launch_error(LaunchError::ExitedImmediately(format!("pid {}", pid))));
+  };
+
+  let tracked = TrackedGame {
+    pid,
+    start_time,
+    exe_path: exe_snapshot.map(|p| p.to_string_lossy().into_owned()),
+    version_name: version.name.clone(),
+    subst_drive,
+  };
+
+  tracker.set(tracked.clone()).await;
 
   {
     let mut config_guard = state.lock().await;
-    config_guard.latest_pid = i64::from(engine_pid);
-    config_guard.save().map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
-  }
-
-  // If we created a subst drive, unmount it after the engine exits.
-  // Wait on engine PID (wrapper may already be gone). Do not rewrite user.ltx.
-  #[cfg(target_os = "windows")]
-  {
-    if let Some(drive) = subst_drive {
-      let wait_pid = engine_pid;
-      let _child = child_for_subst;
-      tokio::task::spawn_blocking(move || {
-        drop(_child);
-        let mut system = System::new();
-        let pid_sys = Pid::from(wait_pid as usize);
-        loop {
-          system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid_sys]), true, ProcessRefreshKind::nothing());
-          if !system.processes().contains_key(&pid_sys) {
-            break;
-          }
-          std::thread::sleep(Duration::from_millis(500));
-        }
-        log::info!("Engine exited (pid {}); removing subst {}:", wait_pid, drive);
-        subst_workaround::remove(drive);
-      });
+    config_guard.tracked_game = Some(tracked);
+    // The game is already running — a config save failure must NOT be reported
+    // as a launch failure.
+    if let Err(e) = config_guard.save() {
+      log::error!("run_game: failed to persist tracked_game into config: {}", e);
     }
   }
 
-  Ok(engine_pid)
+  let status = tracker.status().await;
+  let _ = app.emit("game-status", &status);
+
+  Ok(status)
 }
 
 #[tauri::command]
@@ -452,11 +434,17 @@ pub fn get_passed_args() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn is_process_alive(pid: u32) -> bool {
-  let mut system = System::new();
-  let pid_sys = Pid::from(pid as usize);
-  system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid_sys]), true, ProcessRefreshKind::nothing());
-  system.processes().contains_key(&pid_sys)
+pub async fn get_game_status(app: tauri::AppHandle) -> Result<GameStatus, String> {
+  let tracker = app
+    .try_state::<Arc<GameTracker>>()
+    .ok_or_else(|| "Game tracker not initialized".to_string())?;
+  Ok(tracker.status().await)
+}
+
+/// Warning codes for install paths in temp directories (see `utils::paths`).
+#[tauri::command]
+pub fn check_install_path(path: String) -> Vec<String> {
+  crate::utils::paths::is_temp_path(Path::new(&path)).into_iter().map(str::to_string).collect()
 }
 
 #[tauri::command]
@@ -489,4 +477,22 @@ pub fn open_explorer(path: String, createDir: Option<bool>) -> Result<(), String
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::is_stalker_launcher_stub;
+
+  #[test]
+  fn stalker_launcher_stub_filter() {
+    // Known wrapper stubs must be ignored in any directory/case.
+    assert!(is_stalker_launcher_stub("Stalker-CoC.exe"));
+    assert!(is_stalker_launcher_stub("bin\\Stalker-CoP.exe"));
+    assert!(is_stalker_launcher_stub("Stalker-CS.EXE"));
+    assert!(is_stalker_launcher_stub("Stalker.exe"));
+    // Real engine binaries and custom engine names pass through.
+    assert!(!is_stalker_launcher_stub("bin/xrEngine.exe"));
+    assert!(!is_stalker_launcher_stub("MyModEngine.exe"));
+    assert!(!is_stalker_launcher_stub(""));
+  }
 }

@@ -37,7 +37,21 @@
       "ok": "Ok",
       "no": "No",
       "presetMaxPerformanceWarning": "Warning! This profile may cause minor visual bugs with light and shadows.",
-      "dontShowAgain": "Do not show again"
+      "dontShowAgain": "Do not show again",
+      "launchErrorTitle": "Game launch error",
+      "tempPathWarning": "The selected path is inside a Windows temp folder (Temp). The game may be deleted after a PC restart or a temp-files cleanup. Choose a permanent folder instead.",
+      "rarTempWarning": "The selected path is inside a WinRAR temp folder (rar$...). Closing the archive window deletes that folder along with the game. Extract the launcher to a permanent folder and pick the path again.",
+      "launcherInTempDir": "The launcher is running from a temp folder (e.g. straight from the WinRAR archive window). Closing the archive deletes that folder along with the downloaded game. Install the launcher to a permanent folder and move the game there."
+    },
+    "launchError": {
+      "already_running": "The game is already running. Close the current game session before launching again.",
+      "version_not_found": "The selected game version was not found.",
+      "exe_not_found": "The engine executable was not found. Verify the version installation.",
+      "spawn_failed": "Failed to spawn the game process.",
+      "exited_immediately": "The game process exited right after launch. See the game log (appdata/logs) for details.",
+      "ltx_prepare_failed": "Failed to prepare user.ltx for launch.",
+      "config_locked": "The launcher configuration is unavailable. Try restarting the launcher.",
+      "unknown": "Unknown launch error."
     },
     "input": {
       "checks": {

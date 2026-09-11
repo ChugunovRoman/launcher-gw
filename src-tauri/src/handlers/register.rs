@@ -7,7 +7,8 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     // process
     handlers::process::run_game,
     handlers::process::get_passed_args,
-    handlers::process::is_process_alive,
+    handlers::process::get_game_status,
+    handlers::process::check_install_path,
     handlers::process::open_explorer,
     // window
     handlers::window::app_exit,

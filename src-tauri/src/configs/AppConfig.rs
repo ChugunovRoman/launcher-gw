@@ -196,6 +196,8 @@ impl Default for RunParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+  /// Legacy field kept only to read old configs; forced to -1 on load.
+  /// The live game process is tracked via `tracked_game`. Remove in 1-2 releases.
   #[serde(default)]
   pub latest_pid: i64,
   #[serde(default)]
@@ -275,6 +277,11 @@ pub struct AppConfig {
   #[serde(default)]
   pub hide_max_perf_preset_warning: bool,
 
+  /// Game process tracked by the launcher (pid + start_time + exe), restored
+  /// on startup so "In game" survives a launcher restart while the game runs.
+  #[serde(default)]
+  pub tracked_game: Option<crate::service::game_tracker::TrackedGame>,
+
   // SKIPED PROPS
   #[serde(skip)]
   pub path: String,
@@ -320,6 +327,7 @@ impl Default for AppConfig {
       user_data_cache: None,
       bg_etag: None,
       hide_max_perf_preset_warning: false,
+      tracked_game: None,
       progress_upload: None,
       choosed_version_path: None,
     }
@@ -488,6 +496,16 @@ impl AppConfig {
     config.first_run = false;
     config.install_path = Self::get_path();
     config.path = path;
+
+    // Migration: latest_pid was a bare pid that Windows pid reuse turned into
+    // false "In game" state. It is no longer read anywhere; reset stale values.
+    if config.latest_pid != -1 {
+      log::info!(
+        "Migration: dropping legacy latest_pid {} (superseded by tracked_game)",
+        config.latest_pid
+      );
+      config.latest_pid = -1;
+    }
 
     // Sanitize: drop a progress_upload that was left as an empty object `{}`
     // (e.g. from a manual reset or an old config). An empty name means it is not

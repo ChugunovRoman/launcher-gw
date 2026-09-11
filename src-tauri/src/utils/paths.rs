@@ -220,3 +220,74 @@ pub fn assert_creatable_directory(path: &Path) -> Result<(), String> {
   }
   Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Temp-path warnings
+//
+// Players sometimes run the launcher straight from the WinRAR window: WinRAR
+// extracts it into `%TEMP%\rar$exa...` and deletes that folder when it closes,
+// taking the installed game with it. These helpers produce warning codes for
+// the frontend (`temp_dir`, `rar_temp`) — a warning, never a block.
+// ---------------------------------------------------------------------------
+
+pub const TEMP_PATH_CODE_TEMP_DIR: &str = "temp_dir";
+pub const TEMP_PATH_CODE_RAR_TEMP: &str = "rar_temp";
+
+fn normalize_for_compare(path: &Path) -> String {
+  path.to_string_lossy().to_lowercase().replace('/', "\\")
+}
+
+/// Warning codes for paths inside temp directories:
+/// `temp_dir` — under `std::env::temp_dir()` / `%TEMP%` / `%TMP%`;
+/// `rar_temp` — any path segment starting with `rar$` (WinRAR SFX temp folder).
+pub fn is_temp_path(path: &Path) -> Vec<&'static str> {
+  let mut codes: Vec<&'static str> = Vec::new();
+
+  let normalized = normalize_for_compare(path);
+  let mut roots: Vec<String> = vec![normalize_for_compare(&env::temp_dir())];
+  for var in ["TEMP", "TMP"] {
+    if let Some(value) = env::var_os(var) {
+      roots.push(normalize_for_compare(Path::new(&value)));
+    }
+  }
+
+  let under_temp_root = roots.iter().any(|root| {
+    let root = root.trim_end_matches('\\');
+    !root.is_empty() && (normalized == root || normalized.starts_with(&format!("{}\\", root)))
+  });
+  if under_temp_root {
+    codes.push(TEMP_PATH_CODE_TEMP_DIR);
+  }
+
+  let has_rar_segment = path
+    .components()
+    .any(|c| c.as_os_str().to_string_lossy().to_lowercase().starts_with("rar$"));
+  if has_rar_segment {
+    codes.push(TEMP_PATH_CODE_RAR_TEMP);
+  }
+
+  codes
+}
+
+#[cfg(test)]
+mod tests {
+  use super::is_temp_path;
+  use std::path::Path;
+
+  #[test]
+  fn temp_path_detection() {
+    // Under the real temp root with a rar$ segment: both codes.
+    let temp = std::env::temp_dir();
+    let codes = is_temp_path(&temp.join("rar$exa1.1").join("Global War Launcher"));
+    assert_eq!(codes, vec!["temp_dir", "rar_temp"]);
+
+    // Plain folder under temp: temp_dir only.
+    assert_eq!(is_temp_path(&temp.join("x")), vec!["temp_dir"]);
+
+    // A rar$ segment outside temp (subst/junction tricks): rar_temp only.
+    assert_eq!(is_temp_path(Path::new("D:\\Games\\rar$exa1.0\\GW")), vec!["rar_temp"]);
+
+    // A normal install path: no warnings.
+    assert!(is_temp_path(Path::new("C:\\Games\\GW")).is_empty());
+  }
+}

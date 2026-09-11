@@ -7,6 +7,8 @@
   import AddVersion from "./AddVersion.svelte";
   import PatchNotes from "./PatchNotes.svelte";
   import MaxPerformancePresetWarning from "./MaxPerformancePresetWarning.svelte";
+  import LaunchError from "./LaunchError.svelte";
+  import TempPathWarning from "./TempPathWarning.svelte";
 </script>
 
 <RestartApp />
@@ -17,5 +19,7 @@
 <AddVersion maxWidth="90%" />
 <PatchNotes />
 <MaxPerformancePresetWarning />
+<LaunchError />
+<TempPathWarning />
 
 <style></style>
