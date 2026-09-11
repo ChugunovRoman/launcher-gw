@@ -1,4 +1,5 @@
 import { register, init as initLocales } from 'svelte-i18n';
+import { invoke } from '@tauri-apps/api/core';
 import { Lang } from './consts';
 
 import { initPackListener } from "./lib/pack";
@@ -10,6 +11,7 @@ import { initProfilesListeners } from './lib/profiles';
 import { initPatchListeners } from './lib/patches';
 
 export async function init() {
+  // Register listeners first (IPC subscriptions, millisecond-fast).
   await Promise.all([
     initProfilesListeners(),
     initMainListeners(),
@@ -23,8 +25,14 @@ export async function init() {
   register(Lang.En, () => import('./locales/en.json'));
   register(Lang.Ru, () => import('./locales/ru.json'));
 
+  // Resolve the saved language BEFORE initializing locales so the first
+  // frame renders in the correct language (no flicker from ru → en).
+  const lang = await invoke<string>("get_lang").catch(() => Lang.Ru);
+  // Map backend lang ("ru"/"en") to the Lang enum value.
+  const locale = lang === "en" ? Lang.En : Lang.Ru;
+
   return initLocales({
-    initialLocale: Lang.Ru,
+    initialLocale: locale,
     fallbackLocale: Lang.Ru,
   });
 }

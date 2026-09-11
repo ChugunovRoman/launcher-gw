@@ -1,9 +1,11 @@
 import { listen } from "@tauri-apps/api/event";
 import { patchCheckResults, patchInstallProgress, patchInstallLog } from "../store/main";
 
+const unlisten: Map<string, (() => void)> = new Map();
+
 export async function initPatchListeners() {
   // Auto-check result: patches-available { version: string, count: number }
-  await listen<[string, number]>("patches-available", (e) => {
+  unlisten.set('patches-available', await listen<[string, number]>("patches-available", (e) => {
     const [versionName, count] = e.payload;
     patchCheckResults.update((map) => {
       map.set(versionName, {
@@ -13,15 +15,15 @@ export async function initPatchListeners() {
       return map;
     });
     console.log(`[patches] ${count} patches available for '${versionName}'`);
-  });
+  }));
 
   // Install progress: PatchInstallProgress { stage, file, file_progress, total_progress }
-  await listen<PatchInstallProgress>("patch-install-progress", (e) => {
+  unlisten.set('patch-install-progress', await listen<PatchInstallProgress>("patch-install-progress", (e) => {
     patchInstallProgress.set(e.payload);
-  });
+  }));
 
   // Install log messages
-  await listen<string>("patch-install-log", (e) => {
+  unlisten.set('patch-install-log', await listen<string>("patch-install-log", (e) => {
     patchInstallLog.update((logs) => [...logs.slice(-50), e.payload]);
-  });
+  }));
 }

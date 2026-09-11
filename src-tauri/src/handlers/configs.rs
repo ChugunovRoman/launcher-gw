@@ -6,7 +6,7 @@ use crate::{
   configs::{AppConfig::AppConfig, RunParams},
   handlers,
   providers::dto::ProviderStatus,
-  service::{index::IndexPreset, main::Service},
+  service::{index::IndexPreset, main::{ProviderStats, Service}},
   utils::encoding::{decode_token, mask_token},
 };
 
@@ -217,11 +217,7 @@ pub async fn set_hide_max_perf_preset_warning(app: tauri::AppHandle, value: bool
 }
 
 #[tauri::command]
-pub async fn get_api_providers_stats(service: tauri::State<'_, Arc<Mutex<Service>>>) -> Result<Vec<(&'static str, ProviderStatus)>, String> {
-  let stats = {
-    let service_guard = service.lock().await;
-    service_guard.stats.clone()
-  };
-
-  Ok(stats)
+pub async fn get_api_providers_stats(stats: tauri::State<'_, ProviderStats>) -> Result<Vec<(&'static str, ProviderStatus)>, String> {
+  let guard = stats.lock().await;
+  Ok(guard.clone())
 }

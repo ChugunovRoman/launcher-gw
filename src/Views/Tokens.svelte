@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { loadedTokens, providersWasInited, tokens } from "../store/main";
+  import { loadedTokens, configReady, tokens } from "../store/main";
 
   // Tokens are write-only now: get_tokens() returns masked values only,
   // the input is used exclusively to enter a NEW token.
@@ -63,7 +63,7 @@
   }
 
   $effect(() => {
-    if ($providersWasInited && !$loadedTokens) {
+    if ($configReady && !$loadedTokens) {
       loadProviders();
     }
   });

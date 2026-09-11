@@ -8,7 +8,6 @@ use tokio::sync::Mutex;
 use crate::configs::AppConfig::{AppConfig, Version};
 use crate::consts::*;
 use crate::service::game_tracker::{snapshot_process, GameStatus, GameTracker, TrackedGame};
-use crate::service::get_release::ServiceGetRelease;
 use crate::service::keybind_manager::KeybindManager;
 use crate::utils::resources::{game_exe, STALKER_LAUNCHER_STEMS};
 use crate::utils::split_args::split_args;
@@ -168,19 +167,13 @@ fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, 
 }
 
 /// Resolve launch target on the backend — never trust a full Version from IPC.
-async fn resolve_version_for_launch(
-  app: &tauri::AppHandle,
-  config: &AppConfig,
-  version_name: Option<&str>,
-  use_main: bool,
-) -> Result<Version, String> {
+///
+/// Reads only `AppConfig` (already held by the caller) — no `Service` state,
+/// so this never waits behind the background network task's long-held
+/// `Service` lock (provider ping, index fetch, ...).
+async fn resolve_version_for_launch(config: &AppConfig, version_name: Option<&str>, use_main: bool) -> Result<Version, String> {
   if use_main || version_name.is_none() {
-    let service = app
-      .try_state::<Arc<Mutex<crate::service::main::Service>>>()
-      .ok_or("Service not initialized")?;
-    let service_guard = service.lock().await;
-    return service_guard
-      .get_main_version()
+    return crate::service::get_release::get_main_version_from_config(config)
       .await
       .ok_or_else(|| "Main game version not found next to launcher".to_string());
   }
@@ -227,7 +220,7 @@ pub async fn run_game(
   let (version, run_params_snapshot, profile_for_launch, provider_id_for_launch) = {
     let config_guard = state.lock().await;
 
-    let version = resolve_version_for_launch(&app, &config_guard, versionName.as_deref(), useMain.unwrap_or(false))
+    let version = resolve_version_for_launch(&config_guard, versionName.as_deref(), useMain.unwrap_or(false))
       .await
       .map_err(|e| log_launch_error(LaunchError::VersionNotFound(e)))?;
 

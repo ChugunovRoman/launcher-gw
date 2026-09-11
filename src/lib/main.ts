@@ -1,14 +1,35 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { fontColor, connectStatus, providersWasInited, allowPackMod, versionsWillBeLoaded, appConfig, fetchLocalVersions, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, radioApiProvider, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind } from '../store/main';
-import { ConnectStatus, DownloadStatus } from "../consts";
-import { selectedVersion, versions } from '../store/upload';
+import { allowPackMod, versionsWillBeLoaded, appConfig, startupState, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind } from '../store/main';
+import { DownloadStatus } from "../consts";
+import { versions } from '../store/upload';
 import { get } from 'svelte/store';
 import { sep } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
 
 const unlisten: Map<string, (() => void)> = new Map();
+
+/// Idempotent launcher update check: fires once when providers reach Ok —
+/// from the startup-state event OR from bootstrap() reading an already-final
+/// state via get_startup_state (whichever happens first).
+let updateCheckStarted = false;
+export function maybeStartUpdateCheck() {
+  if (updateCheckStarted) return;
+  if (get(startupState).providers.status !== "ok") return;
+  updateCheckStarted = true;
+
+  invoke<boolean>('update').then(value => {
+    console.log('launcher update:', value);
+    showDlgRestartApp.set(value);
+    if (!value) {
+      getVersion().then(version => {
+        launcherDwnNeedUpdate.set(false);
+        launcherDwnVersion.set(version);
+      });
+    }
+  }).catch(e => console.error("update check failed:", e));
+}
 
 /// Tauri rejects invoke promises with arbitrary values (string, object, ...).
 /// Normalize anything into the backend's { code, detail } shape.
@@ -37,47 +58,61 @@ export async function warnIfTempPath(path: string) {
 }
 
 export async function initMainListeners() {
-  unlisten.set('background-init-success', await listen('background-init-success', (event: Event<void>) => {
-    console.log("background-init-success !");
+  // startup-state: aggregate phase of all startup sub-tasks.
+  // connectStatus and fontColor are now derived from this store.
+  unlisten.set('startup-state', await listen<StartupState>('startup-state', (event) => {
+    console.log("startup-state:", event.payload);
+    startupState.set(event.payload);
 
-    providersWasInited.set(true);
-    connectStatus.set(ConnectStatus.Connnected);
-    fontColor.set("rgba(69, 240, 97, 1)");
+    // Launcher update check fires once when providers reach Ok.
+    maybeStartUpdateCheck();
+  }));
 
-    // Initial game state (may already be "running" after a launcher restart).
-    invoke<GameStatus>("get_game_status")
-      .then((status) => gameStatus.set(status))
-      .catch((e) => console.error("get_game_status failed:", e));
+  // Compatibility: background-init-success/failed are still emitted by the
+  // backend for one release cycle.  We no longer gate on them.
+  unlisten.set('background-init-success', await listen('background-init-success', () => {
+    console.log("background-init-success (compat)");
   }));
   unlisten.set('background-init-failed', await listen('background-init-failed', (event: Event<string>) => {
-    console.log("background-init-failed !, error: ", event.payload);
-
-    providersWasInited.set(false);
-    connectStatus.set(ConnectStatus.ConnnectError);
-    fontColor.set("rgba(254, 197, 208, 1)");
+    console.log("background-init-failed (compat):", event.payload);
   }));
-  unlisten.set('user-data-loaded', await listen('user-data-loaded', (event: Event<void>) => {
-    console.log("user-data-loaded ! ");
 
+  unlisten.set('user-data-loaded', await listen('user-data-loaded', () => {
+    console.log("user-data-loaded!");
     invoke<boolean>("allow_pack_mod").then((value) => allowPackMod.set(value));
   }));
   unlisten.set('game-status', await listen('game-status', (event: Event<GameStatus>) => {
     gameStatus.set(event.payload);
   }));
   unlisten.set('launcher-in-temp-dir', await listen('launcher-in-temp-dir', (event: Event<string[]>) => {
-    console.warn("launcher runs from a temp dir: ", event.payload);
+    console.warn("launcher runs from a temp dir:", event.payload);
     tempPathWarningKind.set("launcher");
     tempPathWarningCodes.set(event.payload);
     showDlgTempPathWarning.set(true);
   }));
   unlisten.set('versions-loaded', await listen('versions-loaded', async (event: Event<Version[]>) => {
-    console.log("versions-loaded ! payload: ", event.payload);
-
+    console.log("versions-loaded:", event.payload);
+    const cfg = get(appConfig);
+    // If appConfig is not yet populated (should not happen with bootstrap,
+    // but guard against race), fetch it first.
+    if (!cfg.default_installed_path) {
+      try {
+        const fresh = await invoke<AppConfig>('get_config');
+        appConfig.set(fresh);
+      } catch (e) {
+        console.error("versions-loaded: get_config fallback failed", e);
+      }
+    }
     const separ = await sep();
-
     versions.set(event.payload.map(version => prepareVersionItem(get(appConfig), version, separ)));
-
     versionsWillBeLoaded.set(true);
+  }));
+  unlisten.set('providers-stats', await listen('providers-stats', () => {
+    // Refresh the providers store from the backend.
+    invoke<[string, ProviderStatus][]>('get_api_providers_stats').then(result => {
+      result.sort((a, b) => (a[1].latency_ms ?? Number.MAX_SAFE_INTEGER) - (b[1].latency_ms ?? Number.MAX_SAFE_INTEGER));
+      providers.set(result);
+    }).catch(e => console.error("providers-stats refresh failed:", e));
   }));
   unlisten.set('launcher-new-version', await listen('launcher-new-version', (event: Event<string>) => {
     console.log('launcher-new-version:', event.payload);
@@ -85,37 +120,7 @@ export async function initMainListeners() {
   }));
   unlisten.set('move-version', await listen('move-version', (event: Event<ProgressPayload>) => {
     const { version_name } = event.payload;
-
     moveProgress.setItem(version_name, event.payload);
-  }));
-
-  unlisten.set('config-loaded', await listen('config-loaded', (event: Event<AppConfig>) => {
-    if (event.payload.selected_provider_id) {
-      radioApiProvider.set(event.payload.selected_provider_id);
-    }
-    if (event.payload.selected_version) {
-      selectedVersion.set(event.payload.selected_version);
-    }
-    invoke<[string, ProviderStatus][]>('get_api_providers_stats').then(result => {
-      result.sort((a, b) => (a[1].latency_ms ?? Number.MAX_SAFE_INTEGER) - (b[1].latency_ms ?? Number.MAX_SAFE_INTEGER));
-      providers.set(result)
-    });
-
-    invoke<boolean>('update').then(value => {
-      console.log('launcher update:', value);
-      showDlgRestartApp.set(value);
-
-      if (!value) {
-        getVersion().then(version => {
-          launcherDwnNeedUpdate.set(false);
-          launcherDwnVersion.set(version);
-        });
-      }
-    });
-    console.log("config-loaded ! payload: ", event.payload);
-    appConfig.set(event.payload);
-
-    fetchLocalVersions();
   }));
 }
 

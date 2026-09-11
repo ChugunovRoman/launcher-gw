@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { sep } from "@tauri-apps/api/path";
-  import { appConfig, updateConfig, providersWasInited, radioApiProvider, providers, localVersions } from "../store/main";
+  import { appConfig, updateConfig, configReady, radioApiProvider, providers, localVersions, startupState } from "../store/main";
   import { choosePath } from "../utils/path";
   import { updateEachVersion, versions } from "../store/upload";
 
@@ -65,7 +65,7 @@
   }
 
   $effect(() => {
-    if ($providersWasInited) {
+    if ($configReady) {
       invoke<AppConfig>("get_config").then((config) => {
         uuid = config.client_uuid;
       });
@@ -161,6 +161,8 @@
               {$_(`app.servers.${id}`)}
               {#if stats.available}
                 ({$_("app.settings.ping")} {stats.latency_ms})
+              {:else if $startupState.providers.status === "pending"}
+                <span class="warntext">({$_("app.settings.measuring")})</span>
               {:else}
                 <span class="warntext">({$_("app.settings.noAvailable")})</span>
               {/if}

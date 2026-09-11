@@ -147,6 +147,16 @@ declare interface LaunchError {
   detail: string;
 }
 
+declare interface UserData {
+  uuid: string;
+  flags: string[];
+}
+declare interface UserDataCache {
+  data: UserData;
+  fetched_at: string;
+  is_negative: boolean;
+}
+
 declare interface AppConfig {
   first_run: boolean;
   install_path: string;
@@ -177,6 +187,8 @@ declare interface AppConfig {
   progress_upload?: VersionProgressUpload;
   progress_download: Dict<VersionProgress>;
   tracked_game?: TrackedGame | null;
+  user_data_cache?: UserDataCache | null;
+  bg_etag?: string | null;
 }
 
 
@@ -206,6 +218,19 @@ declare interface ReleaseManifest {
 declare interface ProviderStatus {
   available: boolean;
   latency_ms: number | null;
+}
+
+// StartupState: aggregate phase of all startup sub-tasks.
+declare type PhaseStatus = "pending" | "ok" | "error";
+declare interface Phase {
+  status: PhaseStatus;
+  detail?: string;
+}
+declare interface StartupState {
+  providers: Phase;
+  releases: Phase;
+  user_data: Phase;
+  profiles: Phase;
 }
 
 declare interface ProgressPayload {

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::{
+  configs::AppConfig::AppConfig,
   consts::{REPO_LAUNCGER_ID, USER_CACHE_TTL_POSITIVE_SECS, USER_CACHE_TTL_NEGATIVE_SECS},
   service::{dto::{UserData, UserDataCache}, main::Service},
 };
@@ -8,6 +9,22 @@ use anyhow::Result;
 
 const USER_CACHE_TTL_POSITIVE: Duration = Duration::from_secs(USER_CACHE_TTL_POSITIVE_SECS);
 const USER_CACHE_TTL_NEGATIVE: Duration = Duration::from_secs(USER_CACHE_TTL_NEGATIVE_SECS);
+
+/// Check the persisted `user_data_cache` in `AppConfig` and return the data
+/// if the TTL has not expired.  Pure local read, no network.
+pub fn cached_user_data(config: &AppConfig) -> Option<UserData> {
+  if let Some(ref cached) = config.user_data_cache {
+    if let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&cached.fetched_at) {
+      let age = chrono::Utc::now() - fetched_at.with_timezone(&chrono::Utc);
+      let ttl = if cached.is_negative { USER_CACHE_TTL_NEGATIVE } else { USER_CACHE_TTL_POSITIVE };
+      if age.to_std().unwrap_or(Duration::ZERO) < ttl {
+        log::info!("cached_user_data: cache hit (negative={}, age={:?})", cached.is_negative, age);
+        return Some(cached.data.clone());
+      }
+    }
+  }
+  None
+}
 
 pub trait ServiceClient {
   async fn get_user(&self, uuid: String) -> Result<UserData>;
@@ -18,15 +35,8 @@ impl ServiceClient for Service {
     // --- Check persisted cache first ---
     {
       let cfg = self.config.lock().await;
-      if let Some(ref cached) = cfg.user_data_cache {
-        if let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&cached.fetched_at) {
-          let age = chrono::Utc::now() - fetched_at.with_timezone(&chrono::Utc);
-          let ttl = if cached.is_negative { USER_CACHE_TTL_NEGATIVE } else { USER_CACHE_TTL_POSITIVE };
-          if age.to_std().unwrap_or(Duration::ZERO) < ttl {
-            log::info!("get_user: cache hit (negative={}, age={:?})", cached.is_negative, age);
-            return Ok(cached.data.clone());
-          }
-        }
+      if let Some(data) = cached_user_data(&cfg) {
+        return Ok(data);
       }
     }
 
@@ -80,5 +90,76 @@ impl ServiceClient for Service {
     }
 
     Ok(user_data)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn make_config(cache: Option<UserDataCache>) -> AppConfig {
+    // Deserialize from an empty object: every field has a serde default, and
+    // this skips AppConfig::default() which probes display resolutions via
+    // winit (panics outside the main thread on Windows).
+    let mut cfg: AppConfig = serde_json::from_str("{}").unwrap();
+    cfg.user_data_cache = cache;
+    cfg
+  }
+
+  fn cache(fetched_at: chrono::DateTime<chrono::Utc>, is_negative: bool) -> UserDataCache {
+    UserDataCache {
+      data: UserData {
+        uuid: "test-uuid".to_string(),
+        flags: vec!["allowPackMod".to_string()],
+      },
+      fetched_at: fetched_at.to_rfc3339(),
+      is_negative,
+    }
+  }
+
+  #[test]
+  fn cached_user_data_positive_within_ttl() {
+    let cfg = make_config(Some(cache(chrono::Utc::now(), false)));
+    let data = cached_user_data(&cfg);
+    assert!(data.is_some());
+    assert_eq!(data.unwrap().uuid, "test-uuid");
+  }
+
+  #[test]
+  fn cached_user_data_positive_expired() {
+    // 25h ago — beyond the 24h positive TTL.
+    let stale = chrono::Utc::now() - chrono::Duration::hours(25);
+    let cfg = make_config(Some(cache(stale, false)));
+    assert!(cached_user_data(&cfg).is_none());
+  }
+
+  #[test]
+  fn cached_user_data_negative_within_ttl() {
+    // Negative results use a shorter 6h TTL — 3h old is still valid.
+    let fresh_negative = chrono::Utc::now() - chrono::Duration::hours(3);
+    let cfg = make_config(Some(cache(fresh_negative, true)));
+    assert!(cached_user_data(&cfg).is_some());
+  }
+
+  #[test]
+  fn cached_user_data_negative_expired() {
+    // 7h old negative — beyond the 6h TTL.
+    let stale_negative = chrono::Utc::now() - chrono::Duration::hours(7);
+    let cfg = make_config(Some(cache(stale_negative, true)));
+    assert!(cached_user_data(&cfg).is_none());
+  }
+
+  #[test]
+  fn cached_user_data_no_cache() {
+    let cfg = make_config(None);
+    assert!(cached_user_data(&cfg).is_none());
+  }
+
+  #[test]
+  fn cached_user_data_malformed_timestamp() {
+    let mut bad = cache(chrono::Utc::now(), false);
+    bad.fetched_at = "not-a-date".to_string();
+    let cfg = make_config(Some(bad));
+    assert!(cached_user_data(&cfg).is_none());
   }
 }

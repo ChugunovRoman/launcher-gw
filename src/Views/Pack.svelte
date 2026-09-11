@@ -4,7 +4,7 @@
   import { onDestroy } from "svelte";
 
   import { progress, isInProcess, finish, completed, currentFile, processedSize, totalSize, status } from "../store/pack";
-  import { providersWasInited } from "../store/main";
+  import { configReady } from "../store/main";
   import { choosePath, chooseFilePath } from "../utils/path";
   import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
 
@@ -70,7 +70,7 @@
   let finishTimers: ReturnType<typeof setTimeout>[] = [];
 
   $effect(() => {
-    if ($providersWasInited) {
+    if ($configReady) {
       invoke<AppConfig>("get_config").then((config) => {
         packPath = config.pack_source_dir;
         targetPath = config.pack_target_dir;

@@ -5,11 +5,11 @@
   import { join } from "@tauri-apps/api/path";
   import { listen } from "@tauri-apps/api/event";
   import {
-    connectStatus,
     gameStatus,
     launchError,
     localVersions,
     versionsWillBeLoaded,
+    startupState,
     expandedIndex,
     showDlgRemoveVersion,
     removeVersion,
@@ -27,7 +27,7 @@
   } from "../store/main";
   import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion } from "../store/upload";
   import { normalizeLaunchError, warnIfTempPath } from "../lib/main";
-  import { COFF_FROM_COMPRESSED_SIZE, ConnectStatus, DownloadStatus } from "../consts";
+  import { COFF_FROM_COMPRESSED_SIZE, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
   import { FileDown } from "lucide-svelte";
   import { choosePath } from "../utils/path";
@@ -763,26 +763,33 @@
   <h2>{$_("app.labels.allVersions")}</h2>
 
   <div class="releases-scroll">
-    <!-- Список существующих релизов -->
-    {#if !$versionsWillBeLoaded}
-      {#if $connectStatus === ConnectStatus.ConnnectError}
-        <h2 style="color: rgba(254, 197, 208, 1)">{$_("app.h.error")}</h2>
-      {:else}
-        <div class="loader-card">
-          <svg width="100" height="100" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="24" r="4" fill="white" opacity="0.3">
-              <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="24" cy="24" r="4" fill="white" opacity="0.3">
-              <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" begin="0.2s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="36" cy="24" r="4" fill="white" opacity="0.3">
-              <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" begin="0.4s" repeatCount="indefinite" />
-            </circle>
-          </svg>
-          <h2>{$_("app.download.loadData")}</h2>
-        </div>
-      {/if}
+    <!-- Background-update status line. Also shown while switching providers
+         (versionsWillBeLoaded=false) so the old list visibly refreshes. -->
+    {#if $startupState.releases.status === "pending" || !$versionsWillBeLoaded}
+      <span class="release-refresh-status">{$_("app.releases.refreshing")}</span>
+    {:else if $startupState.releases.status === "error" && $versions.length > 0}
+      <span class="release-refresh-status release-refresh-error">{$_("app.releases.refreshFailed")}</span>
+    {/if}
+
+    {#if $versions.length === 0 && $startupState.releases.status === "pending"}
+      <!-- Empty list + still loading -> show spinner -->
+      <div class="loader-card">
+        <svg width="100" height="100" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="24" r="4" fill="white" opacity="0.3">
+            <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="24" cy="24" r="4" fill="white" opacity="0.3">
+            <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" begin="0.2s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="36" cy="24" r="4" fill="white" opacity="0.3">
+            <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" begin="0.4s" repeatCount="indefinite" />
+          </circle>
+        </svg>
+        <h2>{$_("app.download.loadData")}</h2>
+      </div>
+    {:else if $versions.length === 0 && $startupState.releases.status === "error"}
+      <!-- Empty list + error -> no cached data available -->
+      <h2 style="color: rgba(254, 197, 208, 1)">{$_("app.releases.noSavedList")}</h2>
     {:else}
       {#each $versions as version, i}
         {#if !hasLocalVersion(version)}
@@ -1484,5 +1491,15 @@
     padding: 0 5px;
     margin-left: 8px;
     vertical-align: middle;
+  }
+
+  .release-refresh-status {
+    display: block;
+    font-size: 0.8rem;
+    color: #aaa;
+    margin-bottom: 0.5rem;
+  }
+  .release-refresh-status.release-refresh-error {
+    color: rgba(254, 197, 208, 0.9);
   }
 </style>

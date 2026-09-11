@@ -8,7 +8,8 @@
       "updateChecking": "Checking for launcher updates",
       "latest": "Using the latest version",
       "restartApp": "Restart the launcher",
-      "download": "Downloading a new version of the launcher: "
+      "download": "Downloading a new version of the launcher: ",
+      "updatesUnavailable": "Updates unavailable"
     },
     "renderer": {
       "renderer_r2": "DirectX 9 (Basic)",
@@ -75,6 +76,7 @@
       "clientUuid": "Client ID",
       "ping": "ping: ",
       "noAvailable": "Not available",
+      "measuring": "measuring...",
       "servers": "Current server for downloading game files:",
       "retryPing": "Retry ping",
       "providerSwitchError": "Failed to switch server. Check your connection."
@@ -313,6 +315,9 @@
       "movingCompleted": "Completed !",
       "runVersion": "Launch",
       "noAnyInstalledVersion": "No versions installed",
+      "refreshing": "Refreshing...",
+      "refreshFailed": "Update failed, showing saved list",
+      "noSavedList": "No saved list found. Check your network connection.",
       "delete": "Delete",
       "deleting": "Deleting...",
       "installed": "Downloaded",

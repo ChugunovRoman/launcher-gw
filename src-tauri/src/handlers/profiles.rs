@@ -11,6 +11,13 @@ use crate::{
   service::{dto::ProfileItem, keybind_manager::KeybindManager},
 };
 
+/// Return the current keybinding profiles (pull counterpart for the
+/// `load-key-profiles` push event).
+#[tauri::command]
+pub async fn get_key_profiles(keybind_manager: tauri::State<'_, Arc<KeybindManager>>) -> Result<Vec<ProfileItem>, String> {
+  Ok(keybind_manager.get_profiles_str().await)
+}
+
 pub async fn sync_selected_profile(cfg: &mut AppConfig, keybind_manager: &KeybindManager) -> bool {
   let profiles = keybind_manager.get_profiles().await;
   let resolved = match cfg.selected_profile.as_deref() {

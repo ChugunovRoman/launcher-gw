@@ -24,11 +24,12 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
-  import { providersWasInited } from "./store/main";
+  import { configReady, startupState } from "./store/main";
   import { currentView, previousView } from "./store/menu";
 
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
+  let bgLoadFailed = false;
   const VIEW_ORDER: string[] = ["home", "runParams", "keybindings", "versions", "pack", "unpack", "releases", "tokens", "settings"];
 
   // Маппинг view -> компонент
@@ -44,9 +45,20 @@
     settings: SettingsView,
   };
 
-  $: if ($providersWasInited) {
-    loadBackground();
-  }
+  // Background: load once local config is ready (etag match serves from disk).
+  $effect(() => {
+    if ($configReady) {
+      loadBackground();
+    }
+  });
+
+  // Retry once providers are confirmed reachable — the initial attempt may
+  // have failed because the saved provider was still down.
+  $effect(() => {
+    if ($startupState.providers.status === "ok" && bgLoadFailed) {
+      loadBackground();
+    }
+  });
 
   // Обработчик выбора view
   function handleSelect(view: string) {
@@ -77,8 +89,10 @@
       const bytes = await invoke<number[]>("get_launcher_bg");
       const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
       bgUrl = URL.createObjectURL(blob);
+      bgLoadFailed = false;
     } catch (err) {
       console.error("Failed to load background:", err);
+      bgLoadFailed = true;
     }
   }
 

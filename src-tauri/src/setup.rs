@@ -17,6 +17,8 @@ use crate::service::files::ServiceFiles;
 use crate::service::game_tracker::{probe, GameTracker};
 use crate::service::get_release::ServiceGetRelease;
 use crate::service::keybind_manager::KeybindManager;
+use crate::service::main::ProviderStats;
+use crate::service::startup_state::StartupTracker;
 use crate::service::unpack::ServiceUnpacker;
 use crate::service::updater::ServiceUpdater;
 use crate::service::wake_detector::WakeDetector;
@@ -67,8 +69,16 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   let config = AppConfig::load_or_create(app.handle())?;
   http_cache::init(app.handle())?;
+
+  // Pre-fill user_data from the persisted cache (if TTL is still valid)
+  // so the frontend can call allow_pack_mod immediately, before network init.
+  let cached_ud = crate::service::client::cached_user_data(&config);
+  // Capture the saved provider selection before the config is moved into the Arc.
+  let saved_provider_id = config.selected_provider_id.clone();
+
   let config_arc = Arc::new(Mutex::new(config));
   let config_arc_clone = config_arc.clone();
+
 
   log::info!("Init AppConfig Completed");
 
@@ -93,7 +103,18 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   let keybind_manager_arc_clone = keybind_manager_arc.clone();
 
   // Создаём сервис
-  let service = Service::new(config_arc.clone(), logger);
+  let mut service = Service::new(config_arc.clone(), logger);
+  // Register providers locally (sync, no network) so get_provider_ids etc.
+  // work immediately for the frontend bootstrap.
+  service.register_providers_local(saved_provider_id.as_deref());
+  // Pre-fill provider stats with placeholders (available=false) so Settings
+  // can list both providers right away; real statuses arrive after ping.
+  let placeholder_stats: Vec<(&'static str, crate::providers::dto::ProviderStatus)> = service
+    .api_client
+    .get_provider_ids()
+    .iter()
+    .filter_map(|id| service.api_client.get_provider(id).ok().map(|p| (p.id(), p.status())))
+    .collect();
   let service_arc = Arc::new(Mutex::new(service));
   let service_unpack_arc = Arc::new(ServiceUnpacker::new(move |release_name, file_name, count, total| {
     let _ = handle2.emit("game-archive-unack-progress", (release_name, file_name, count, total));
@@ -106,9 +127,12 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   }));
   let service_clone = service_arc.clone();
 
-  let user_data_placeholder = Arc::new(Mutex::new(Option::<UserData>::None));
+  let user_data_placeholder = Arc::new(Mutex::new(cached_ud));
 
   log::info!("Init Service Completed");
+
+  let startup_tracker = Arc::new(StartupTracker::new(app.handle().clone()));
+  let provider_stats: ProviderStats = Arc::new(Mutex::new(placeholder_stats));
 
   let wake_callback = move || {
     restart_app(&app_handle);
@@ -124,6 +148,8 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(Arc::new(Mutex::new(tmp_ltx_config)));
   app.manage(user_data_placeholder.clone());
   app.manage(service_arc);
+  app.manage(startup_tracker.clone());
+  app.manage(provider_stats.clone());
   app.manage(keybind_manager_arc);
   app.manage(service_files_arc);
   app.manage(service_unpack_arc);
@@ -177,78 +203,231 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   crate::service::game_tracker::start_watcher(app.handle().clone(), game_tracker_arc.clone(), config_arc.clone());
 
   let user_data_bg = user_data_placeholder.clone();
+  let startup_tracker_a = startup_tracker.clone();
+  let startup_tracker_b = startup_tracker.clone();
+  let provider_stats_b = provider_stats.clone();
+  let config_arc_clone_b = config_arc_clone.clone();
+  let app_handle_bg_b = app_handle_bg.clone();
 
+  // --- Task A: local-only (profiles, no network) ---
   tauri::async_runtime::spawn(async move {
-    let result = async {
-      // 1. Регистрация провайдеров
-      // Each network phase takes the Service lock separately so UI commands
-      // (provider switch, uploads) can run between them instead of waiting
-      // for the whole startup chain.
-      {
+    match keybind_manager_arc_clone.load_profiles().await {
+      Ok(()) => {
         {
-          let mut service = service_clone.lock().await;
-          service.register_all_providers().await?;
-        }
-
-        // load_manifest: GitLab uses a hardcoded JSON (no network, safe to
-        // always call).  GitHub calls the Search API which counts against
-        // the rate limit — skip it for anonymous players (the static
-        // release index provides everything the player flow needs).
-        {
-          let mut service = service_clone.lock().await;
-          let (is_gitlab, has_token) = match service.api_client.current_provider() {
-            Ok(api) => (api.is_suppot_subgroups(), !api.get_token().is_empty()),
-            Err(_) => (false, false),
-          };
-          if is_gitlab || has_token {
-            service.load_manifest().await?;
-          } else {
-            log::info!("Skipping load_manifest: GitHub player mode (no token)");
+          let mut cfg = config_arc_clone.lock().await;
+          if crate::handlers::profiles::sync_selected_profile(&mut cfg, &keybind_manager_arc_clone).await {
+            let _ = cfg.save();
           }
         }
+        let profiles = keybind_manager_arc_clone.get_profiles_str().await;
+        let _ = app_handle_bg.emit("load-key-profiles", profiles);
+        startup_tracker_a.set(|s| s.profiles = crate::service::startup_state::Phase::Ok).await;
+      }
+      Err(e) => {
+        log::error!("load_profiles failed: {:?}", e);
+        startup_tracker_a.set(|s| {
+          s.profiles = crate::service::startup_state::Phase::Error(e.to_string());
+        }).await;
+      }
+    }
+  });
 
-        let releases = {
-          let mut service = service_clone.lock().await;
-          service.get_releases(false).await?
-        };
-
-        {
-          let mut config_guard = config_arc_clone.lock().await;
-          config_guard.versions = releases.clone();
-          config_guard.save()?;
-
-          // Never ship provider tokens into the webview (get_config clears
-          // them, get_tokens masks them — the startup event must not leak).
-          let mut cfg_snapshot = config_guard.clone();
-          cfg_snapshot.tokens.clear();
-          let _ = app_handle_bg.emit("config-loaded", cfg_snapshot);
+  // --- Task B: network (providers, releases, user data, patches) ---
+  tauri::async_runtime::spawn(async move {
+    let result = async {
+      // Warn about temp dir immediately (no network dependency).
+      {
+        let install_path = { config_arc_clone_b.lock().await.install_path.clone() };
+        let codes = crate::utils::paths::is_temp_path(Path::new(&install_path));
+        if !codes.is_empty() {
+          log::warn!("launcher runs from a temp directory: {:?} ({:?})", install_path, codes);
+          let _ = app_handle_bg_b.emit("launcher-in-temp-dir", codes);
         }
-
-        let _ = app_handle_bg.emit("versions-loaded", releases);
       }
 
-      // Auto-check for available patches (lightweight, silent).
+      // 1. Ping providers (no Service lock during network I/O).
+      let api_client = {
+        let svc = service_clone.lock().await;
+        svc.api_client.clone()
+      };
+      let (stats, best) = crate::service::main::refresh_provider_stats(&api_client).await;
       {
+        let mut stats_guard = provider_stats_b.lock().await;
+        *stats_guard = stats;
+      }
+      let _ = app_handle_bg_b.emit("providers-stats", ());
+
+      // Re-select the current provider based on ping results.
+      {
+        let mut svc = service_clone.lock().await;
+        let saved_id = svc.config.lock().await.selected_provider_id.clone();
+        let provider_id = match saved_id {
+          Some(ref id) => {
+            let saved_ok = api_client.get_status(id).map(|s| s.available).unwrap_or(false);
+            if saved_ok {
+              id.clone()
+            } else if let Some(ref fallback) = best {
+              log::warn!("Saved provider '{}' unavailable, falling back to '{}'", id, fallback);
+              fallback.clone()
+            } else {
+              id.clone()
+            }
+          }
+          None => best.clone().unwrap_or_else(|| "github".to_string()),
+        };
+        let _ = svc.api_client.set_current_provider(&provider_id);
+      }
+
+      // Update startup_state: providers done.
+      let providers_ok = best.is_some();
+      startup_tracker_b.set(|s| {
+        s.providers = if providers_ok {
+          crate::service::startup_state::Phase::Ok
+        } else {
+          crate::service::startup_state::Phase::Error("No providers reachable".into())
+        };
+      }).await;
+
+      // If no providers available — skip network steps but still emit
+      // background-init-failed at the end.
+      let providers_error = if !providers_ok {
+        Some("No available API providers".to_string())
+      } else {
+        None
+      };
+
+      // 2. load_manifest (conditional, same guard as before).
+      if providers_error.is_none() {
+        let (is_gitlab, has_token) = {
+          let svc = service_clone.lock().await;
+          match svc.api_client.current_provider() {
+            Ok(api) => (api.is_suppot_subgroups(), !api.get_token().is_empty()),
+            Err(_) => (false, false),
+          }
+        };
+        if is_gitlab || has_token {
+          let mut svc = service_clone.lock().await;
+          if let Err(e) = svc.load_manifest().await {
+            log::warn!("load_manifest failed: {}", e);
+          }
+        } else {
+          log::info!("Skipping load_manifest: GitHub player mode (no token)");
+        }
+      }
+
+      // 3. get_releases.
+      if providers_error.is_none() {
+        let releases = {
+          let mut svc = service_clone.lock().await;
+          svc.get_releases(false).await
+        };
+        match releases {
+          Ok(releases) => {
+            {
+              let mut cfg = config_arc_clone_b.lock().await;
+              cfg.versions = releases.clone();
+              let _ = cfg.save();
+            }
+            let _ = app_handle_bg_b.emit("versions-loaded", releases);
+            startup_tracker_b.set(|s| s.releases = crate::service::startup_state::Phase::Ok).await;
+          }
+          Err(e) => {
+            log::warn!("get_releases failed: {}", e);
+            startup_tracker_b.set(|s| {
+              s.releases = crate::service::startup_state::Phase::Error(e.to_string());
+            }).await;
+          }
+        }
+      } else {
+        startup_tracker_b.set(|s| {
+          s.releases = crate::service::startup_state::Phase::Error(providers_error.clone().unwrap());
+        }).await;
+      }
+
+      // 4. Parallel: get_user (network) + auto-check patches.
+      let user_data_fut = async {
+        let data = {
+          let guard = config_arc_clone_b.lock().await;
+          (guard.client_uuid.clone(), guard.tokens.clone())
+        };
+        let user_data = {
+          let svc = service_clone.lock().await;
+          if let Err(e) = svc.set_tokens(data.1).await {
+            log::warn!("set_tokens failed: {}", e);
+          }
+          svc.get_user(data.0).await.unwrap_or_default()
+        };
+        // Migrate legacy XOR-encoded tokens to the DPAPI-backed storage.
+        {
+          let mut cfg = config_arc_clone_b.lock().await;
+          let mut migrated = false;
+          for (id, stored) in cfg.tokens.iter_mut() {
+            if is_legacy_token(stored) {
+              match decode_token(stored) {
+                Ok(plain) => {
+                  *stored = encode_token(&plain);
+                  migrated = true;
+                  log::info!("Migrated stored token of provider '{}' to DPAPI storage", id);
+                }
+                Err(e) => log::warn!("Token migration skipped for '{}': {}", id, e),
+              }
+            }
+          }
+          if migrated {
+            if let Err(e) = cfg.save() {
+              log::error!("Failed to persist token migration: {}", e);
+            }
+          }
+        }
+        // Update placeholder and emit.
+        {
+          let mut ud = user_data_bg.lock().await;
+          *ud = Some(user_data);
+        }
+        log::info!("User data fetched");
+        let _ = app_handle_bg_b.emit("user-data-loaded", ());
+        // When providers are unreachable, get_user() returned a default —
+        // reflect that in the phase instead of a false Ok.
+        startup_tracker_b.set(|s| {
+          s.user_data = match &providers_error {
+            Some(err) => crate::service::startup_state::Phase::Error(err.clone()),
+            None => crate::service::startup_state::Phase::Ok,
+          };
+        }).await;
+      };
+
+      let patches_fut = async {
         let api_client = {
           let svc = service_clone.lock().await;
           svc.api_client.clone()
         };
         let version_names: Vec<String> = {
-          let cfg = config_arc_clone.lock().await;
+          let cfg = config_arc_clone_b.lock().await;
           cfg.installed_versions.values().map(|v| v.name.clone()).collect()
         };
 
-        for vname in version_names {
-          let check = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            check_patches_available(&api_client, &config_arc_clone, &vname),
-          )
-          .await;
+        // Run patch checks in parallel with 10s timeout each.
+        let tasks: Vec<_> = version_names
+          .into_iter()
+          .map(|vname| {
+            let ac = api_client.clone();
+            let cfg = config_arc_clone_b.clone();
+            async move {
+              let check = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                check_patches_available(&ac, &cfg, &vname),
+              )
+              .await;
+              (vname, check)
+            }
+          })
+          .collect();
 
+        for (vname, check) in futures_util::future::join_all(tasks).await {
           match check {
             Ok(Some(count)) if count > 0 => {
               log::info!("Auto-check: {} patches available for '{}'", count, &vname);
-              let _ = app_handle_bg.emit("patches-available", (&vname, count));
+              let _ = app_handle_bg_b.emit("patches-available", (&vname, count));
             }
             Ok(Some(_)) => {
               log::info!("Auto-check: '{}' is up to date", &vname);
@@ -261,81 +440,31 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
             }
           }
         }
-      }
-
-      {
-        keybind_manager_arc_clone.load_profiles().await?;
-        {
-          let mut cfg = config_arc_clone.lock().await;
-          if crate::handlers::profiles::sync_selected_profile(&mut cfg, &keybind_manager_arc_clone).await {
-            cfg.save()?;
-          }
-        }
-        let profiles = keybind_manager_arc_clone.get_profiles_str().await;
-        let _ = app_handle_bg.emit("load-key-profiles", profiles);
-      }
-
-      // 2. Получение данных пользователя
-      let data = {
-        let guard = config_arc_clone.lock().await;
-        (guard.client_uuid.clone(), guard.tokens.clone())
       };
-      let user_data = {
-        let service_clone_guard = service_clone.lock().await;
-        service_clone_guard.set_tokens(data.1).await?;
-        service_clone_guard.get_user(data.0).await?
-      };
-      // Migrate legacy XOR-encoded tokens to the DPAPI-backed storage.
-      {
-        let mut cfg = config_arc_clone.lock().await;
-        let mut migrated = false;
-        for (id, stored) in cfg.tokens.iter_mut() {
-          if is_legacy_token(stored) {
-            match decode_token(stored) {
-              Ok(plain) => {
-                *stored = encode_token(&plain);
-                migrated = true;
-                log::info!("Migrated stored token of provider '{}' to DPAPI storage", id);
-              }
-              Err(e) => log::warn!("Token migration skipped for '{}': {}", id, e),
-            }
-          }
-        }
-        if migrated {
-          if let Err(e) = cfg.save() {
-            log::error!("Failed to persist token migration: {}", e);
-          }
-        }
+
+      tokio::join!(user_data_fut, patches_fut);
+
+      // 5. Emit compatibility events.
+      let final_state = startup_tracker_b.snapshot().await;
+      let has_error = matches!(
+        (&final_state.providers, &final_state.releases),
+        (crate::service::startup_state::Phase::Error(_), _) |
+        (_, crate::service::startup_state::Phase::Error(_))
+      );
+      if has_error {
+        let _ = app_handle_bg_b.emit("background-init-failed", "Provider or releases error".to_string());
+      } else {
+        let _ = app_handle_bg_b.emit("background-init-success", ());
       }
-      // Обновляем состояние
-      {
-        let mut user_data_guard = user_data_bg.lock().await;
-        *user_data_guard = Some(user_data);
-      }
-      log::info!("User data fetched");
-      let _ = app_handle_bg.emit("user-data-loaded", ());
 
       Ok::<(), anyhow::Error>(())
     }
     .await;
 
     if let Err(e) = result {
-      log::error!("Background initialization failed: {:?}", e);
+      log::error!("Background init (task B) failed: {:?}", e);
       log_full_error(&e);
-      // Опционально: отправить событие в фронтенд
-      let _ = app_handle_bg.emit("background-init-failed", e.to_string());
-    } else {
-      let _ = app_handle_bg.emit("background-init-success", ());
-
-      // Warn when the launcher itself runs from a temp folder (e.g. started
-      // straight from the WinRAR window): that folder is deleted on close,
-      // taking the installed game with it. Warning only, never a block.
-      let install_path = { config_arc_clone.lock().await.install_path.clone() };
-      let codes = crate::utils::paths::is_temp_path(Path::new(&install_path));
-      if !codes.is_empty() {
-        log::warn!("launcher runs from a temp directory: {:?} ({:?})", install_path, codes);
-        let _ = app_handle_bg.emit("launcher-in-temp-dir", codes);
-      }
+      let _ = app_handle_bg_b.emit("background-init-failed", e.to_string());
     }
   });
 

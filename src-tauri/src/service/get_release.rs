@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use crate::{
-  configs::AppConfig::Version,
+  configs::AppConfig::{AppConfig, Version},
   consts::*,
   handlers::dto::ReleaseManifest,
   providers::dto::{Release, ReleaseAssetGit, ReleaseGit, ReleasePlatform, TreeItem},
@@ -62,8 +62,6 @@ pub trait ServiceGetRelease {
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest>;
   async fn get_main_release_files(&self, release_id: &str) -> Result<Vec<TreeItem>>;
   async fn get_main_release(&self, release_name: &str) -> Result<ReleaseGit>;
-  async fn get_local_version(&self) -> Result<Vec<Version>>;
-  async fn get_main_version(&self) -> Option<Version>;
   async fn set_release_visibility(&self, path: &str, visibility: bool) -> Result<()>;
 }
 
@@ -312,154 +310,6 @@ impl ServiceGetRelease for Service {
     Ok(all_files)
   }
 
-  async fn get_local_version(&self) -> Result<Vec<Version>> {
-    let install_path = {
-      let config_guard = self.config.lock().await;
-      config_guard.default_installed_path.clone()
-    };
-    let progress_download = {
-      let config_guard = self.config.lock().await;
-      config_guard.progress_download.clone()
-    };
-    let versions_dir = Path::new(&install_path);
-
-    let mut versions: Vec<Version> = vec![];
-
-    if !versions_dir.exists() {
-      return Ok(versions);
-    }
-
-    for entry in std::fs::read_dir(&versions_dir)? {
-      let entry = entry?;
-      let path = entry.path();
-
-      if path.is_file() {
-        continue;
-      }
-
-      let bin_path = path.join(BIN_DIR);
-      if !bin_path.exists() {
-        continue;
-      }
-
-      let engine_path = bin_path.join(game_exe());
-      if !engine_path.exists() {
-        continue;
-      }
-
-      // A non-UTF-8 folder name must not panic the whole background init:
-      // launcher-created installs always have UTF-8 names, so skip odd ones.
-      let key_path = match entry.file_name().into_string() {
-        Ok(name) => name,
-        Err(os_name) => {
-          log::warn!("Skipping installed version with non-UTF-8 folder name: {:?}", os_name.to_string_lossy());
-          continue;
-        }
-      };
-      let name = crate::utils::parse_strings::DASHES_RE.replace_all(&key_path, " ").to_string();
-
-      if let Some(_) = progress_download.iter().find(|(_, progress)| progress.path == key_path) {
-        continue;
-      };
-
-      log::info!(
-        "Get local version, name {:?} path: {:?} file_name: {:?} entry: {:?}",
-        &name,
-        &path,
-        &entry.file_name(),
-        &entry
-      );
-
-      let installed_path_str = path.to_string_lossy().to_string();
-
-      versions.push(Version {
-        id: 0,
-        name: name,
-        path: key_path,
-        manifest: None,
-        engine_path: None,
-        fsgame_path: None,
-        userltx_path: None,
-        exe_path: None,
-        installed_updates: read_installed_patches(&path),
-        installed_path: installed_path_str.clone(),
-        download_path: installed_path_str,
-        is_local: true,
-      });
-    }
-
-    Ok(versions)
-  }
-
-  async fn get_main_version(&self) -> Option<Version> {
-    let current_path = {
-      let config_guard = self.config.lock().await;
-      Path::new(&config_guard.install_path).to_owned()
-    };
-
-    let bin_path = current_path.join(BIN_DIR);
-    let exe_path = bin_path.join(game_exe());
-    let gamedata_path = current_path.join(GAMEDATA_DIR);
-    let scripts_path = gamedata_path.join(SCRIPTS_DIR);
-    let g_script_path = scripts_path.join(SCRIPT_G);
-    let mut name = "[UNKNOWN]".to_owned();
-
-    if !bin_path.exists() || !exe_path.exists() {
-      return None;
-    }
-
-    if gamedata_path.exists() && scripts_path.exists() && g_script_path.exists() {
-      let content = match fs::read_to_string(&g_script_path) {
-        Ok(c) => c,
-        Err(e) => {
-          log::warn!("Cannot read _g.script as utf-8 file, error: {}", e);
-          log::warn!("Start to read _g.script as cp1251 file...");
-          match read_cp1251_file(&g_script_path) {
-            Ok(c) => c,
-            Err(e) => {
-              log::error!("Error read _g.script as cp1251 file, error: {}", e);
-              String::from("")
-            }
-          }
-        }
-      };
-
-      let version = content.lines().find_map(|line| {
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("VERSION =") || trimmed.starts_with("GAME_VERSION =") {
-          trimmed
-            .split('=')
-            .nth(1)
-            .map(|value| value.trim().trim_matches('"').split("..").next().unwrap_or("").trim().to_string())
-        } else {
-          None
-        }
-      });
-
-      if let Some(line) = version {
-        name = line;
-      } else {
-        log::warn!("Main game version not found in the _g.script file!");
-      }
-    }
-
-    Some(Version {
-      id: 0,
-      name: name.clone(),
-      path: name.replace(" ", "_"),
-      manifest: None,
-      engine_path: None,
-      fsgame_path: None,
-      userltx_path: None,
-      exe_path: None,
-      installed_updates: read_installed_patches(&current_path),
-      installed_path: current_path.to_string_lossy().to_string(),
-      download_path: current_path.to_string_lossy().to_string(),
-      is_local: true,
-    })
-  }
-
   async fn set_release_visibility(&self, release_name: &str, visibility: bool) -> Result<()> {
     let api = self.api_client.current_provider()?;
 
@@ -467,4 +317,142 @@ impl ServiceGetRelease for Service {
 
     Ok(())
   }
+}
+
+/// Standalone version of `get_local_version` that reads directly from
+/// `AppConfig` without requiring a `Service` lock.  Pure local I/O, no network.
+pub async fn get_local_version_from_config(config: &AppConfig) -> Result<Vec<Version>> {
+  let install_path = &config.default_installed_path;
+  let progress_download = &config.progress_download;
+  let versions_dir = Path::new(install_path);
+
+  let mut versions: Vec<Version> = vec![];
+
+  if !versions_dir.exists() {
+    return Ok(versions);
+  }
+
+  for entry in std::fs::read_dir(versions_dir)? {
+    let entry = entry?;
+    let path = entry.path();
+
+    if path.is_file() {
+      continue;
+    }
+
+    let bin_path = path.join(BIN_DIR);
+    if !bin_path.exists() {
+      continue;
+    }
+
+    let engine_path = bin_path.join(game_exe());
+    if !engine_path.exists() {
+      continue;
+    }
+
+    let key_path = match entry.file_name().into_string() {
+      Ok(name) => name,
+      Err(os_name) => {
+        log::warn!("Skipping installed version with non-UTF-8 folder name: {:?}", os_name.to_string_lossy());
+        continue;
+      }
+    };
+    let name = crate::utils::parse_strings::DASHES_RE.replace_all(&key_path, " ").to_string();
+
+    if let Some(_) = progress_download.iter().find(|(_, progress)| progress.path == key_path) {
+      continue;
+    };
+
+    log::info!(
+      "get_local_version_from_config, name {:?} path: {:?}",
+      &name, &path,
+    );
+
+    let installed_path_str = path.to_string_lossy().to_string();
+
+    versions.push(Version {
+      id: 0,
+      name,
+      path: key_path,
+      manifest: None,
+      engine_path: None,
+      fsgame_path: None,
+      userltx_path: None,
+      exe_path: None,
+      installed_updates: read_installed_patches(&path),
+      installed_path: installed_path_str.clone(),
+      download_path: installed_path_str,
+      is_local: true,
+    });
+  }
+
+  Ok(versions)
+}
+
+/// Standalone version of `get_main_version` that reads directly from
+/// `AppConfig` without requiring a `Service` lock.  Pure local I/O, no network.
+pub async fn get_main_version_from_config(config: &AppConfig) -> Option<Version> {
+  let current_path = Path::new(&config.install_path).to_owned();
+
+  let bin_path = current_path.join(BIN_DIR);
+  let exe_path = bin_path.join(game_exe());
+  let gamedata_path = current_path.join(GAMEDATA_DIR);
+  let scripts_path = gamedata_path.join(SCRIPTS_DIR);
+  let g_script_path = scripts_path.join(SCRIPT_G);
+  let mut name = "[UNKNOWN]".to_owned();
+
+  if !bin_path.exists() || !exe_path.exists() {
+    return None;
+  }
+
+  if gamedata_path.exists() && scripts_path.exists() && g_script_path.exists() {
+    let content = match fs::read_to_string(&g_script_path) {
+      Ok(c) => c,
+      Err(e) => {
+        log::warn!("Cannot read _g.script as utf-8 file, error: {}", e);
+        log::warn!("Start to read _g.script as cp1251 file...");
+        match read_cp1251_file(&g_script_path) {
+          Ok(c) => c,
+          Err(e) => {
+            log::error!("Error read _g.script as cp1251 file, error: {}", e);
+            String::from("")
+          }
+        }
+      }
+    };
+
+    let version = content.lines().find_map(|line| {
+      let trimmed = line.trim();
+
+      if trimmed.starts_with("VERSION =") || trimmed.starts_with("GAME_VERSION =") {
+        trimmed
+          .split('=')
+          .nth(1)
+          .map(|value| value.trim().trim_matches('"').split("..").next().unwrap_or("").trim().to_string())
+      } else {
+        None
+      }
+    });
+
+    if let Some(line) = version {
+      name = line;
+    } else {
+      log::warn!("Main game version not found in the _g.script file!");
+    }
+  }
+
+  Some(Version {
+    id: 0,
+    name: name.clone(),
+    path: name.replace(" ", "_"),
+    manifest: None,
+    engine_path: None,
+    fsgame_path: None,
+    userltx_path: None,
+    exe_path: None,
+    installed_updates: read_installed_patches(&current_path),
+    installed_path: current_path.to_string_lossy().to_string(),
+    download_path: current_path.to_string_lossy().to_string(),
+    is_local: true,
+  })
 }

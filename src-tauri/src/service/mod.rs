@@ -8,6 +8,7 @@ pub mod index;
 pub mod index_publisher;
 pub mod keybind_manager;
 pub mod main;
+pub mod startup_state;
 pub mod unpack;
 pub mod updater;
 pub mod wake_detector;

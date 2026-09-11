@@ -1,13 +1,13 @@
 // src/lib/utils/error-queue.ts
 import { invoke } from '@tauri-apps/api/core';
-import { providersWasInited } from './store/main';
+import { configReady } from './store/main';
 
 const queue: string[] = [];
 let isInitialized = false;
 let hasFlushed = false;
 
-// Подписываемся на изменения инициализации
-const unsubscribe = providersWasInited.subscribe((value: boolean) => {
+// Subscribe to configReady to flush queued errors once local init is done.
+const unsubscribe = configReady.subscribe((value: boolean) => {
   isInitialized = value;
   if (isInitialized && !hasFlushed && queue.length > 0) {
     flushQueue();

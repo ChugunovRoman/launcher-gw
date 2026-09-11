@@ -142,23 +142,20 @@ pub async fn get_release_manifest(app: tauri::AppHandle, releaseName: String) ->
 }
 
 #[tauri::command]
-pub async fn get_local_version(app: tauri::AppHandle) -> Result<Vec<Version>, String> {
-  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
-  let versions = service_guard.get_local_version().await.map_err(|e| {
-    log_full_error(&e);
-    e.to_string()
-  })?;
-
-  Ok(versions)
+pub async fn get_local_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
+  let cfg = app_config.lock().await;
+  crate::service::get_release::get_local_version_from_config(&cfg)
+    .await
+    .map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })
 }
 
 #[tauri::command]
-pub async fn get_main_version(app: tauri::AppHandle) -> Result<Option<Version>, String> {
-  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
-
-  Ok(service_guard.get_main_version().await)
+pub async fn get_main_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Option<Version>, String> {
+  let cfg = app_config.lock().await;
+  Ok(crate::service::get_release::get_main_version_from_config(&cfg).await)
 }
 
 #[tauri::command]

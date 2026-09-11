@@ -8,16 +8,20 @@ use tokio::sync::Mutex;
 use crate::{
   configs::{AlifeConfig::AlifeConfig, AppConfig::AppConfig, AppConfig::Version, GameConfig::GameConfig, RunParams, TmpLtx, UserLtx},
   consts::*,
-  service::{get_release::ServiceGetRelease, index::IndexPreset, keybind_manager::KeybindManager, main::Service},
+  service::{index::IndexPreset, keybind_manager::KeybindManager},
   utils::resources::game_exe,
 };
 
 #[tauri::command]
 pub async fn userltx_set_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
-  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
+  // Reads only AppConfig — no Service lock, so this never waits behind the
+  // background network task's long-held Service lock (provider ping, index fetch, ...).
+  let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
+  let config_guard = state.lock().await;
 
-  let releases = service_guard.get_local_version().await.map_err(|e| e.to_string())?;
+  let releases = crate::service::get_release::get_local_version_from_config(&config_guard)
+    .await
+    .map_err(|e| e.to_string())?;
 
   let installed_path = releases
     .iter()

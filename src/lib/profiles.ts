@@ -27,33 +27,43 @@ export async function persistProfileSelection(profileName: string, apply: boolea
 
 export async function initProfilesListeners() {
   unlisten.set('load-key-profiles', await listen('load-key-profiles', (event: Event<ProfileItem[]>) => {
-    for (const profile of event.payload) {
-      profileKeyMap.setItem(profile.name, transformToKeymapArray(profile.keybinds));
-      profiles.push({
-        label: profile.name.replace(".ltx", ""),
-        value: profile.name,
-      });
-      sortOptions();
-    }
-
-    const cfg = get(appConfig);
-    const names = new Set(event.payload.map((p) => p.name));
-    let name = cfg.selected_profile;
-    if (!name || !names.has(name)) {
-      name = names.has(DEFAULT_BIND_LTX) ? DEFAULT_BIND_LTX : event.payload[0]?.name;
-    }
-
-    const apply = cfg.apply_key_profile ?? !!cfg.selected_profile;
-    if (name) {
-      selectedProfile.set(name);
-      if (name !== cfg.selected_profile) {
-        persistProfileSelection(name, apply);
-      }
-    }
-    applyKeyProfile.set(apply);
-
-    updateCurrentBindsMap();
+    applyKeyProfiles(event.payload);
   }));
+}
+
+/// Replace profile stores with the given payload. Shared by the
+/// `load-key-profiles` event handler and bootstrap() so calling both never
+/// duplicates entries (each call clears the stores first).
+export function applyKeyProfiles(payload: ProfileItem[]) {
+  profileKeyMap.clear();
+  profiles.clear();
+
+  for (const profile of payload) {
+    profileKeyMap.setItem(profile.name, transformToKeymapArray(profile.keybinds));
+    profiles.push({
+      label: profile.name.replace(".ltx", ""),
+      value: profile.name,
+    });
+  }
+  sortOptions();
+
+  const cfg = get(appConfig);
+  const names = new Set(payload.map((p) => p.name));
+  let name = cfg.selected_profile;
+  if (!name || !names.has(name)) {
+    name = names.has(DEFAULT_BIND_LTX) ? DEFAULT_BIND_LTX : payload[0]?.name;
+  }
+
+  const apply = cfg.apply_key_profile ?? !!cfg.selected_profile;
+  if (name) {
+    selectedProfile.set(name);
+    if (name !== cfg.selected_profile) {
+      persistProfileSelection(name, apply);
+    }
+  }
+  applyKeyProfile.set(apply);
+
+  updateCurrentBindsMap();
 }
 
 export function sortOptions() {

@@ -8,12 +8,15 @@ use crate::{
   configs::AppConfig::AppConfig,
   handlers::dto::ProgressPayload,
   providers::dto::ProviderStatus,
-  service::{files::ServiceFiles, main::Service},
+  service::{files::ServiceFiles, main::{ProviderStats, Service}, startup_state::{StartupState, StartupTracker}},
   utils::encoding::*,
 };
 
 #[tauri::command]
-pub async fn ping_all_providers(app: tauri::AppHandle) -> Result<Vec<(String, ProviderStatus)>, String> {
+pub async fn ping_all_providers(
+  app: tauri::AppHandle,
+  stats_state: tauri::State<'_, ProviderStats>,
+) -> Result<Vec<(String, ProviderStatus)>, String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
 
   // Clone api_client under a short lock — network I/O happens outside the mutex.
@@ -29,30 +32,29 @@ pub async fn ping_all_providers(app: tauri::AppHandle) -> Result<Vec<(String, Pr
     .map(|(id, status)| (id.to_string(), status))
     .collect();
 
-  // Update service.stats so get_api_providers_stats returns fresh data.
-  // Provider statuses are already updated inside ping() above;
-  // we just rebuild the stats vec from live provider objects.
+  // Rebuild stats from live provider statuses and store in the shared state.
   {
-    let mut service_guard = state.lock().await;
-    let fresh: Vec<_> = service_guard
-      .api_client
+    let mut stats_guard = stats_state.lock().await;
+    let fresh: Vec<_> = api_client
       .get_provider_ids()
       .iter()
       .filter_map(|id| {
-        service_guard
-          .api_client
+        api_client
           .get_provider(id)
           .ok()
           .map(|p| (p.id(), p.status()))
       })
       .collect();
-    service_guard.stats = fresh;
+    *stats_guard = fresh;
   }
 
   Ok(results)
 }
 #[tauri::command]
-pub async fn ping_current_provider(app: tauri::AppHandle) -> Result<(String, ProviderStatus), String> {
+pub async fn ping_current_provider(
+  app: tauri::AppHandle,
+  stats_state: tauri::State<'_, ProviderStats>,
+) -> Result<(String, ProviderStatus), String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
 
   let (api_client, provider_id) = {
@@ -64,22 +66,20 @@ pub async fn ping_current_provider(app: tauri::AppHandle) -> Result<(String, Pro
   let api = api_client.get_provider(&provider_id).map_err(|e| e.to_string())?;
   let status = api.ping().await;
 
-  // Update service.stats from live provider statuses.
+  // Update shared stats from live provider statuses.
   {
-    let mut service_guard = state.lock().await;
-    let fresh: Vec<_> = service_guard
-      .api_client
+    let mut stats_guard = stats_state.lock().await;
+    let fresh: Vec<_> = api_client
       .get_provider_ids()
       .iter()
       .filter_map(|id| {
-        service_guard
-          .api_client
+        api_client
           .get_provider(id)
           .ok()
           .map(|p| (p.id(), p.status()))
       })
       .collect();
-    service_guard.stats = fresh;
+    *stats_guard = fresh;
   }
 
   Ok((provider_id, status))
@@ -93,9 +93,13 @@ pub async fn get_fastest_provider(app: tauri::AppHandle) -> Result<Option<String
   Ok(fastest.first().map(|(id, _)| id.to_string()))
 }
 
-/// Ping a single provider by id. Updates its live status and service.stats.
+/// Ping a single provider by id. Updates its live status and shared stats.
 #[tauri::command]
-pub async fn ping_api_provider(app: tauri::AppHandle, providerId: String) -> Result<(String, ProviderStatus), String> {
+pub async fn ping_api_provider(
+  app: tauri::AppHandle,
+  stats_state: tauri::State<'_, ProviderStats>,
+  providerId: String,
+) -> Result<(String, ProviderStatus), String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
 
   let api_client = {
@@ -106,22 +110,20 @@ pub async fn ping_api_provider(app: tauri::AppHandle, providerId: String) -> Res
   let api = api_client.get_provider(&providerId).map_err(|e| e.to_string())?;
   let status = api.ping().await;
 
-  // Update service.stats from live provider statuses.
+  // Update shared stats from live provider statuses.
   {
-    let mut service_guard = state.lock().await;
-    let fresh: Vec<_> = service_guard
-      .api_client
+    let mut stats_guard = stats_state.lock().await;
+    let fresh: Vec<_> = api_client
       .get_provider_ids()
       .iter()
       .filter_map(|id| {
-        service_guard
-          .api_client
+        api_client
           .get_provider(id)
           .ok()
           .map(|p| (p.id(), p.status()))
       })
       .collect();
-    service_guard.stats = fresh;
+    *stats_guard = fresh;
   }
 
   Ok((providerId, status))
@@ -401,4 +403,10 @@ pub async fn commit_index(app: tauri::AppHandle, json: String) -> Result<(), Str
       log::error!("commit_index failed: {:?}", e);
       e.to_string()
     })
+}
+
+/// Return the current startup state (providers, releases, user_data, profiles phases).
+#[tauri::command]
+pub async fn get_startup_state(tracker: tauri::State<'_, Arc<StartupTracker>>) -> Result<StartupState, String> {
+  Ok(tracker.snapshot().await)
 }

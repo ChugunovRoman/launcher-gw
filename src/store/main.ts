@@ -1,4 +1,4 @@
-import { get, writable } from 'svelte/store';
+import { derived, get, writable } from 'svelte/store';
 import { createMapStore } from './helpers';
 import { ConnectStatus } from '../consts';
 import { invoke } from '@tauri-apps/api/core';
@@ -9,12 +9,31 @@ export const appConfig = writable<AppConfig>({
   default_download_path: "",
 } as any);
 
-export const connectStatus = writable(ConnectStatus.Connnecting);
-export const fontColor = writable("rgba(243, 240, 63, 1)");
+// Whether the local config has been loaded into stores (bootstrap() done).
+export const configReady = writable(false);
+
+// Aggregate startup state from the backend (providers, releases, user_data, profiles).
+export const startupState = writable<StartupState>({
+  providers: { status: "pending" },
+  releases: { status: "pending" },
+  user_data: { status: "pending" },
+  profiles: { status: "pending" },
+});
+
+// Derived from startupState.providers — replaces the old hardcoded connectStatus/fontColor.
+export const connectStatus = derived(startupState, ($s) => {
+  if ($s.providers.status === "ok") return ConnectStatus.Connnected;
+  if ($s.providers.status === "error") return ConnectStatus.ConnnectError;
+  return ConnectStatus.Connnecting;
+});
+export const fontColor = derived(startupState, ($s) => {
+  if ($s.providers.status === "ok") return "rgba(69, 240, 97, 1)";
+  if ($s.providers.status === "error") return "rgba(254, 197, 208, 1)";
+  return "rgba(243, 240, 63, 1)";
+});
 
 export const expandedIndex = writable<number | null>(null);
 
-export const providersWasInited = writable(false);
 export const versionsWillBeLoaded = writable(false);
 
 export const allowPackMod = writable(false);

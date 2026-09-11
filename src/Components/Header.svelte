@@ -16,6 +16,7 @@
     launcherDwnProgress,
     launcherDwnVersion,
     newLauncherVersionDownloaded,
+    startupState,
   } from "../store/main";
   import Progress from "./Progress.svelte";
   import Spin from "./Spin.svelte";
@@ -103,13 +104,16 @@
     {:else if !$launcherDwnNeedUpdate && $launcherDwnVersion}
       <div style="width: 20px;"></div>
       <span>{$_(`app.h.latest`)}</span>
-    {:else}
+    {:else if $startupState.providers.status === "pending"}
       <div style="width: 20px;"></div>
       <span>{$_(`app.h.updateChecking`)}</span>
       <div style="width: 10px;"></div>
       <span>
         <Spin size={16} />
       </span>
+    {:else if $startupState.providers.status === "error"}
+      <div style="width: 20px;"></div>
+      <span>{$_(`app.h.updatesUnavailable`)}</span>
     {/if}
   </h5>
 

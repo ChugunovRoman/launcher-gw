@@ -41,6 +41,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::service::get_launcher_bg,
     handlers::service::set_token_for_provider,
     handlers::service::get_provider_ids,
+    handlers::service::get_startup_state,
     handlers::service::check_available_disk_space,
     handlers::service::remove_download_version,
     handlers::service::remove_install_dir,
@@ -77,6 +78,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::patch_install::start_install_patch,
     handlers::patch_install::cancel_install_patch,
     // Profiles
+    handlers::profiles::get_key_profiles,
     handlers::profiles::add_profile,
     handlers::profiles::delete_profile,
     handlers::profiles::save_key_profiles,

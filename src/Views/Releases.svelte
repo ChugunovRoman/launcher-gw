@@ -3,7 +3,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { providersWasInited } from "../store/main";
+  import { configReady } from "../store/main";
   import { showUploading, inProcess, versions, logText, releaseName, releasePath, totalFiles, uploadedFiles, uploadFilesMap } from "../store/upload";
   import { choosePath } from "../utils/path";
   import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
@@ -389,7 +389,7 @@
   $effect(() => {
     // Re-check saved upload progress whenever providers init or the upload UI is hidden.
     // If progress_upload still exists in config (interrupted upload), restore the item.
-    if ($providersWasInited && !$showUploading) {
+    if ($configReady && !$showUploading) {
       invoke<AppConfig>("get_config").then((config) => {
         // Guard: only restore if progress_upload is a real in-progress upload
         // (name non-empty and not completed). An empty {} object from an old
@@ -407,7 +407,7 @@
   // Load persisted patch settings from config on init.
   let patchConfigLoaded = false;
   $effect(() => {
-    if ($providersWasInited && !patchConfigLoaded) {
+    if ($configReady && !patchConfigLoaded) {
       patchConfigLoaded = true;
       invoke<AppConfig>("get_config").then((config) => {
         if (config.patch_source_dir) {

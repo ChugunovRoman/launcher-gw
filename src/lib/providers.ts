@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { sep } from "@tauri-apps/api/path";
-import { appConfig, providers, providersWasInited, radioApiProvider, versionsWillBeLoaded } from "../store/main";
+import { appConfig, providers, radioApiProvider, versionsWillBeLoaded } from "../store/main";
 import { downloadStates, restoreDownloadState, versions } from "../store/upload";
 import { prepareVersionItem } from "./main";
 import { get } from "svelte/store";

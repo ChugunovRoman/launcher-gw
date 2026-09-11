@@ -5,7 +5,7 @@
   import { join } from "@tauri-apps/api/path";
 
   import { progress, isInProcess, finish, completed } from "../store/unpack";
-  import { providersWasInited } from "../store/main";
+  import { configReady } from "../store/main";
   import { choosePath } from "../utils/path";
 
   let sourcePath = $state("");
@@ -55,7 +55,7 @@
   }
 
   $effect(() => {
-    if ($providersWasInited) {
+    if ($configReady) {
       invoke<AppConfig>("get_config").then((config) => {
         sourcePath = config.unpack_source_dir;
         targetPath = config.unpack_target_dir;

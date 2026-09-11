@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { appConfig, providersWasInited, showDlgMaxPerformancePresetWarning } from "../store/main";
+  import { appConfig, configReady, startupState, showDlgMaxPerformancePresetWarning } from "../store/main";
   import { LangType, RenderType } from "../consts";
   import { BiMap } from "../utils/BiMap";
 
@@ -102,7 +102,7 @@
   }
 
   $effect(() => {
-    if ($providersWasInited) {
+    if ($configReady) {
       Promise.all([invoke<AppConfig>("get_config"), invoke<IndexPreset[]>("get_presets")]).then(([config, loadedPresets]) => {
         presets = loadedPresets;
         resolutions = config.vid_modes;
@@ -130,6 +130,19 @@
         selectedPresetId = config.run_params.selected_preset_id || "";
         applyPresetOnLaunch = config.run_params.apply_preset_on_launch;
       });
+    }
+  });
+
+  // Reload the preset list once the release index refresh finishes — the
+  // fresh index may carry new/updated presets. Only the dropdown list is
+  // refreshed; form fields keep their current values.
+  $effect(() => {
+    if ($startupState.releases.status === "ok") {
+      invoke<IndexPreset[]>("get_presets")
+        .then((loadedPresets) => {
+          presets = loadedPresets;
+        })
+        .catch((e) => console.error("get_presets refresh failed:", e));
     }
   });
 </script>

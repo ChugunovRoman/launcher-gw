@@ -1,23 +1,15 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { gameStatus, launchError, localVersions, providersWasInited, refreshLocalVersion, showDlgLaunchError } from "../store/main";
-  import { onMount } from "svelte";
+  import { gameStatus, launchError, localVersions, showDlgLaunchError } from "../store/main";
   import { currentView } from "../store/menu";
-  import {
-    hasAnyLocalVersion,
-    mainVersion,
-    refreshVersions,
-    releaseName,
-    selectedVersion,
-    showUploading,
-    totalFiles,
-    uploadedFiles,
-  } from "../store/upload";
+  import { mainVersion, selectedVersion } from "../store/upload";
   import { normalizeLaunchError } from "../lib/main";
 
   // Game liveness is owned by the backend GameTracker ($gameStatus mirrors it);
   // the button only sends run_game and shows errors.
+  // All startup state (selected version, main version, upload restore) is
+  // filled by bootstrap() in lib/bootstrap.ts.
   const launchApp = async () => {
     if (!$mainVersion && !$selectedVersion) {
       currentView.select("versions");
@@ -45,49 +37,6 @@
       showDlgLaunchError.set(true);
     }
   };
-
-  $effect(() => {
-    if (!$providersWasInited) return;
-
-    let cancelled = false;
-
-    invoke<AppConfig>("get_config")
-      .then(async (config) => {
-        if (cancelled) return;
-
-        if (config.selected_version) {
-          $selectedVersion = config.selected_version;
-        }
-
-        if (!$showUploading && !!config.progress_upload && !!config.progress_upload.name && !config.progress_upload.is_completed) {
-          $showUploading = true;
-          $releaseName = config.progress_upload.name;
-          $totalFiles = config.progress_upload.total_files;
-          $uploadedFiles = config.progress_upload.uploaded_files.length;
-        }
-
-        refreshLocalVersion();
-        refreshVersions();
-      })
-      .catch((err) => console.error("LaunchBtn get_config failed:", err));
-
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  onMount(async () => {
-    mainVersion.set(await invoke<Version | undefined>("get_main_version"));
-    if ($mainVersion) {
-      localVersions.setItem($mainVersion.name, $mainVersion);
-      // The store holds ONLY the version next to the launcher; the user's
-      // chosen version wins unless nothing is selected yet.
-      if (!$selectedVersion) {
-        selectedVersion.set($mainVersion.name);
-      }
-      hasAnyLocalVersion.set(true);
-    }
-  });
 </script>
 
 <span role="button" tabindex="0" class="launchbtn" class:launchbtn_inactive={$gameStatus.running} onclick={launchApp}>
