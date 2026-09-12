@@ -18,6 +18,11 @@
       "renderer_r4": "DirectX 11 (Улучшенный)",
       "renderer_rgl": "OpenGL"
     },
+    "scopes": {
+      "g_3d_scopes_0": "2D статичная текстура",
+      "g_3d_scopes_1": "Полноценные 3D прицелы",
+      "g_3d_scopes_2": "2D прицелы (render target)"
+    },
     "common": {
       "gbSfx": "ГБ",
       "mbSfx": "MБ",
@@ -391,6 +396,7 @@
       "applyPresetOnLaunch": "Применять пресет при запуске игры",
       "fov": "FOV",
       "hudFov": "FOV Худа",
+      "scopeType": "Тип прицелов:",
       "applyKeyProfile": "Применять выбранный профиль при старте игры"
     },
     "presets": {

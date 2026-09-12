@@ -18,6 +18,10 @@ export default defineConfig({
           src: 'static/lang',
           dest: '../build/static',
         },
+        {
+          src: 'static/g_3d_scopes',
+          dest: '../build/static',
+        },
       ],
     }),
   ],

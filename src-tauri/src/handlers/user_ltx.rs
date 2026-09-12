@@ -203,6 +203,7 @@ pub async fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams, pr
   ltx.set("rs_fps".to_string(), if run_params.show_fps { "on" } else { "off" }.to_string());
   ltx.set("rs_ids".to_string(), if run_params.show_ids { "on" } else { "off" }.to_string());
   ltx.set("r_font_legacy".to_string(), if run_params.font_legacy { "1" } else { "0" }.to_string());
+  ltx.set("g_3d_scopes".to_string(), scope_type_to_ltx(run_params.scope_type));
 
   ltx.save().map_err(|e| e.to_string())
 }
@@ -338,6 +339,14 @@ fn render_to_ltx(renderer: crate::configs::AppConfig::RenderType) -> String {
     crate::configs::AppConfig::RenderType::RendererR3 => "renderer_r3".to_string(),
     crate::configs::AppConfig::RenderType::RendererR4 => "renderer_r4".to_string(),
     crate::configs::AppConfig::RenderType::RendererRgl => "renderer_rgl".to_string(),
+  }
+}
+
+fn scope_type_to_ltx(scope_type: crate::configs::AppConfig::ScopeType) -> String {
+  match scope_type {
+    crate::configs::AppConfig::ScopeType::Scopes2dStatic => "0".to_string(),
+    crate::configs::AppConfig::ScopeType::Scopes3d => "1".to_string(),
+    crate::configs::AppConfig::ScopeType::Scopes2dRenderTarget => "2".to_string(),
   }
 }
 

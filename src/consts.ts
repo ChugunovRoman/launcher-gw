@@ -101,6 +101,12 @@ export enum RenderType {
   RendererRgl = "RendererRgl",
 }
 
+export enum ScopeType {
+  Scopes2dStatic = "Scopes2dStatic",
+  Scopes3d = "Scopes3d",
+  Scopes2dRenderTarget = "Scopes2dRenderTarget",
+}
+
 export const NO_KEY = "---";
 export const KEYS_MAP: Record<string, string> = {
   // Мышь

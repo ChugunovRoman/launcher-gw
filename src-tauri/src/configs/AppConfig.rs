@@ -115,6 +115,14 @@ pub enum RenderType {
   RendererRgl,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub enum ScopeType {
+  #[default]
+  Scopes2dStatic = 0,
+  Scopes3d,
+  Scopes2dRenderTarget,
+}
+
 fn default_true() -> bool {
   true
 }
@@ -160,6 +168,8 @@ pub struct RunParams {
   #[serde(default)]
   pub font_legacy: bool,
   #[serde(default)]
+  pub scope_type: ScopeType,
+  #[serde(default)]
   pub selected_preset_id: String,
   #[serde(default = "default_true")]
   pub apply_preset_on_launch: bool,
@@ -188,6 +198,7 @@ impl Default for RunParams {
       show_fps: false,
       show_ids: false,
       font_legacy: false,
+      scope_type: ScopeType::Scopes2dStatic,
       selected_preset_id: String::new(),
       apply_preset_on_launch: true,
     }

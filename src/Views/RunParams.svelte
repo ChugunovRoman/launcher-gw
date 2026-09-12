@@ -2,7 +2,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { appConfig, configReady, startupState, showDlgMaxPerformancePresetWarning } from "../store/main";
-  import { LangType, RenderType } from "../consts";
+  import { LangType, RenderType, ScopeType } from "../consts";
   import { BiMap } from "../utils/BiMap";
 
   import Scroll from "../Components/Scroll.svelte";
@@ -20,6 +20,11 @@
     [RenderType.RendererR4, "renderer_r4"],
     [RenderType.RendererRgl, "renderer_rgl"],
   ]);
+  const scopesMap = new BiMap<ScopeType, string>([
+    [ScopeType.Scopes2dStatic, "g_3d_scopes_0"],
+    [ScopeType.Scopes3d, "g_3d_scopes_1"],
+    [ScopeType.Scopes2dRenderTarget, "g_3d_scopes_2"],
+  ]);
 
   const MAX_PERFORMANCE_PRESET_ID = "max_performance";
 
@@ -34,6 +39,7 @@
   let vsyncEnabled = $state(true);
   let selectedLang = $state(langMap.getValue(LangType.Rus) || "");
   let selectedRenderer = $state(renderersMap.getValue(RenderType.RendererR4) || "");
+  let selectedScope = $state(scopesMap.getValue(ScopeType.Scopes2dStatic) || "");
   let presets = $state<IndexPreset[]>([]);
   let selectedPresetId = $state("");
   let applyPresetOnLaunch = $state(true);
@@ -91,6 +97,7 @@
       show_fps: showFps,
       show_ids: showIds,
       font_legacy: fontLegacy,
+      scope_type: scopesMap.getKey(selectedScope) || ScopeType.Scopes2dStatic,
       selected_preset_id: selectedPresetId,
       apply_preset_on_launch: applyPresetOnLaunch,
     };
@@ -127,6 +134,7 @@
         showFps = config.run_params.show_fps;
         showIds = config.run_params.show_ids;
         fontLegacy = config.run_params.font_legacy;
+        selectedScope = scopesMap.getValue(config.run_params.scope_type as ScopeType)!;
         selectedPresetId = config.run_params.selected_preset_id || "";
         applyPresetOnLaunch = config.run_params.apply_preset_on_launch;
       });
@@ -242,6 +250,23 @@
             </span>
             <div style="width: 100%">
               <TrackBar bind:value={hudFov} min={10} max={100} step={1} />
+            </div>
+          </div>
+          <div class="opt">
+            <span>
+              {$_("app.params.scopeType")}
+            </span>
+            <div class="scope-control">
+              <div class="options-row">
+                <label class="checkbox-label">
+                  <select bind:value={selectedScope}>
+                    {#each scopesMap as [type, name]}
+                      <option value={name}>{$_(`app.scopes.${name}`)}</option>
+                    {/each}
+                  </select>
+                </label>
+              </div>
+              <img src={`/static/g_3d_scopes/${selectedScope}.png`} alt={$_(`app.scopes.${selectedScope}`)} class="scope-preview-img" />
             </div>
           </div>
         </Bg>
@@ -602,5 +627,28 @@
   }
   .long_t {
     transition: background-color 1s ease;
+  }
+
+  .opt:has(.scope-control) > span {
+    align-self: start;
+    padding-top: 0.5rem;
+  }
+
+  .scope-control {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .scope-preview-img {
+    width: 256px;
+    height: 256px;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
   }
 </style>

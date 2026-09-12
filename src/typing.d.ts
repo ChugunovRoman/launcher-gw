@@ -123,6 +123,7 @@ declare interface RunParams {
   show_fps: boolean;
   show_ids: boolean;
   font_legacy: boolean;
+  scope_type: string;
   selected_preset_id: string;
   apply_preset_on_launch: boolean;
   [index: string]: unknown;

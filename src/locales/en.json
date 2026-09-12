@@ -18,6 +18,11 @@
       "renderer_r4": "DirectX 11 (Enhanced)",
       "renderer_rgl": "OpenGL"
     },
+    "scopes": {
+      "g_3d_scopes_0": "2D static texture",
+      "g_3d_scopes_1": "Full 3D scopes",
+      "g_3d_scopes_2": "2D scopes (render target)"
+    },
     "common": {
       "gbSfx": "GB",
       "mbSfx": "MB",
@@ -391,6 +396,7 @@
       "applyPresetOnLaunch": "Apply preset when starting the game",
       "fov": "FOV",
       "hudFov": "HUD FOV",
+      "scopeType": "Scope type:",
       "applyKeyProfile": "Apply the selected profile when starting the game"
     },
     "presets": {
