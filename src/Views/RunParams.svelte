@@ -2,7 +2,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { appConfig, configReady, startupState, showDlgMaxPerformancePresetWarning } from "../store/main";
-  import { LangType, RenderType, ScopeType } from "../consts";
+  import { ALIFE_DEFAULTS, ALIFE_RANGES, LangType, RenderType, ScopeType } from "../consts";
   import { BiMap } from "../utils/BiMap";
 
   import Scroll from "../Components/Scroll.svelte";
@@ -44,6 +44,12 @@
   let selectedPresetId = $state("");
   let applyPresetOnLaunch = $state(true);
 
+  // User-editable A-Life settings; they override the preset values in alife.ltx
+  let objectsPerUpdate = $state<number>(ALIFE_DEFAULTS.objects_per_update);
+  let positionUpdateIntervalMs = $state<number>(ALIFE_DEFAULTS.position_update_interval_ms);
+  let processTime = $state<number>(ALIFE_DEFAULTS.process_time);
+  let switchDistance = $state<number>(ALIFE_DEFAULTS.switch_distance);
+
   // Флаги
   let uiDebug = $state(false);
   let checks = $state(false);
@@ -69,7 +75,28 @@
     launchArgs = "";
   }
 
+  // Preset alife values come as strings from the index — parse, fall back to
+  // the default and clamp into the UI range (a value beyond max would push
+  // the TrackBar thumb outside the track).
+  function num(raw: unknown, key: keyof typeof ALIFE_DEFAULTS): number {
+    const range = ALIFE_RANGES[key];
+    const parsed = typeof raw === "string" ? Number(raw) : raw;
+    const value = typeof parsed === "number" && Number.isFinite(parsed) ? parsed : ALIFE_DEFAULTS[key];
+    return Math.min(range.max, Math.max(range.min, value));
+  }
+
+  // Selecting a preset resets manual alife edits to the preset's values;
+  // keys missing from the preset fall back to the defaults.
+  function applyPresetToAlifeControls() {
+    const alife = presets.find((p) => p.id === selectedPresetId)?.alife ?? {};
+    objectsPerUpdate = num(alife.objects_per_update, "objects_per_update");
+    positionUpdateIntervalMs = num(alife.position_update_interval_ms, "position_update_interval_ms");
+    processTime = num(alife.process_time, "process_time");
+    switchDistance = num(alife.switch_distance, "switch_distance");
+  }
+
   async function handlePresetChange() {
+    applyPresetToAlifeControls();
     if (selectedPresetId !== MAX_PERFORMANCE_PRESET_ID) return;
     if ($appConfig.hide_max_perf_preset_warning) return;
     $showDlgMaxPerformancePresetWarning = true;
@@ -100,8 +127,18 @@
       scope_type: scopesMap.getKey(selectedScope) || ScopeType.Scopes2dStatic,
       selected_preset_id: selectedPresetId,
       apply_preset_on_launch: applyPresetOnLaunch,
+      alife_objects_per_update: objectsPerUpdate,
+      alife_position_update_interval_ms: positionUpdateIntervalMs,
+      alife_process_time: processTime,
+      alife_switch_distance: switchDistance,
+      alife_overrides_initialized: true,
     };
-    await invoke<void>("update_run_params", { runParams });
+    try {
+      await invoke<void>("update_run_params", { runParams });
+    } catch (e) {
+      console.error("update_run_params failed:", e);
+      return;
+    }
     saving = true;
     setTimeout(() => (saving2 = true), 500);
     setTimeout(() => (saving = false), 1000);
@@ -137,6 +174,16 @@
         selectedScope = scopesMap.getValue(config.run_params.scope_type as ScopeType)!;
         selectedPresetId = config.run_params.selected_preset_id || "";
         applyPresetOnLaunch = config.run_params.apply_preset_on_launch;
+        objectsPerUpdate = num(config.run_params.alife_objects_per_update, "objects_per_update");
+        positionUpdateIntervalMs = num(config.run_params.alife_position_update_interval_ms, "position_update_interval_ms");
+        processTime = num(config.run_params.alife_process_time, "process_time");
+        switchDistance = num(config.run_params.alife_switch_distance, "switch_distance");
+        // Migration: a config saved before the overrides existed keeps the
+        // preset's values in the controls until the first explicit save, so
+        // what the user sees matches what actually goes into alife.ltx.
+        if (!config.run_params.alife_overrides_initialized && selectedPresetId) {
+          applyPresetToAlifeControls();
+        }
       });
     }
   });
@@ -415,6 +462,70 @@
           </label>
         </Bg>
       </div>
+      <div class="item item-alife">
+        <Bg>
+          <div class="alife-header">
+            <span class="alife-title">{$_("app.params.alifeSection")}</span>
+            {#if applyPresetOnLaunch}
+              <span class="warntext">{$_("app.params.alifeNote")}</span>
+            {:else}
+              <span class="warntext">{$_("app.params.alifeDisabledNote")}</span>
+            {/if}
+          </div>
+          <div class="opt alife-opt">
+            <span>
+              {$_("app.params.objectsPerUpdate")}: {objectsPerUpdate}
+            </span>
+            <div style="width: 100%">
+              <TrackBar
+                bind:value={objectsPerUpdate}
+                min={ALIFE_RANGES.objects_per_update.min}
+                max={ALIFE_RANGES.objects_per_update.max}
+                step={ALIFE_RANGES.objects_per_update.step}
+              />
+            </div>
+          </div>
+          <div class="opt alife-opt">
+            <span>
+              {$_("app.params.positionUpdateIntervalMs")}: {positionUpdateIntervalMs}
+            </span>
+            <div style="width: 100%">
+              <TrackBar
+                bind:value={positionUpdateIntervalMs}
+                min={ALIFE_RANGES.position_update_interval_ms.min}
+                max={ALIFE_RANGES.position_update_interval_ms.max}
+                step={ALIFE_RANGES.position_update_interval_ms.step}
+              />
+            </div>
+          </div>
+          <div class="opt alife-opt">
+            <span>
+              {$_("app.params.processTime")}: {processTime}
+            </span>
+            <div style="width: 100%">
+              <TrackBar
+                bind:value={processTime}
+                min={ALIFE_RANGES.process_time.min}
+                max={ALIFE_RANGES.process_time.max}
+                step={ALIFE_RANGES.process_time.step}
+              />
+            </div>
+          </div>
+          <div class="opt alife-opt">
+            <span>
+              {$_("app.params.switchDistance")}: {switchDistance}
+            </span>
+            <div style="width: 100%">
+              <TrackBar
+                bind:value={switchDistance}
+                min={ALIFE_RANGES.switch_distance.min}
+                max={ALIFE_RANGES.switch_distance.max}
+                step={ALIFE_RANGES.switch_distance.step}
+              />
+            </div>
+          </div>
+        </Bg>
+      </div>
     </div>
   </Scroll>
 
@@ -441,10 +552,20 @@
   .item {
     flex: 1 1 600px;
   }
+  /* The A-Life block takes a deliberate full row instead of dangling alone
+     next to the two half-width blocks. */
+  .item-alife {
+    flex: 1 1 100%;
+  }
   .opt {
     display: grid;
     grid-template-columns: 14vw 1fr;
     margin-bottom: 14px;
+  }
+  /* Long alife labels ("Интервал обновления позиций (мс)") do not fit the
+     default 14vw column without wrapping. */
+  .alife-opt {
+    grid-template-columns: minmax(230px, 22vw) 1fr;
   }
   .check {
     grid-template-columns: 4vw 1fr;
@@ -508,6 +629,17 @@
   .warntext {
     font-size: 0.8rem;
     color: rgba(252, 186, 186, 0.8);
+  }
+
+  .alife-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 10px;
+  }
+
+  .alife-title {
+    font-weight: 600;
   }
 
   .options-row {

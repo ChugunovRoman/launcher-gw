@@ -28,10 +28,14 @@ pub async fn save_config(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn update_run_params(app: tauri::AppHandle, run_params: RunParams) -> Result<(), String> {
+pub async fn update_run_params(app: tauri::AppHandle, mut run_params: RunParams) -> Result<(), String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let config_snapshot = {
     let mut config_guard = state.lock().await;
+    // Every update_run_params call is an explicit save from the settings UI:
+    // from now on the user's alife values are written into alife.ltx on top
+    // of the preset (configs saved before this feature keep preset-only writes).
+    run_params.alife_overrides_initialized = true;
     config_guard.run_params = run_params;
     config_guard.save().map_err(|e| e.to_string())?;
     config_guard.clone()
@@ -39,7 +43,7 @@ pub async fn update_run_params(app: tauri::AppHandle, run_params: RunParams) -> 
   handlers::user_ltx::apply_run_params_to_version_ltx(&config_snapshot).await?;
 
   // alife.ltx is non-critical: its failure must not break saving the settings.
-  if let Err(e) = handlers::user_ltx::apply_preset_to_version_alife_ltx(&config_snapshot).await {
+  if let Err(e) = handlers::user_ltx::apply_alife_settings_to_version_ltx(&config_snapshot).await {
     log::warn!("update_run_params: не удалось записать alife.ltx: {}", e);
   }
 

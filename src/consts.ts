@@ -70,6 +70,31 @@ export const DEFAULT_EXCLUDE_PATTERNS: string[] = [
 export const DEFAULT_BIND_LTX = "default.ltx";
 export const CUSTOM_BIND_LTX = "custom.ltx";
 
+/**
+ * Defaults for user-editable A-Life settings. Must match the Rust constants
+ * ALIFE_DEFAULT_* in src-tauri/src/consts.rs (they mirror gamedata/configs/alife.ltx).
+ * A cargo test (consts.rs::tests::frontend_alife_consts_stay_in_sync) fails
+ * when these numbers drift from the Rust side.
+ */
+export const ALIFE_DEFAULTS = {
+  objects_per_update: 20,
+  position_update_interval_ms: 5000,
+  process_time: 500,
+  switch_distance: 250,
+} as const;
+
+/**
+ * TrackBar ranges for the A-Life settings; the Rust side clamps to the same
+ * bounds (ALIFE_MIN_/ALIFE_MAX_ in src-tauri/src/consts.rs). switch_distance
+ * follows the in-game menu range — the published presets go up to 600.
+ */
+export const ALIFE_RANGES = {
+  objects_per_update: { min: 1, max: 100, step: 1 },
+  position_update_interval_ms: { min: 0, max: 10000, step: 100 },
+  process_time: { min: 100, max: 5000, step: 50 },
+  switch_distance: { min: 30, max: 1000, step: 5 },
+} as const;
+
 export enum Lang {
   Ru = 'ru',
   En = 'en',

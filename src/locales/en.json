@@ -398,7 +398,14 @@
       "fov": "FOV",
       "hudFov": "HUD FOV",
       "scopeType": "Scope type:",
-      "applyKeyProfile": "Apply the selected profile when starting the game"
+      "applyKeyProfile": "Apply the selected profile when starting the game",
+      "alifeSection": "A-Life settings",
+      "alifeNote": "Overrides the preset values",
+      "alifeDisabledNote": "Writing to alife.ltx is disabled by \"Apply preset when starting the game\"",
+      "objectsPerUpdate": "Objects per update",
+      "positionUpdateIntervalMs": "Position update interval (ms)",
+      "processTime": "Process time (µs)",
+      "switchDistance": "Online/offline switch distance (m)"
     },
     "presets": {
       "placeholder": "Select a preset",

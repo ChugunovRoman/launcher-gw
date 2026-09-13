@@ -1,4 +1,10 @@
-use crate::consts::{BASE_DIR, CONFIG_NAME, CUSTOM_BIND_LTX, VERSIONS_DIR};
+use crate::consts::{
+  ALIFE_DEFAULT_OBJECTS_PER_UPDATE, ALIFE_DEFAULT_POSITION_UPDATE_INTERVAL_MS, ALIFE_DEFAULT_PROCESS_TIME,
+  ALIFE_DEFAULT_SWITCH_DISTANCE, ALIFE_KEY_OBJECTS_PER_UPDATE, ALIFE_KEY_POSITION_UPDATE_INTERVAL_MS, ALIFE_KEY_PROCESS_TIME,
+  ALIFE_KEY_SWITCH_DISTANCE, ALIFE_MAX_OBJECTS_PER_UPDATE, ALIFE_MAX_POSITION_UPDATE_INTERVAL_MS, ALIFE_MAX_PROCESS_TIME,
+  ALIFE_MAX_SWITCH_DISTANCE, ALIFE_MIN_OBJECTS_PER_UPDATE, ALIFE_MIN_POSITION_UPDATE_INTERVAL_MS, ALIFE_MIN_PROCESS_TIME,
+  ALIFE_MIN_SWITCH_DISTANCE, BASE_DIR, CONFIG_NAME, CUSTOM_BIND_LTX, VERSIONS_DIR,
+};
 use crate::handlers::dto::ReleaseManifest;
 use crate::logger::LogLevel;
 use crate::utils::patch_markers::InstalledPatch;
@@ -127,6 +133,22 @@ fn default_true() -> bool {
   true
 }
 
+fn default_alife_objects_per_update() -> u32 {
+  ALIFE_DEFAULT_OBJECTS_PER_UPDATE
+}
+
+fn default_alife_position_update_interval_ms() -> u32 {
+  ALIFE_DEFAULT_POSITION_UPDATE_INTERVAL_MS
+}
+
+fn default_alife_process_time() -> i32 {
+  ALIFE_DEFAULT_PROCESS_TIME
+}
+
+fn default_alife_switch_distance() -> f32 {
+  ALIFE_DEFAULT_SWITCH_DISTANCE
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunParams {
   #[serde(default)]
@@ -173,6 +195,20 @@ pub struct RunParams {
   pub selected_preset_id: String,
   #[serde(default = "default_true")]
   pub apply_preset_on_launch: bool,
+  // User-editable A-Life overrides, applied on top of the preset into alife.ltx.
+  #[serde(default = "default_alife_objects_per_update")]
+  pub alife_objects_per_update: u32,
+  #[serde(default = "default_alife_position_update_interval_ms")]
+  pub alife_position_update_interval_ms: u32,
+  #[serde(default = "default_alife_process_time")]
+  pub alife_process_time: i32,
+  #[serde(default = "default_alife_switch_distance")]
+  pub alife_switch_distance: f32,
+  // Configs saved before the overrides existed (or never explicitly saved)
+  // keep the preset-only behavior in alife.ltx: until this flag is set, the
+  // alife values above are NOT written, so the preset stays effective.
+  #[serde(default)]
+  pub alife_overrides_initialized: bool,
 }
 
 impl Default for RunParams {
@@ -201,7 +237,52 @@ impl Default for RunParams {
       scope_type: ScopeType::Scopes2dRenderTarget,
       selected_preset_id: String::new(),
       apply_preset_on_launch: true,
+      alife_objects_per_update: ALIFE_DEFAULT_OBJECTS_PER_UPDATE,
+      alife_position_update_interval_ms: ALIFE_DEFAULT_POSITION_UPDATE_INTERVAL_MS,
+      alife_process_time: ALIFE_DEFAULT_PROCESS_TIME,
+      alife_switch_distance: ALIFE_DEFAULT_SWITCH_DISTANCE,
+      alife_overrides_initialized: false,
     }
+  }
+}
+
+impl RunParams {
+  /// (ltx key, formatted value) pairs written into the [alife] section on top
+  /// of the preset. Values are clamped to the UI ranges (guards against
+  /// hand-edited config.json). Formatting is kept in one place: integers
+  /// as-is, `switch_distance` without a trailing ".0" — the engine writes
+  /// plain "250".
+  pub fn alife_pairs(&self) -> [(&'static str, String); 4] {
+    [
+      (
+        ALIFE_KEY_OBJECTS_PER_UPDATE,
+        self
+          .alife_objects_per_update
+          .clamp(ALIFE_MIN_OBJECTS_PER_UPDATE, ALIFE_MAX_OBJECTS_PER_UPDATE)
+          .to_string(),
+      ),
+      (
+        ALIFE_KEY_POSITION_UPDATE_INTERVAL_MS,
+        self
+          .alife_position_update_interval_ms
+          .clamp(ALIFE_MIN_POSITION_UPDATE_INTERVAL_MS, ALIFE_MAX_POSITION_UPDATE_INTERVAL_MS)
+          .to_string(),
+      ),
+      (
+        ALIFE_KEY_PROCESS_TIME,
+        self
+          .alife_process_time
+          .clamp(ALIFE_MIN_PROCESS_TIME, ALIFE_MAX_PROCESS_TIME)
+          .to_string(),
+      ),
+      (
+        ALIFE_KEY_SWITCH_DISTANCE,
+        self
+          .alife_switch_distance
+          .clamp(ALIFE_MIN_SWITCH_DISTANCE, ALIFE_MAX_SWITCH_DISTANCE)
+          .to_string(),
+      ),
+    ]
   }
 }
 
@@ -574,5 +655,55 @@ where
   match StringOrNumber::deserialize(deserializer)? {
     StringOrNumber::String(s) => Ok(s),
     StringOrNumber::Number(n) => Ok(n.to_string()),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn alife_pairs_match_engine_defaults_and_format() {
+    let pairs = RunParams::default().alife_pairs();
+
+    assert_eq!(pairs[0].0, "objects_per_update");
+    assert_eq!(pairs[0].1, "20");
+    assert_eq!(pairs[1].0, "position_update_interval_ms");
+    assert_eq!(pairs[1].1, "5000");
+    assert_eq!(pairs[2].0, "process_time");
+    assert_eq!(pairs[2].1, "500");
+    // switch_distance must be written like the engine does: "250", not "250.0".
+    assert_eq!(pairs[3].0, "switch_distance");
+    assert_eq!(pairs[3].1, "250");
+  }
+
+  #[test]
+  fn alife_pairs_clamp_out_of_range_values() {
+    // Hand-edited config.json values must not reach alife.ltx as-is.
+    let mut rp = RunParams::default();
+    rp.alife_objects_per_update = 500;
+    rp.alife_position_update_interval_ms = 999_999;
+    rp.alife_process_time = 1;
+    rp.alife_switch_distance = 6000.0;
+    let pairs = rp.alife_pairs();
+
+    assert_eq!(pairs[0].1, "100");
+    assert_eq!(pairs[1].1, "10000");
+    assert_eq!(pairs[2].1, "100");
+    assert_eq!(pairs[3].1, "1000");
+  }
+
+  #[test]
+  fn old_config_json_without_alife_fields_gets_defaults() {
+    // config.json written before the alife overrides existed.
+    let json = r#"{"render":"RendererR4","lang":"Rus","selected_preset_id":"balanced","apply_preset_on_launch":true}"#;
+    let rp: RunParams = serde_json::from_str(json).unwrap();
+    assert_eq!(rp.selected_preset_id, "balanced");
+    assert_eq!(rp.alife_objects_per_update, ALIFE_DEFAULT_OBJECTS_PER_UPDATE);
+    assert_eq!(rp.alife_position_update_interval_ms, ALIFE_DEFAULT_POSITION_UPDATE_INTERVAL_MS);
+    assert_eq!(rp.alife_process_time, ALIFE_DEFAULT_PROCESS_TIME);
+    assert_eq!(rp.alife_switch_distance, ALIFE_DEFAULT_SWITCH_DISTANCE);
+    // Until the first explicit save the overrides stay inactive.
+    assert!(!rp.alife_overrides_initialized);
   }
 }

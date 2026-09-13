@@ -220,48 +220,107 @@ pub async fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<(), S
   Ok(())
 }
 
-/// Write the selected preset's alife settings into gamedata/configs/alife.ltx.
+/// Write the selected preset's alife settings and the user's alife overrides
+/// into gamedata/configs/alife.ltx. The overrides are written after the preset,
+/// so on key collisions they win — but only after the user has saved the
+/// settings once (`alife_overrides_initialized`); before that the preset-only
+/// behavior is kept, so configs saved before this feature existed are not
+/// silently clobbered with default values.
+///
+/// `apply_preset_on_launch` is the master switch for this whole file: with it
+/// off the launcher does not touch alife.ltx at all — neither with the preset
+/// values nor with the user's overrides.
 ///
 /// The file is NOT created when missing: the engine reads some keys of the
 /// [alife] section via `r_float`/`r_u32` with an assert, and a file holding
 /// only the preset keys would crash the game at startup.
-pub async fn apply_preset_to_alife_ltx(alife_path: &Path, run_params: &RunParams, provider_id: Option<&str>) -> Result<(), String> {
-  let Some(preset) = load_selected_preset(run_params, provider_id).await else {
-    return Ok(());
-  };
-
-  if preset.alife.is_empty() {
+pub async fn apply_alife_settings_to_ltx(alife_path: &Path, run_params: &RunParams, provider_id: Option<&str>) -> Result<(), String> {
+  if !run_params.apply_preset_on_launch {
+    log::info!("alife.ltx: запись отключена опцией apply_preset_on_launch, пропуск: {:?}", alife_path);
     return Ok(());
   }
 
   let Some(mut ltx) = AlifeConfig::load(alife_path).map_err(|e| e.to_string())? else {
-    log::warn!("apply_preset_to_alife_ltx: файл не найден, пропуск: {:?}", alife_path);
+    log::warn!("apply_alife_settings_to_ltx: файл не найден, пропуск: {:?}", alife_path);
     return Ok(());
   };
 
-  let mut applied = 0usize;
-  for (key, value) in &preset.alife {
-    if ltx.set_in_section(ALIFE_SECTION, key, value) {
-      applied += 1;
-    } else {
-      log::warn!("apply_preset_to_alife_ltx: нет секции [{}] в {:?}", ALIFE_SECTION, alife_path);
-      return Ok(());
-    }
+  // The preset must outlive preset_entries: it borrows the map's keys/values.
+  let selected_preset = load_selected_preset(run_params, provider_id).await;
+  let preset_entries: Vec<(&str, &str)> = selected_preset
+    .as_ref()
+    .map(|preset| preset.alife.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+    .unwrap_or_default();
+  let preset_id = selected_preset.as_ref().map(|p| p.id.as_str()).unwrap_or("");
+
+  let pairs = run_params.alife_pairs();
+  let overrides = alife_overrides_for_write(run_params, &pairs);
+
+  if !write_alife_entries(&mut ltx, &preset_entries, overrides) {
+    log::warn!("apply_alife_settings_to_ltx: нет секции [{}] в {:?}", ALIFE_SECTION, alife_path);
+    return Ok(());
   }
 
   ltx.save().map_err(|e| e.to_string())?;
-  log::info!("Применён preset '{}': {} ключей alife в {:?}", preset.id, applied, alife_path);
+  if run_params.alife_overrides_initialized {
+    let applied: String = overrides.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(", ");
+    log::info!(
+      "alife.ltx: пресет '{}' → {} ключей, поверх пользовательские значения [{}]: {:?}",
+      preset_id,
+      preset_entries.len(),
+      applied,
+      alife_path
+    );
+  } else {
+    log::info!(
+      "alife.ltx: пресет '{}' → {} ключей (пользовательские значения ещё не заданы — запись пропущена): {:?}",
+      preset_id,
+      preset_entries.len(),
+      alife_path
+    );
+  }
   Ok(())
 }
 
+/// Overrides to write: empty until the user saves the settings once — a config
+/// from before this feature (or without an explicit save) keeps the preset
+/// values untouched in alife.ltx. Disabling `apply_preset_on_launch` turns the
+/// alife.ltx patching off completely, the user's own values included.
+fn alife_overrides_for_write<'a>(run_params: &RunParams, pairs: &'a [(&'static str, String); 4]) -> &'a [(&'static str, String)] {
+  if run_params.alife_overrides_initialized && run_params.apply_preset_on_launch {
+    pairs
+  } else {
+    &[]
+  }
+}
+
+/// Patch preset entries first and user overrides after them into a loaded
+/// ltx. `false` — the [alife] section is missing; the caller must not save.
+fn write_alife_entries(ltx: &mut AlifeConfig, preset_entries: &[(&str, &str)], overrides: &[(&'static str, String)]) -> bool {
+  for (key, value) in preset_entries {
+    if !ltx.set_in_section(ALIFE_SECTION, key, value) {
+      return false;
+    }
+  }
+
+  // User overrides come last and overwrite preset values on key collisions.
+  for (key, value) in overrides {
+    if !ltx.set_in_section(ALIFE_SECTION, key, value.as_str()) {
+      return false;
+    }
+  }
+
+  true
+}
+
 /// Same as above, but the path is resolved from the active version in the config.
-pub async fn apply_preset_to_version_alife_ltx(config: &AppConfig) -> Result<(), String> {
+pub async fn apply_alife_settings_to_version_ltx(config: &AppConfig) -> Result<(), String> {
   let Some(alife_path) = resolve_alife_ltx_path(config) else {
-    log::warn!("apply_preset_to_version_alife_ltx: активная версия не определена; пропуск alife.ltx");
+    log::warn!("apply_alife_settings_to_version_ltx: активная версия не определена; пропуск alife.ltx");
     return Ok(());
   };
 
-  apply_preset_to_alife_ltx(&alife_path, &config.run_params, config.selected_provider_id.as_deref()).await
+  apply_alife_settings_to_ltx(&alife_path, &config.run_params, config.selected_provider_id.as_deref()).await
 }
 
 /// Pre-launch: patch run_params (+ optional keybind profile) into the target version's ltx files.
@@ -279,7 +338,7 @@ pub async fn prepare_ltx_for_launch(
   apply_run_params_to_ltx(tmp_ltx_path, run_params, provider_id).await?;
 
   // alife.ltx errors must not block the game launch.
-  if let Err(e) = apply_preset_to_alife_ltx(alife_ltx_path, run_params, provider_id).await {
+  if let Err(e) = apply_alife_settings_to_ltx(alife_ltx_path, run_params, provider_id).await {
     log::warn!("prepare_ltx_for_launch: не удалось записать alife.ltx: {}", e);
   }
 
@@ -398,5 +457,88 @@ mod tests {
     let remote = vec![version("Global War Dev", "Global-War-Dev", "")];
 
     assert!(find_version_by_name(&HashMap::new(), &remote, "Global War Dev").is_none());
+  }
+
+  #[test]
+  fn user_overrides_win_over_preset_in_alife_ltx() {
+    // Temp alife.ltx mirroring the engine-written format (cp1251, CRLF).
+    let path = std::env::temp_dir().join(format!("alife_override_test_{}.ltx", std::process::id()));
+    let sample = "[alife]\r\n        objects_per_update               = 20\r\n        switch_distance                  = 250\r\n \r\n";
+    std::fs::write(&path, crate::utils::encoding::encode_cp1251(sample).unwrap()).unwrap();
+
+    // Preset wants other values, but the user overrides must win on both keys.
+    let preset = vec![("objects_per_update", "5"), ("switch_distance", "100")];
+    let mut run_params = RunParams::default();
+    run_params.alife_overrides_initialized = true;
+    run_params.alife_objects_per_update = 40;
+    run_params.alife_switch_distance = 300.0;
+
+    let pairs = run_params.alife_pairs();
+    let overrides = alife_overrides_for_write(&run_params, &pairs);
+    let mut ltx = AlifeConfig::load(&path).unwrap().unwrap();
+    assert!(!overrides.is_empty(), "initialized config must write overrides");
+    assert!(write_alife_entries(&mut ltx, &preset, overrides));
+    ltx.save().unwrap();
+
+    let bytes = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(text.contains("objects_per_update               = 40\r\n"), "override must win: {}", text);
+    // f32 formatting must not leak a trailing ".0" into the ltx.
+    assert!(text.contains("switch_distance                  = 300\r\n"), "override must win: {}", text);
+    assert!(text.ends_with(" \r\n"), "trailing line must survive");
+    std::fs::remove_file(&path).ok();
+  }
+
+  #[test]
+  fn preset_stays_effective_until_overrides_initialized() {
+    // Old config (flag not set): preset values must reach alife.ltx as-is —
+    // serde defaults (20/250/...) must NOT clobber them.
+    let path = std::env::temp_dir().join(format!("alife_preset_only_test_{}.ltx", std::process::id()));
+    let sample = "[alife]\r\n        objects_per_update               = 20\r\n        switch_distance                  = 250\r\n \r\n";
+    std::fs::write(&path, crate::utils::encoding::encode_cp1251(sample).unwrap()).unwrap();
+
+    let preset = vec![("objects_per_update", "40"), ("switch_distance", "600")];
+    let run_params = RunParams::default();
+    assert!(!run_params.alife_overrides_initialized);
+
+    let pairs = run_params.alife_pairs();
+    let overrides = alife_overrides_for_write(&run_params, &pairs);
+    let mut ltx = AlifeConfig::load(&path).unwrap().unwrap();
+    assert!(overrides.is_empty(), "uninitialized config must not write overrides");
+    assert!(write_alife_entries(&mut ltx, &preset, overrides));
+    ltx.save().unwrap();
+
+    let bytes = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    assert!(text.contains("objects_per_update               = 40\r\n"), "preset must win: {}", text);
+    assert!(text.contains("switch_distance                  = 600\r\n"), "preset must win: {}", text);
+    std::fs::remove_file(&path).ok();
+  }
+
+  #[test]
+  fn overrides_skipped_when_preset_applying_disabled() {
+    // "Apply preset on launch" off => the launcher writes nothing at all.
+    let mut run_params = RunParams::default();
+    run_params.alife_overrides_initialized = true;
+    run_params.apply_preset_on_launch = false;
+
+    let pairs = run_params.alife_pairs();
+    assert!(alife_overrides_for_write(&run_params, &pairs).is_empty());
+
+    // The very same config with the toggle on writes the overrides.
+    run_params.apply_preset_on_launch = true;
+    let pairs = run_params.alife_pairs();
+    assert_eq!(alife_overrides_for_write(&run_params, &pairs).len(), pairs.len());
+  }
+
+  #[test]
+  fn write_alife_entries_fails_when_section_missing() {
+    let path = std::env::temp_dir().join(format!("alife_no_section_test_{}.ltx", std::process::id()));
+    let sample = "[other]\r\n        key = 1\r\n";
+    std::fs::write(&path, crate::utils::encoding::encode_cp1251(sample).unwrap()).unwrap();
+
+    let mut ltx = AlifeConfig::load(&path).unwrap().unwrap();
+    assert!(!write_alife_entries(&mut ltx, &[], &RunParams::default().alife_pairs()));
+    std::fs::remove_file(&path).ok();
   }
 }

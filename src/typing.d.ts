@@ -126,6 +126,14 @@ declare interface RunParams {
   scope_type: string;
   selected_preset_id: string;
   apply_preset_on_launch: boolean;
+  // User-editable A-Life overrides, written on top of the preset into alife.ltx.
+  alife_objects_per_update: number;
+  alife_position_update_interval_ms: number;
+  alife_process_time: number;
+  alife_switch_distance: number;
+  // Backend sets it to true on the first explicit save; false keeps
+  // preset-only writes into alife.ltx.
+  alife_overrides_initialized: boolean;
   [index: string]: unknown;
 }
 // Game process tracking (backend GameTracker).

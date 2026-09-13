@@ -398,7 +398,14 @@
       "fov": "FOV",
       "hudFov": "FOV Худа",
       "scopeType": "Тип прицелов:",
-      "applyKeyProfile": "Применять выбранный профиль при старте игры"
+      "applyKeyProfile": "Применять выбранный профиль при старте игры",
+      "alifeSection": "Настройки A-Life",
+      "alifeNote": "Перетирает значения из пресета",
+      "alifeDisabledNote": "Запись в alife.ltx отключена опцией «Применять пресет при запуске игры»",
+      "objectsPerUpdate": "Объектов за апдейт",
+      "positionUpdateIntervalMs": "Интервал обновления позиций (мс)",
+      "processTime": "Время обработки (мкс)",
+      "switchDistance": "Дистанция онлайн/оффлайн (м)"
     },
     "presets": {
       "placeholder": "Выберите пресет",

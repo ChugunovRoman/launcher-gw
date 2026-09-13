@@ -22,6 +22,78 @@ pub const GAMEDATA_DIR: &str = "gamedata";
 pub const CONFIGS_DIR: &str = "configs";
 pub const ALIFE_LTX: &str = "alife.ltx";
 pub const ALIFE_SECTION: &str = "alife";
+
+// [alife] keys managed by the launcher. Defaults mirror gamedata/configs/alife.ltx
+// so old config.json files keep the game's current values until an explicit edit.
+pub const ALIFE_KEY_OBJECTS_PER_UPDATE: &str = "objects_per_update";
+pub const ALIFE_KEY_POSITION_UPDATE_INTERVAL_MS: &str = "position_update_interval_ms";
+pub const ALIFE_KEY_PROCESS_TIME: &str = "process_time";
+pub const ALIFE_KEY_SWITCH_DISTANCE: &str = "switch_distance";
+
+pub const ALIFE_DEFAULT_OBJECTS_PER_UPDATE: u32 = 20;
+pub const ALIFE_DEFAULT_POSITION_UPDATE_INTERVAL_MS: u32 = 5000;
+pub const ALIFE_DEFAULT_PROCESS_TIME: i32 = 500;
+pub const ALIFE_DEFAULT_SWITCH_DISTANCE: f32 = 250.0;
+
+// Value ranges for the alife overrides (same bounds as the settings UI TrackBars).
+// switch_distance follows the in-game menu range; the published presets go up
+// to 600 (quality), so the max must not be lower than that.
+pub const ALIFE_MIN_OBJECTS_PER_UPDATE: u32 = 1;
+pub const ALIFE_MAX_OBJECTS_PER_UPDATE: u32 = 100;
+pub const ALIFE_MIN_POSITION_UPDATE_INTERVAL_MS: u32 = 0;
+pub const ALIFE_MAX_POSITION_UPDATE_INTERVAL_MS: u32 = 10000;
+pub const ALIFE_MIN_PROCESS_TIME: i32 = 100;
+pub const ALIFE_MAX_PROCESS_TIME: i32 = 5000;
+pub const ALIFE_MIN_SWITCH_DISTANCE: f32 = 30.0;
+pub const ALIFE_MAX_SWITCH_DISTANCE: f32 = 1000.0;
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// src/consts.ts duplicates the alife numbers for the UI (ALIFE_DEFAULTS /
+  /// ALIFE_RANGES); there is no codegen between the two files, so this test
+  /// is the sync check. When it fails, edit both sides together.
+  #[test]
+  fn frontend_alife_consts_stay_in_sync() {
+    let ts_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/consts.ts");
+    let ts = std::fs::read_to_string(&ts_path).expect("src/consts.ts must be readable");
+
+    assert!(
+      ts.contains("objects_per_update: 20,"),
+      "ALIFE_DEFAULTS.objects_per_update is out of sync with ALIFE_DEFAULT_OBJECTS_PER_UPDATE"
+    );
+    assert!(
+      ts.contains("position_update_interval_ms: 5000,"),
+      "ALIFE_DEFAULTS.position_update_interval_ms is out of sync with ALIFE_DEFAULT_POSITION_UPDATE_INTERVAL_MS"
+    );
+    assert!(
+      ts.contains("process_time: 500,"),
+      "ALIFE_DEFAULTS.process_time is out of sync with ALIFE_DEFAULT_PROCESS_TIME"
+    );
+    assert!(
+      ts.contains("switch_distance: 250,"),
+      "ALIFE_DEFAULTS.switch_distance is out of sync with ALIFE_DEFAULT_SWITCH_DISTANCE"
+    );
+
+    assert!(
+      ts.contains("objects_per_update: { min: 1, max: 100, step: 1 }"),
+      "ALIFE_RANGES.objects_per_update is out of sync with ALIFE_MIN_/MAX_OBJECTS_PER_UPDATE"
+    );
+    assert!(
+      ts.contains("position_update_interval_ms: { min: 0, max: 10000, step: 100 }"),
+      "ALIFE_RANGES.position_update_interval_ms is out of sync with ALIFE_MIN_/MAX_POSITION_UPDATE_INTERVAL_MS"
+    );
+    assert!(
+      ts.contains("process_time: { min: 100, max: 5000, step: 50 }"),
+      "ALIFE_RANGES.process_time is out of sync with ALIFE_MIN_/MAX_PROCESS_TIME"
+    );
+    assert!(
+      ts.contains("switch_distance: { min: 30, max: 1000, step: 5 }"),
+      "ALIFE_RANGES.switch_distance is out of sync with ALIFE_MIN_/MAX_SWITCH_DISTANCE"
+    );
+  }
+}
 pub const SCRIPTS_DIR: &str = "scripts";
 pub const SCRIPT_G: &str = "_g.script";
 pub const USER_LTX: &str = "user.ltx";
