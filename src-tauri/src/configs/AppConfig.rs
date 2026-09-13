@@ -4,14 +4,14 @@ use crate::logger::LogLevel;
 use crate::utils::patch_markers::InstalledPatch;
 use crate::utils::video::get_available_resolutions;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 use tauri::path::BaseDirectory;
+use tauri::Manager;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,7 +198,7 @@ impl Default for RunParams {
       show_fps: false,
       show_ids: false,
       font_legacy: false,
-      scope_type: ScopeType::Scopes2dStatic,
+      scope_type: ScopeType::Scopes2dRenderTarget,
       selected_preset_id: String::new(),
       apply_preset_on_launch: true,
     }
@@ -505,10 +505,7 @@ impl AppConfig {
     // Migration: latest_pid was a bare pid that Windows pid reuse turned into
     // false "In game" state. It is no longer read anywhere; reset stale values.
     if config.latest_pid != -1 {
-      log::info!(
-        "Migration: dropping legacy latest_pid {} (superseded by tracked_game)",
-        config.latest_pid
-      );
+      log::info!("Migration: dropping legacy latest_pid {} (superseded by tracked_game)", config.latest_pid);
       config.latest_pid = -1;
     }
 
