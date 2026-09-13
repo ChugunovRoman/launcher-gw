@@ -85,7 +85,7 @@
 
 <header>
   <h5 class="title" role="button" tabindex="0" ondblclick={toggleMaximizeHandler}>
-    <span>Global War Launcher {version}</span> <span style="color: {$fontColor}; font-size: 0.7rem">{$_(`app.h.${$connectStatus}`)}</span>
+    <span>GWD Launcher {version}</span> <span style="color: {$fontColor}; font-size: 0.7rem">{$_(`app.h.${$connectStatus}`)}</span>
     {#if $launcherDwnNeedUpdate && $launcherDwnVersion}
       <div style="width: 20px;"></div>
       {#if $launcherDwnProgress !== 100}

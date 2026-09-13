@@ -32,7 +32,7 @@
     "dlg": {
       "attention": "Внимание!",
       "addVersionTitle": "Добавление локальной версии",
-      "restartTxt1": "Лаунчер Global War был обновлен до версии",
+      "restartTxt1": "Лаунчер GWD был обновлен до версии",
       "restartTxt2": "Перезапусить приложение?",
       "cannotApplyProfile": "Не удалось применить профиль. Файл appdata/user.ltx не найден.",
       "applyProfileOk": "Профиль 'PROFILE' успешно применен",

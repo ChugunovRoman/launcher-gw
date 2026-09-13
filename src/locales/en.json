@@ -32,7 +32,7 @@
     "dlg": {
       "attention": "Attention!",
       "addVersionTitle": "Adding a local version",
-      "restartTxt1": "Global War Launcher has been updated to version",
+      "restartTxt1": "GWD Launcher has been updated to version",
       "restartTxt2": "Restart the application?",
       "cannotApplyProfile": "Failed to apply profile. File appdata/user.ltx not found.",
       "applyProfileOk": "Profile 'PROFILE' has been successfully applied",
