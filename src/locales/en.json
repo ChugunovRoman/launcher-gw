@@ -199,6 +199,7 @@
         "wpn_prev": "Previous weapon of this type",
         "wpn_zoom": "Zoom",
         "wpn_zoom_second": "Zoom second",
+        "wpn_hud_fov_adjust": "Adjust HUD depth (aiming)",
         "quick_use_1": "Quick access slot (1)",
         "quick_use_2": "Quick access slot (2)",
         "quick_use_3": "Quick access slot (3)",

@@ -238,6 +238,7 @@ export const keybindsGroups = new Map<string, { [action: string]: [string, strin
       wpn_fire: [NO_KEY, NO_KEY],
       wpn_zoom: [NO_KEY, NO_KEY],
       wpn_zoom_second: [NO_KEY, NO_KEY],
+      wpn_hud_fov_adjust: ["kLMENU", NO_KEY],
       wpn_reload: [NO_KEY, NO_KEY],
       wpn_func: [NO_KEY, NO_KEY],
       wpn_firemode_next: [NO_KEY, NO_KEY],
