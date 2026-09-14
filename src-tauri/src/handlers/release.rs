@@ -2,8 +2,9 @@ use crate::{
   configs::AppConfig::{AppConfig, Version},
   consts::BIN_DIR,
   handlers::dto::{DownlaodFileStat, ReleaseManifest},
-  service::{create_release::ServiceRelease, get_release::ServiceGetRelease, main::Service},
-  utils::{errors::log_full_error, git::grouping::group_files_by_size, patch_markers::{read_installed_patches, write_patch_marker}, resources::game_exe},
+  providers::dto::AssetSha256,
+  service::{create_release::ServiceRelease, get_release::{ServiceGetRelease, ReleaseSource}, main::Service},
+  utils::{errors::{log_full_error, upload_log}, git::grouping::group_files_by_size, patch_markers::{read_installed_patches, write_patch_marker}, resources::game_exe},
 };
 use anyhow::Context;
 use std::{cmp::Reverse, fs, path::PathBuf};
@@ -35,14 +36,47 @@ pub async fn get_available_versions(app: tauri::AppHandle, app_config: tauri::St
     log::info!("get_available_versions: skipping load_manifest (GitHub player mode, no token)");
   }
 
-  let releases = service_guard.get_releases(true).await.context("Cannot get game releases").map_err(|e| {
+  let releases = service_guard.get_releases(ReleaseSource::Cached).await.context("Cannot get game releases").map_err(|e| {
     log_full_error(&e);
     e.to_string()
   })?;
 
+  // C7: record which provider these versions belong to.
+  let provider_id = service_guard.api_client.current_provider()
+    .ok().map(|api| api.id().to_string());
+
   {
     let mut config_guard = app_config.lock().await;
     config_guard.versions = releases.clone();
+    config_guard.versions_provider_id = provider_id;
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
+  }
+
+  Ok(releases)
+}
+
+/// Force-refresh the releases list (invalidates cache, re-fetches index).
+/// Dev-only: also merges API-only releases when a token is present.
+#[tauri::command]
+pub async fn refresh_available_versions(app: tauri::AppHandle, app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>) -> Result<Vec<Version>, String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let mut service_guard = state.lock().await;
+
+  let releases = service_guard.refresh_releases().await.context("Cannot refresh releases").map_err(|e| {
+    log_full_error(&e);
+    e.to_string()
+  })?;
+
+  let provider_id = service_guard.api_client.current_provider()
+    .ok().map(|api| api.id().to_string());
+
+  {
+    let mut config_guard = app_config.lock().await;
+    config_guard.versions = releases.clone();
+    config_guard.versions_provider_id = provider_id;
     config_guard.save().map_err(|e| {
       log_full_error(&e);
       e.to_string()
@@ -55,7 +89,7 @@ pub async fn get_available_versions(app: tauri::AppHandle, app_config: tauri::St
 #[tauri::command]
 pub async fn create_release_repos(app: tauri::AppHandle, name: String, path: String) -> Result<(), String> {
   let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
+  let mut service_guard = state.lock().await;
 
   let api = service_guard.api_client.current_provider().map_err(|e| {
     log_full_error(&e);
@@ -86,6 +120,9 @@ pub async fn create_release_repos(app: tauri::AppHandle, name: String, path: Str
       log_full_error(&e);
       e.to_string()
     })?;
+
+  // Invalidate in-memory cache so the new release appears on next fetch.
+  service_guard.invalidate_releases();
 
   Ok(())
 }
@@ -282,6 +319,15 @@ pub async fn add_installed_version_from_config(app_config: tauri::State<'_, Arc<
   {
     let mut config_guard = app_config.lock().await;
 
+    // `start_repair_version` finishes through this very same
+    // download-unpack-version → add_installed_version_from_config path as a
+    // fresh install (both end in the shared `finalize_download`). When an
+    // entry for this version already exists, MERGE instead of overwriting:
+    // a repair only re-downloads a handful of broken files, it must not wipe
+    // engine_path/fsgame_path/userltx_path (set via RunParams) or the
+    // installed-patch list of an already-installed version (bug fix).
+    let existing = config_guard.installed_versions.get(&version.path).cloned();
+
     config_guard.installed_versions.insert(
       version.path.clone(),
       Version {
@@ -291,11 +337,15 @@ pub async fn add_installed_version_from_config(app_config: tauri::State<'_, Arc<
         manifest: version.manifest.clone(),
         installed_path: version.installed_path.clone(),
         download_path: version.download_path.clone(),
-        engine_path: None,
-        fsgame_path: None,
-        userltx_path: None,
-        exe_path: version.manifest.as_ref().and_then(|m| m.exe_path.clone()),
-        installed_updates: vec![],
+        engine_path: existing.as_ref().and_then(|v| v.engine_path.clone()),
+        fsgame_path: existing.as_ref().and_then(|v| v.fsgame_path.clone()),
+        userltx_path: existing.as_ref().and_then(|v| v.userltx_path.clone()),
+        exe_path: version
+          .manifest
+          .as_ref()
+          .and_then(|m| m.exe_path.clone())
+          .or_else(|| existing.as_ref().and_then(|v| v.exe_path.clone())),
+        installed_updates: existing.map(|v| v.installed_updates).unwrap_or_default(),
         is_local: false,
       },
     );
@@ -477,4 +527,116 @@ pub async fn emit_file_list_stats(
   let _ = app.emit("download-version-files", (&versionName, file_sizes));
 
   Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// "Get SHA" developer tool: server-side hashes of a published release's
+// assets, so a manifest can be filled in without re-packing (see stage 6 of
+// the download-integrity plan).
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_release_assets_sha(
+  app: tauri::AppHandle,
+  service: tauri::State<'_, Arc<Mutex<Service>>>,
+  name: String,
+  patch_tag: Option<String>,
+) -> Result<ReleaseManifest, String> {
+  let api_client = {
+    let svc = service.lock().await;
+    svc.api_client.clone()
+  };
+  let api = api_client.current_provider().map_err(|e| e.to_string())?;
+  let provider_id = api.id().to_string();
+
+  // 1. The index is the source of truth for tag + the manifest's own URL.
+  let index = crate::service::index::load_index(&provider_id)
+    .await
+    .map_err(|e| format!("Cannot load release index: {}", e))?;
+  let entry = index
+    .releases
+    .iter()
+    .find(|r| r.name == name || r.path == name)
+    .ok_or_else(|| crate::consts::ERR_RELEASE_NOT_IN_INDEX.to_string())?;
+
+  // 2. Resolve the repo that owns the assets AND fetch the manifest fresh
+  // (not the possibly-stale index copy) — its file list is what gets the
+  // sha256 fields filled in below.
+  let (project_id, tag, mut manifest) = if let Some(patch_tag) = patch_tag.as_deref().filter(|t| !t.is_empty()) {
+    let patch = entry
+      .patches
+      .iter()
+      .find(|p| p.tag == patch_tag)
+      .ok_or_else(|| format!("Patch '{}' not found in index of release '{}'", patch_tag, &name))?;
+    let manifest_url = patch
+      .manifest
+      .as_deref()
+      .ok_or_else(|| format!("Patch '{}' has no manifest URL in the index (re-run publish_index)", patch_tag))?;
+    let manifest = crate::handlers::patch_install::download_manifest(&api_client, manifest_url)
+      .await
+      .map_err(|e| format!("Cannot fetch patch manifest: {}", e))?;
+    let project = crate::handlers::patch_install::resolve_updates_project(&api_client, &entry.name)
+      .await
+      .map_err(|e| e.to_string())?;
+    let pid = crate::handlers::patch_install::project_id_for(&api_client, &project).map_err(|e| e.to_string())?;
+    (pid, patch_tag.to_string(), manifest)
+  } else {
+    let repos = api.get_release_repos_by_name(&entry.name).await.map_err(|e| e.to_string())?;
+    let main = repos
+      .iter()
+      .find(|r| crate::service::get_release::is_main_repo(&r.name))
+      .or_else(|| repos.first())
+      .ok_or_else(|| format!("No repositories found for release '{}'", &entry.name))?;
+    let pid = if api.is_suppot_subgroups() { main.id.to_string() } else { main.name.clone() };
+    let manifest = {
+      let service_guard = service.lock().await;
+      service_guard
+        .get_release_manifest(&entry.name)
+        .await
+        .map_err(|e| format!("Cannot fetch release manifest: {}", e))?
+    };
+    (pid, entry.tag.clone(), manifest)
+  };
+
+  // 3. Ask the provider for server-side hashes, then fill them into the
+  // manifest's own file list (skipping the `manifest.json` asset entry
+  // itself, which never gets a data hash).
+  let remote = api.get_release_assets_sha256(&project_id, &tag).await.map_err(|e| e.to_string())?;
+  let mut by_name: std::collections::HashMap<String, AssetSha256> = remote.into_iter().map(|a| (a.name.clone(), a)).collect();
+
+  for file in manifest.files.iter_mut() {
+    if file.kind == crate::handlers::dto::ManifestFileKind::Manifest {
+      continue;
+    }
+    match by_name.remove(&file.name) {
+      Some(asset) => {
+        if asset.sha256.is_none() {
+          upload_log(&app, format!("File '{}' has no server-side sha256 (uploaded before the provider added hash reporting)", &file.name));
+        } else {
+          file.sha256 = asset.sha256;
+        }
+      }
+      None => {
+        upload_log(&app, format!("Warning: file '{}' (listed in the manifest) not found on server (tag '{}')", &file.name, &tag));
+      }
+    }
+  }
+  for (_, extra) in by_name {
+    upload_log(&app, format!("Warning: server has extra file '{}' not present in the manifest", extra.name));
+  }
+
+  // Bump the schema so the download side starts verifying hashes for this
+  // release/patch once the developer pastes this manifest back.
+  if manifest.schema < 2 {
+    manifest.schema = 2;
+  }
+
+  // 4. The full, updated manifest.json — the developer pastes this over the
+  // existing file (repo commit for a release, re-upload for a patch asset).
+  let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+  upload_log(&app, format!("Updated manifest.json for '{}' (tag '{}') — paste this over the existing file:", &name, &tag));
+  upload_log(&app, json.clone());
+  log::info!("get_release_assets_sha '{}': {}", &name, &json);
+
+  Ok(manifest)
 }

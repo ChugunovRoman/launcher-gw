@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use crate::{
   configs::AppConfig::{AppConfig, Version},
@@ -8,7 +8,7 @@ use crate::{
     ApiProvider::ApiProvider,
     Github::Github::Github,
     Gitlab::Gitlab::Gitlab,
-    dto::{ProviderStatus, Release},
+    dto::ProviderStatus,
   },
 };
 use anyhow::{Result, bail};
@@ -25,7 +25,9 @@ pub struct Service {
   pub config: Arc<Mutex<AppConfig>>,
   pub logger: LogCallback,
 
-  pub releases: HashMap<String, Vec<Release>>,
+  /// In-memory cache of release versions, keyed by provider id.
+  /// Each entry stores the fetch timestamp for TTL-based expiry.
+  pub releases_cache: HashMap<String, (Instant, Vec<Version>)>,
 }
 
 impl Service {
@@ -34,9 +36,24 @@ impl Service {
       api_client: ApiClient::new(logger.clone()),
       config,
       logger,
-      releases: HashMap::new(),
+      releases_cache: HashMap::new(),
     }
   }
+
+  /// Invalidate the in-memory releases cache for the current provider.
+  /// Call after creating/uploading a release or publishing the index so the
+  /// next UI request fetches the fresh list.
+  pub fn invalidate_releases(&mut self) {
+    if let Ok(api) = self.api_client.current_provider() {
+      let provider_id = api.id().to_string();
+      self.releases_cache.remove(&provider_id);
+      // Also drop the provider's repo map: without this a repo created a
+      // moment ago is missing from every call that reuses the cached map.
+      api.invalidate_projects_cache();
+      log::info!("invalidate_releases: cache cleared for '{}'", provider_id);
+    }
+  }
+
 
   /// Register providers locally (no network) and select the current one from
   /// the saved config value.  Falls back to "github" when the saved id is

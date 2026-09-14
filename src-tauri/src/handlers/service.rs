@@ -402,7 +402,94 @@ pub async fn commit_index(app: tauri::AppHandle, json: String) -> Result<(), Str
     .map_err(|e| {
       log::error!("commit_index failed: {:?}", e);
       e.to_string()
-    })
+    })?;
+
+  // Invalidate AFTER the commit so a concurrent list request cannot refill
+  // the cache from the pre-commit index.
+  {
+    let mut service_guard = state.lock().await;
+    service_guard.invalidate_releases();
+  }
+
+  Ok(())
+}
+
+/// Re-publish the static release index, skipping the "fewer releases than
+/// before" safety check.  Required after a release was deliberately deleted:
+/// the normal (non-forced) publish refuses to shrink the index, so without
+/// this every automatic publish after an upload would keep failing.
+#[tauri::command]
+pub async fn republish_index_force(app: tauri::AppHandle) -> Result<(), String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let api_client = {
+    let service_guard = state.lock().await;
+    service_guard.api_client.clone()
+  };
+  let api = api_client.current_provider().map_err(|e| e.to_string())?;
+
+  crate::service::index_publisher::publish_index(api, true)
+    .await
+    .map_err(|e| {
+      log::error!("republish_index_force failed: {:?}", e);
+      e.to_string()
+    })?;
+
+  {
+    let mut service_guard = state.lock().await;
+    service_guard.invalidate_releases();
+  }
+
+  Ok(())
+}
+
+/// Names of releases that exist on the provider but are missing from the
+/// published static index — i.e. created/uploaded but not yet visible to
+/// players (repo still private, or the index was never re-published).
+/// Dev-only: without a token the API listing is unavailable and the result is
+/// an empty list.
+#[tauri::command]
+pub async fn get_unpublished_releases(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  let api_client = {
+    let service_guard = state.lock().await;
+    service_guard.api_client.clone()
+  };
+  let api = api_client.current_provider().map_err(|e| e.to_string())?;
+
+  if api.get_token().is_empty() {
+    return Ok(vec![]);
+  }
+
+  // Same normalization as the API/index merge in refresh_releases: a repo
+  // without a description yields "Global-War-Dev" where the index stores
+  // "Global War Dev".
+  let normalize = |s: &str| s.replace('-', " ").to_lowercase();
+
+  let indexed: std::collections::HashSet<String> = match crate::service::index::load_index(api.id()).await {
+    Ok(index) => index.releases.iter().map(|r| normalize(&r.name)).collect(),
+    Err(e) => {
+      // No index at all — reporting every release as unpublished would be
+      // noise, so report nothing and let the log explain why.
+      log::warn!("get_unpublished_releases: index unavailable: {}", e);
+      return Ok(vec![]);
+    }
+  };
+
+  let api_releases = api.get_releases(true).await.map_err(|e| e.to_string())?;
+  let missing: Vec<String> = api_releases
+    .into_iter()
+    // The static-index repo lives in the same org but is not a game release;
+    // without this it would always be reported as "not published".
+    .filter(|r| !r.name.eq_ignore_ascii_case(crate::consts::INDEX_REPO_NAME) && !r.path.eq_ignore_ascii_case(crate::consts::INDEX_REPO_NAME))
+    .filter(|r| !indexed.contains(&normalize(&r.name)))
+    .map(|r| r.name)
+    .collect();
+
+  if !missing.is_empty() {
+    log::info!("get_unpublished_releases: {:?}", &missing);
+  }
+
+  Ok(missing)
 }
 
 /// Return the current startup state (providers, releases, user_data, profiles phases).

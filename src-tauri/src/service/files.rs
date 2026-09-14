@@ -15,12 +15,18 @@ use tokio::sync::broadcast::Receiver;
 pub type NetSpeedCallback = Box<dyn Fn(&str, &str, u64, u64, f64) + Send + Sync>;
 
 /// Result of a single file download attempt.
-/// `Completed`  — file fully downloaded, `.part` removed.
+/// `Completed`   — file fully downloaded, `.part` removed.
 /// `Interrupted` — cancelled by the user / shutdown; `.part` saved, must NOT be treated as success.
+/// `ShortRead`   — the stream ended early WITHOUT a cancel signal (server closed
+///                 the connection, transient network hiccup); `.part` saved.
+///                 Callers must treat this as a network error (retry with
+///                 backoff), not as a pause — otherwise a flaky connection
+///                 masquerades as the user hitting Stop (plan bug fix).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadOutcome {
   Completed,
   Interrupted,
+  ShortRead,
 }
 
 pub struct ServiceFiles {
@@ -154,7 +160,9 @@ impl ServiceFiles {
       return Ok(DownloadOutcome::Interrupted);
     }
 
-    // Stream ended without cancel — must have the full payload or treat as interrupt.
+    // Stream ended without cancel — must have the full payload, otherwise this
+    // is a short read (server closed the connection early) and must be
+    // retried as a network error, not treated as a pause.
     if downloaded < *total_bytes {
       log::warn!(
         "Download short-read for {}: got {} of {} bytes; keeping .part for resume",
@@ -165,7 +173,7 @@ impl ServiceFiles {
       let _ = file.flush().await;
       Self::save_part_file(&part_file_path, downloaded).await?;
       (self.callback)(release_name, &file_name, downloaded, total_bytes.clone(), 0.0);
-      return Ok(DownloadOutcome::Interrupted);
+      return Ok(DownloadOutcome::ShortRead);
     }
 
     file.flush().await?;

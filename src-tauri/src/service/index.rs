@@ -22,6 +22,14 @@ pub struct IndexAsset {
   pub name: String,
   pub size: u64,
   pub url: String,
+  /// Expected SHA-256 copied from the release manifest by the index writer.
+  /// None in old indexes → the launcher verifies size only.
+  #[serde(default)]
+  pub sha256: Option<String>,
+  #[serde(default)]
+  pub kind: crate::handlers::dto::ManifestFileKind,
+  #[serde(default)]
+  pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,9 +150,17 @@ pub(crate) fn index_raw_url(provider_id: &str) -> Result<String> {
 /// provider, the network is down (and no stale cache exists), or the schema
 /// version is incompatible (forces launcher self-update).
 pub async fn load_index(provider_id: &str) -> Result<ReleaseIndex> {
+  load_index_with_ttl(provider_id, Duration::from_secs(INDEX_CACHE_TTL_SECS)).await
+}
+
+/// Like `load_index` but with a caller-supplied TTL.  Pass `Duration::ZERO`
+/// to force ETag revalidation (conditional GET) regardless of the normal
+/// cache window — cheap for players (GitHub returns 304) and ensures the
+/// launcher sees an index published from another machine within seconds.
+pub async fn load_index_with_ttl(provider_id: &str, ttl: Duration) -> Result<ReleaseIndex> {
   let url = index_raw_url(provider_id)?;
 
-  let cached = crate::utils::http_cache::fetch(&crate::utils::http_cache::SHARED_CLIENT, &url, Duration::from_secs(INDEX_CACHE_TTL_SECS)).await?;
+  let cached = crate::utils::http_cache::fetch(&crate::utils::http_cache::SHARED_CLIENT, &url, ttl).await?;
 
   let index: ReleaseIndex = serde_json::from_slice(&cached.bytes)?;
 

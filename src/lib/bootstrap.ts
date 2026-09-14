@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { sep } from '@tauri-apps/api/path';
 import { get } from 'svelte/store';
 import {
   appConfig,
@@ -12,11 +11,9 @@ import {
   gameStatus,
   localVersions,
   refreshLocalVersion,
-  versionsWillBeLoaded,
 } from '../store/main';
 import {
   selectedVersion as selectedVersionStore,
-  versions,
   mainVersion,
   hasAnyLocalVersion,
   showUploading,
@@ -25,7 +22,8 @@ import {
   uploadedFiles,
   refreshVersions,
 } from '../store/upload';
-import { prepareVersionItem, maybeStartUpdateCheck } from './main';
+import { maybeStartUpdateCheck } from './main';
+import { applyVersions } from './versions';
 import { applyKeyProfiles } from './profiles';
 
 /**
@@ -57,13 +55,21 @@ export async function bootstrap() {
     console.error('bootstrap: get_config failed', e);
   }
 
-  // 2. versions from config cache
+  // 2. versions from config cache (C7: only if the cached provider matches
+  //    the currently selected one, otherwise wait for the backend to emit
+  //    versions-loaded with the correct list).
   try {
     const cfg = get(appConfig);
-    if (cfg.versions && cfg.versions.length > 0) {
-      const separ = await sep();
-      versions.set(cfg.versions.map(v => prepareVersionItem(cfg, v, separ)));
-      versionsWillBeLoaded.set(true);
+    // CRIT-5: A missing field means the config predates this feature — treat
+    // it as a MISMATCH so the backend re-fetches the correct list for the
+    // currently selected provider, rather than showing stale data from the
+    // last provider that happened to be active.
+    const providerMatch = !!cfg.versions_provider_id
+      && cfg.versions_provider_id === cfg.selected_provider_id;
+    if (cfg.versions && cfg.versions.length > 0 && providerMatch) {
+      // Through applyVersions so this write shares the generation counter
+      // with loadVersions — the cached list must not overwrite a fresher one.
+      await applyVersions(cfg.versions, "cache");
     }
   } catch (e) {
     console.error('bootstrap: versions failed', e);

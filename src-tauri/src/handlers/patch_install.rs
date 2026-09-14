@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
@@ -42,7 +43,7 @@ pub struct PatchCheckResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchInstallProgress {
-  /// "download" | "unpack" | "delete" | "done"
+  /// "download" | "unpack" | "delete" | "done" | "error"
   pub stage: String,
   pub version: String,
   pub file: String,
@@ -52,6 +53,110 @@ pub struct PatchInstallProgress {
 
 fn install_log(app: &tauri::AppHandle, message: String) {
   let _ = app.emit(EVT_INSTALL_LOG, message);
+}
+
+fn install_progress(app: &tauri::AppHandle, stage: &str, version: &str, file: &str, file_progress: f64, total_progress: f64) {
+  let _ = app.emit(
+    EVT_INSTALL_PROGRESS,
+    PatchInstallProgress {
+      stage: stage.to_string(),
+      version: version.to_string(),
+      file: file.to_string(),
+      file_progress,
+      total_progress,
+    },
+  );
+}
+
+/// Download one patch asset with retries and manifest verification
+/// (size + sha256 when present). Returns the actual file size.
+/// Resume is out of scope for patch installs: every attempt starts from 0.
+async fn download_patch_asset_verified(
+  app: &tauri::AppHandle,
+  service_files: &Arc<ServiceFiles>,
+  api_client: &ApiClient,
+  version_name: &str,
+  asset_link: &str,
+  asset_name: &str,
+  total_size: u64,
+  expected_sha256: Option<&str>,
+  file_path: &Path,
+  cancel_tx: &broadcast::Sender<()>,
+) -> Result<()> {
+  let mut net_retries: u32 = 0;
+  let mut verify_retries: u32 = 0;
+
+  loop {
+    if cancel_tx.receiver_count() > 0 {
+      let mut probe = cancel_tx.subscribe();
+      if probe.try_recv().is_ok() {
+        install_log(app, "Patch install cancelled.".to_string());
+        bail!("USER_CANCELLED");
+      }
+    }
+
+    match service_files
+      .download_blob_to_file(api_client, version_name, asset_link, &total_size, file_path, &None, cancel_tx.subscribe())
+      .await
+    {
+      Err(e) => {
+        net_retries += 1;
+        if net_retries > crate::consts::MAX_DOWNLOAD_RETRIES {
+          bail!("Download of '{}' failed after {} attempts: {}", asset_name, crate::consts::MAX_DOWNLOAD_RETRIES, e);
+        }
+        log::warn!("Patch download of '{}' failed (attempt {}/{}): {}", asset_name, net_retries, crate::consts::MAX_DOWNLOAD_RETRIES, e);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+      }
+      Ok(DownloadOutcome::ShortRead) => {
+        // The stream ended early WITHOUT a cancel signal — a real network
+        // error, not a pause. Retry like a network error instead of bailing
+        // out as USER_CANCELLED (same fix as the main download worker).
+        net_retries += 1;
+        if net_retries > crate::consts::MAX_DOWNLOAD_RETRIES {
+          bail!("Download of '{}' failed after {} attempts: short read (server closed the connection early)", asset_name, crate::consts::MAX_DOWNLOAD_RETRIES);
+        }
+        log::warn!("Patch download of '{}' had a short read (attempt {}/{}). Retrying...", asset_name, net_retries, crate::consts::MAX_DOWNLOAD_RETRIES);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+      }
+      Ok(DownloadOutcome::Interrupted) => {
+        install_log(app, "Download interrupted.".to_string());
+        bail!("USER_CANCELLED");
+      }
+      Ok(DownloadOutcome::Completed) => {
+        match crate::service::download_worker::verify_downloaded_file(file_path, total_size, expected_sha256).await {
+          Ok(crate::service::download_worker::VerifyResult::Ok) | Ok(crate::service::download_worker::VerifyResult::Skipped) => return Ok(()),
+          Ok(mismatch) => {
+            let detail = match &mismatch {
+              crate::service::download_worker::VerifyResult::SizeMismatch { expected, actual } => {
+                format!("size mismatch: expected {} bytes, got {}", expected, actual)
+              }
+              crate::service::download_worker::VerifyResult::HashMismatch { expected, actual } => {
+                format!("sha256 mismatch: expected {}, got {}", expected, actual)
+              }
+              _ => unreachable!(),
+            };
+            verify_retries += 1;
+            if verify_retries > crate::consts::MAX_VERIFY_RETRIES {
+              bail!("Verify of '{}' failed after {} attempts: {}", asset_name, crate::consts::MAX_VERIFY_RETRIES, detail);
+            }
+            install_log(app, format!("Verify failed for '{}': {} — re-downloading", asset_name, detail));
+            let _ = std::fs::remove_file(file_path);
+            let backoff = Duration::from_secs((2u64).saturating_pow(verify_retries.min(4)).min(15));
+            tokio::time::sleep(backoff).await;
+          }
+          Err(e) => {
+            verify_retries += 1;
+            if verify_retries > crate::consts::MAX_VERIFY_RETRIES {
+              bail!("Verify of '{}' errored after retries: {}", asset_name, e);
+            }
+            log::warn!("Verify of '{}' errored: {}", asset_name, e);
+            let _ = std::fs::remove_file(file_path);
+            tokio::time::sleep(Duration::from_secs(2)).await;
+          }
+        }
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +427,7 @@ pub(crate) async fn get_version_patches_impl(
 }
 
 /// Downloads and parses a manifest.json from a release asset URL.
-async fn download_manifest(api_client: &ApiClient, url: &str) -> Result<ReleaseManifest> {
+pub(crate) async fn download_manifest(api_client: &ApiClient, url: &str) -> Result<ReleaseManifest> {
   let api = api_client.current_provider()?;
   let (stream, _stream_start) = api.get_blob_by_url_stream(url, &None).await?;
   let bytes = stream
@@ -453,11 +558,20 @@ async fn start_install_patch_inner(
 
   let version_name_owned = version_name.to_string();
 
-  // Download data*.zip assets (skip manifest.json).
+  // Download data assets. Manifest v2 entries carry kind = zip/raw/manifest;
+  // legacy manifests have no kind — the "data" prefix filter still applies.
   let data_assets: Vec<_> = release
     .assets
     .iter()
-    .filter(|a| a.name != MANIFEST_NAME && a.name.starts_with("data"))
+    .filter(|a| a.name != MANIFEST_NAME)
+    .filter(|a| {
+      let kind = manifest.files.iter().find(|f| f.name == a.name).map(|f| f.kind);
+      match kind {
+        Some(crate::handlers::dto::ManifestFileKind::Manifest) => false,
+        Some(_) => true,
+        None => a.name.starts_with("data"),
+      }
+    })
     .collect();
 
   let grand_total: u64 = data_assets.iter().filter_map(|a| a.size).sum();
@@ -467,27 +581,9 @@ async fn start_install_patch_inner(
   // the progress bar as soon as the install reaches the download phase,
   // rather than only after the first archive finishes. The byte-level fill
   // is driven by "download-speed-status" events emitted from ServiceFiles.
-  let _ = app.emit(
-    EVT_INSTALL_PROGRESS,
-    PatchInstallProgress {
-      stage: "download".to_string(),
-      version: version_name_owned.clone(),
-      file: String::new(),
-      file_progress: 0.0,
-      total_progress: 0.0,
-    },
-  );
+  install_progress(app, "download", &version_name_owned, "", 0.0, 0.0);
 
   for (i, asset) in data_assets.iter().enumerate() {
-    // Cancel check.
-    if cancel_tx.receiver_count() > 0 {
-      let mut probe = cancel_tx.subscribe();
-      if probe.try_recv().is_ok() {
-        install_log(app, "Patch install cancelled.".to_string());
-        return Err(anyhow::anyhow!("USER_CANCELLED"));
-      }
-    }
-
     let file_path = patches_dir.join(&asset.name);
     let total_size = asset.size.unwrap_or(0);
 
@@ -504,45 +600,52 @@ async fn start_install_patch_inner(
     );
 
     let file_name = asset.name.clone();
+    let expected_sha = manifest
+      .files
+      .iter()
+      .find(|f| f.name == asset.name)
+      .and_then(|f| f.sha256.clone());
 
-    let outcome = service_files
-      .download_blob_to_file(
-        &api_client,
-        version_name,
-        &asset.download_link,
-        &actual_size,
-        &file_path,
-        &None,
-        cancel_tx.subscribe(),
-      )
-      .await?;
-
-    match outcome {
-      DownloadOutcome::Completed => {
-        downloaded_total += actual_size;
-        let _ = app.emit(
-          EVT_INSTALL_PROGRESS,
-          PatchInstallProgress {
-            stage: "download".to_string(),
-            version: version_name_owned.clone(),
-            file: file_name,
-            file_progress: 100.0,
-            total_progress: if grand_total > 0 {
-              (downloaded_total as f64 / grand_total as f64) * 50.0
-            } else {
-              50.0
-            },
-          },
-        );
-      }
-      DownloadOutcome::Interrupted => {
-        install_log(app, "Download interrupted.".to_string());
-        return Err(anyhow::anyhow!("USER_CANCELLED"));
-      }
+    // Size/hash-verified download with retries; on terminal failure the
+    // install aborts (a partially applied patch is not acceptable).
+    if let Err(e) = download_patch_asset_verified(
+      app,
+      service_files.inner(),
+      &api_client,
+      version_name,
+      &asset.download_link,
+      &asset.name,
+      actual_size,
+      expected_sha.as_deref(),
+      &file_path,
+      cancel_tx,
+    )
+    .await
+    {
+      let msg = format!("Failed to download '{}': {}", &asset.name, e);
+      install_log(app, msg.clone());
+      install_progress(app, "error", &version_name_owned, &asset.name, 0.0, 0.0);
+      return Err(anyhow::anyhow!("{}", msg));
     }
+
+    downloaded_total += actual_size;
+    let _ = app.emit(
+      EVT_INSTALL_PROGRESS,
+      PatchInstallProgress {
+        stage: "download".to_string(),
+        version: version_name_owned.clone(),
+        file: file_name,
+        file_progress: 100.0,
+        total_progress: if grand_total > 0 {
+          (downloaded_total as f64 / grand_total as f64) * 50.0
+        } else {
+          50.0
+        },
+      },
+    );
   }
 
-  // Unpack all archives into the game root.
+  // Apply the archives: zip → unpack, raw → copy to install/<target>.
   install_log(app, "Unpacking archives ...".to_string());
   let mut unpack_progress = 0u32;
   let total_archives = data_assets.len() as u32;
@@ -550,17 +653,63 @@ async fn start_install_patch_inner(
 
   for asset in &data_assets {
     let archive_path = patches_dir.join(&asset.name);
-    let extract_to = PathBuf::from(&installed_path);
+    let entry = manifest.files.iter().find(|f| f.name == asset.name);
+    let kind = entry.map(|f| f.kind).unwrap_or(crate::handlers::dto::ManifestFileKind::Zip);
+    let target = entry.and_then(|f| f.target.clone());
     let unpack_name = asset.name.clone();
     let svc = svc.clone();
     let vn = version_name_owned.clone();
 
-    tokio::task::spawn_blocking(move || {
-      svc.extract_zip(&vn, &unpack_name, &archive_path, &extract_to)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("Unpack task failed: {}", e))?
-    .map_err(|e| anyhow::anyhow!("Extract failed: {}", e))?;
+    let extract_to = match kind {
+      crate::handlers::dto::ManifestFileKind::Raw => {
+        let rel = target.as_deref().filter(|t| !t.is_empty()).unwrap_or(&asset.name).replace('\\', "/");
+        if let Err(e) = crate::utils::paths::assert_relative_target(&rel) {
+          let msg = format!("Invalid target for raw file '{}': {}", &asset.name, e);
+          install_log(app, msg.clone());
+          install_progress(app, "error", &vn, &asset.name, 0.0, 0.0);
+          return Err(anyhow::anyhow!("{}", msg));
+        }
+        PathBuf::from(&installed_path).join(&rel)
+      }
+      _ => PathBuf::from(&installed_path),
+    };
+
+    let extract_result = match kind {
+      crate::handlers::dto::ManifestFileKind::Raw => {
+        let dest = extract_to.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+          if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+          }
+          match std::fs::rename(&archive_path, &dest) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+              std::fs::copy(&archive_path, &dest)?;
+              std::fs::remove_file(&archive_path)?;
+              Ok(())
+            }
+          }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Raw file move task failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Raw file move failed: {}", e))
+      }
+      _ => {
+        let dest = extract_to.clone();
+        let archive = archive_path.clone();
+        tokio::task::spawn_blocking(move || svc.extract_zip(&vn, &unpack_name, &archive, &dest))
+          .await
+          .map_err(|e| anyhow::anyhow!("Unpack task failed: {}", e))?
+          .map_err(|e| anyhow::anyhow!("Extract failed: {}", e))
+      }
+    };
+
+    if let Err(e) = extract_result {
+      let msg = format!("Failed to apply '{}': {}", &asset.name, e);
+      install_log(app, msg.clone());
+      install_progress(app, "error", &version_name_owned, &asset.name, 0.0, 0.0);
+      return Err(anyhow::anyhow!("{}", msg));
+    }
 
     unpack_progress += 1;
     let _ = app.emit(
@@ -570,7 +719,7 @@ async fn start_install_patch_inner(
         version: version_name_owned.clone(),
         file: asset.name.clone(),
         file_progress: 100.0,
-        total_progress: 50.0 + (unpack_progress as f64 / total_archives as f64) * 40.0,
+        total_progress: 50.0 + (unpack_progress as f64 / total_archives.max(1) as f64) * 40.0,
       },
     );
   }
@@ -614,7 +763,24 @@ async fn start_install_patch_inner(
     notes: release.body.clone(),
   })?;
 
-  // Cleanup: remove the patches dir on success.
+  // Keep the patch manifest next to the markers: "Verify integrity" uses it
+  // as the hash reference for files replaced by later patches (stage 4.1).
+  // Only the inner dir with the downloaded archives is removed.
+  {
+    let manifest_dir = Path::new(&installed_path).join(".patches");
+    let _ = std::fs::create_dir_all(&manifest_dir);
+    let manifest_file = manifest_dir.join(format!("{}.manifest.json", patch_name));
+    match serde_json::to_string_pretty(&manifest) {
+      Ok(json) => {
+        if let Err(e) = std::fs::write(&manifest_file, json) {
+          log::warn!("Cannot save patch manifest {:?}: {}", manifest_file, e);
+        }
+      }
+      Err(e) => log::warn!("Cannot serialize patch manifest: {}", e),
+    }
+  }
+
+  // Cleanup: remove the patch download dir on success.
   if let Err(e) = std::fs::remove_dir_all(&patches_dir) {
     log::warn!("Cannot remove patch dir {:?}: {}", patches_dir, e);
   }

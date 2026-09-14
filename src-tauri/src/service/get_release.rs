@@ -1,10 +1,10 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Instant};
 
 use crate::{
   configs::AppConfig::{AppConfig, Version},
   consts::*,
   handlers::dto::ReleaseManifest,
-  providers::dto::{Release, ReleaseAssetGit, ReleaseGit, ReleasePlatform, TreeItem},
+  providers::dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform, TreeItem},
   service::{index::ReleaseIndexEntry, main::Service},
   utils::{encoding::read_cp1251_file, patch_markers::read_installed_patches, resources::game_exe},
 };
@@ -12,10 +12,27 @@ use crate::{
 use anyhow::{Result, anyhow, bail};
 use futures_util::future::join_all;
 
+/// Controls how `get_releases` resolves the version list.
+///
+/// - `Cached` — in-memory (with TTL) → index → API.  Normal UI updates.
+/// - `IndexFirst` — index → API, skips in-memory.  Launcher startup, players.
+/// - `ApiOnly` — API only, index ignored.  Dev operations (upload, patch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseSource {
+  Cached,
+  IndexFirst,
+  ApiOnly,
+}
+
+/// TTL for the in-memory releases cache (60 seconds).
+/// During burst reads (e.g. multiple UI requests in one second) the cache
+/// prevents hammering the index/API; after expiry the next request refreshes.
+const RELEASES_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Identifies the primary ("main_1") repository of a release.
 /// Works for both providers: Gitlab names repos "main_1" (bare),
 /// while Github names them "<prefix>_main_1". Both forms match here.
-fn is_main_repo(name: &str) -> bool {
+pub(crate) fn is_main_repo(name: &str) -> bool {
   name.starts_with("main_1") || name.ends_with("main_1")
 }
 
@@ -44,7 +61,13 @@ fn manifest_from_index_entry(entry: &ReleaseIndexEntry) -> Option<ReleaseManifes
   let files: Vec<crate::handlers::dto::ReleaseManifestFile> = entry
     .assets
     .iter()
-    .map(|a| crate::handlers::dto::ReleaseManifestFile { name: a.name.clone(), size: a.size })
+    .map(|a| crate::handlers::dto::ReleaseManifestFile {
+      name: a.name.clone(),
+      size: a.size,
+      sha256: a.sha256.clone(),
+      kind: a.kind,
+      target: a.target.clone(),
+    })
     .collect();
 
   Some(ReleaseManifest {
@@ -57,8 +80,18 @@ fn manifest_from_index_entry(entry: &ReleaseIndexEntry) -> Option<ReleaseManifes
   })
 }
 
+/// Infrastructure repositories that must never be shown as a game version.
+/// The static-index repo is a normal repo in the same org, so it can reach the
+/// release list through the API path; a previously published index may also
+/// still contain it.  Filtered here so BOTH views (Releases and Versions) and
+/// every consumer of the list see the same clean set.
+fn is_infrastructure_release(name: &str, path: &str) -> bool {
+  name.eq_ignore_ascii_case(INDEX_REPO_NAME) || path.eq_ignore_ascii_case(INDEX_REPO_NAME)
+}
+
 pub trait ServiceGetRelease {
-  async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>>;
+  async fn get_releases(&mut self, source: ReleaseSource) -> Result<Vec<Version>>;
+  async fn refresh_releases(&mut self) -> Result<Vec<Version>>;
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest>;
   async fn get_main_release_files(&self, release_id: &str) -> Result<Vec<TreeItem>>;
   async fn get_main_release(&self, release_name: &str) -> Result<ReleaseGit>;
@@ -66,82 +99,72 @@ pub trait ServiceGetRelease {
 }
 
 impl ServiceGetRelease for Service {
-  async fn get_releases(&mut self, cashed: bool) -> Result<Vec<Version>> {
+  async fn get_releases(&mut self, source: ReleaseSource) -> Result<Vec<Version>> {
     let api = self.api_client.current_provider()?;
-    let provider_id = api.id();
+    let provider_id = api.id().to_string();
 
-    // 1. In-memory cache (provider-specific, keyed by provider id).
-    if cashed {
-      if let Some(cash) = self.releases.get(provider_id) {
-        log::info!("get_releases: in-memory cache hit for '{}'", provider_id);
-        return Ok(cash.iter().map(|release| Version {
-          id: release.id,
-          name: release.name.clone(),
-          path: release.path.clone(),
-          manifest: None,
-          engine_path: None,
-          fsgame_path: None,
-          userltx_path: None,
-          exe_path: None,
-          installed_path: "".to_owned(),
-          download_path: "".to_owned(),
-          installed_updates: vec![],
-          is_local: false,
-        }).collect());
+    // 1. In-memory cache (provider-specific, keyed by provider id, with TTL).
+    if source == ReleaseSource::Cached {
+      if let Some((instant, versions)) = self.releases_cache.get(&provider_id) {
+        if instant.elapsed() < RELEASES_CACHE_TTL {
+          log::info!("get_releases: in-memory cache hit for '{}' (TTL active)", provider_id);
+          return Ok(versions.clone());
+        } else {
+          log::info!("get_releases: in-memory cache expired for '{}', refreshing", provider_id);
+        }
       }
     }
 
-    // 2. Static release index (0 API calls) — works for both cashed=false
-    //    (fresh fetch) and cashed=true with empty in-memory cache (e.g.
-    //    right after switching providers in the UI).
-    match crate::service::index::load_index(provider_id).await {
-      Ok(index) => {
-        log::info!("get_releases: loaded from static index ({} releases)", index.releases.len());
-        let versions: Vec<Version> = index
-          .releases
-          .iter()
-          .enumerate()
-          .map(|(i, entry)| Version {
-            id: (i + 1) as u32,
-            name: entry.name.clone(),
-            path: entry.path.clone(),
-            manifest: manifest_from_index_entry(entry),
-            engine_path: None,
-            fsgame_path: None,
-            userltx_path: None,
-            exe_path: entry.exe_path.clone(),
-            installed_path: "".to_owned(),
-            download_path: "".to_owned(),
-            installed_updates: vec![],
-            is_local: false,
-          })
-          .collect();
-        let releases: Vec<Release> = versions
-          .iter()
-          .map(|v| Release { id: v.id, name: v.name.clone(), path: v.path.clone() })
-          .collect();
-        self.releases.insert(String::from(provider_id), releases);
+    // 2. Static release index (0 API calls) — used by Cached (after cache miss)
+    //    and IndexFirst (startup).  ApiOnly skips the index entirely.
+    if source != ReleaseSource::ApiOnly {
+      match crate::service::index::load_index(&provider_id).await {
+        Ok(index) => {
+          log::info!("get_releases: loaded from static index ({} releases)", index.releases.len());
+          let versions: Vec<Version> = index
+            .releases
+            .iter()
+            .filter(|entry| !is_infrastructure_release(&entry.name, &entry.path))
+            .enumerate()
+            .map(|(i, entry)| Version {
+              id: (i + 1) as u32,
+              name: entry.name.clone(),
+              path: entry.path.clone(),
+              manifest: manifest_from_index_entry(entry),
+              engine_path: None,
+              fsgame_path: None,
+              userltx_path: None,
+              exe_path: entry.exe_path.clone(),
+              installed_path: "".to_owned(),
+              download_path: "".to_owned(),
+              installed_updates: vec![],
+              is_local: false,
+            })
+            .collect();
 
-        // NOTE: do not warm up the provider's projects_map here. The patch
-        // checks (check_patches_available / get_version_patches_impl) are
-        // already index-first and only hit the API when the index is down —
-        // in which case the fallback path resolves the map itself. A warmup
-        // call here would burn the anonymous GitHub rate limit on every
-        // launch for no benefit.
+          self.releases_cache.insert(provider_id, (Instant::now(), versions.clone()));
 
-        return Ok(versions);
-      }
-      Err(e) => {
-        log::warn!("get_releases: static index unavailable, falling back to API: {}", e);
+          // NOTE: do not warm up the provider's projects_map here. The patch
+          // checks (check_patches_available / get_version_patches_impl) are
+          // already index-first and only hit the API when the index is down —
+          // in which case the fallback path resolves the map itself. A warmup
+          // call here would burn the anonymous GitHub rate limit on every
+          // launch for no benefit.
+
+          return Ok(versions);
+        }
+        Err(e) => {
+          log::warn!("get_releases: static index unavailable, falling back to API: {}", e);
+        }
       }
     }
 
-    // 3. Fallback: live API.
-    let releases = api.get_releases(cashed).await?;
-    self.releases.insert(String::from(provider_id), releases.clone());
+    // 3. Fallback: live API (used by ApiOnly or when index is unavailable).
+    let releases = api.get_releases(source == ReleaseSource::Cached).await?;
 
-    let result = releases
+    let versions: Vec<Version> = releases
       .iter()
+      .filter(|release| !is_infrastructure_release(&release.name, &release.path))
       .map(|release| Version {
         id: release.id.clone(),
         name: release.name.clone(),
@@ -158,7 +181,122 @@ impl ServiceGetRelease for Service {
       })
       .collect();
 
-    Ok(result)
+    // CRIT-1: Do NOT cache ApiOnly results — they come without manifests
+    // and would poison the cache for 60 seconds, causing D1 (0-byte sizes,
+    // "Wait" button) for any concurrent UI request.
+    if source != ReleaseSource::ApiOnly {
+      self.releases_cache.insert(provider_id, (Instant::now(), versions.clone()));
+    }
+
+    Ok(versions)
+  }
+
+  /// Force-refresh the releases list.  Invalidates the in-memory cache and
+  /// re-reads the static index (conditional GET via ETag, cheap for players).
+  /// When the provider has a token (dev mode), additionally fetches from the
+  /// live API and merges releases not yet present in the index — so dev sees
+  /// freshly created releases before `publish_index` runs.
+  async fn refresh_releases(&mut self) -> Result<Vec<Version>> {
+    // Invalidate so the next get_releases call skips the in-memory cache.
+    self.invalidate_releases();
+
+    // Extract provider info before the mutable borrow in get_releases.
+    let (has_token, provider_id) = {
+      let api = self.api_client.current_provider()?;
+      (!api.get_token().is_empty(), api.id().to_string())
+    };
+
+    // CRIT-3: Force ETag revalidation (TTL=0) so an index published from
+    // another machine is picked up within seconds, not after 10 minutes.
+    let mut versions = {
+      let api = self.api_client.current_provider()?;
+      let provider_id = api.id().to_string();
+
+      match crate::service::index::load_index_with_ttl(&provider_id, std::time::Duration::ZERO).await {
+        Ok(index) => {
+          log::info!("refresh_releases: loaded from index with forced revalidation ({} releases)", index.releases.len());
+          let versions: Vec<Version> = index
+            .releases
+            .iter()
+            .filter(|entry| !is_infrastructure_release(&entry.name, &entry.path))
+            .enumerate()
+            .map(|(i, entry)| Version {
+              id: (i + 1) as u32,
+              name: entry.name.clone(),
+              path: entry.path.clone(),
+              manifest: manifest_from_index_entry(entry),
+              engine_path: None,
+              fsgame_path: None,
+              userltx_path: None,
+              exe_path: entry.exe_path.clone(),
+              installed_path: "".to_owned(),
+              download_path: "".to_owned(),
+              installed_updates: vec![],
+              is_local: false,
+            })
+            .collect();
+          self.releases_cache.insert(provider_id, (Instant::now(), versions.clone()));
+          versions
+        }
+        Err(e) => {
+          // IndexFirst (not Cached): a forced refresh must not reuse the
+          // provider's stale projects_map, otherwise a repo created moments
+          // ago stays invisible even though the user asked for fresh data.
+          log::warn!("refresh_releases: index unavailable, falling back to a fresh API fetch: {}", e);
+          self.get_releases(ReleaseSource::IndexFirst).await?
+        }
+      }
+    };
+
+    // Dev mode: merge API-only releases that are not yet in the index.
+    if has_token {
+      // Collect API releases in a block to limit the immutable borrow scope.
+      let api_releases_result = {
+        let api = self.api_client.current_provider()?;
+        api.get_releases(false).await
+      };
+      match api_releases_result {
+        Ok(api_releases) => {
+          // CRIT-4: Normalize names for dedup — index may store "Global War Dev"
+          // while repo-derived name (no description) yields "Global-War-Dev".
+          let normalize = |s: &str| s.replace('-', " ").to_lowercase();
+          let existing: std::collections::HashSet<String> =
+            versions.iter().map(|v| normalize(&v.name)).collect();
+          let mut added = 0u32;
+          for r in api_releases {
+            if is_infrastructure_release(&r.name, &r.path) {
+              continue;
+            }
+            if !existing.contains(&normalize(&r.name)) {
+              versions.push(Version {
+                id: r.id,
+                name: r.name.clone(),
+                path: r.path.clone(),
+                manifest: None,
+                engine_path: None,
+                fsgame_path: None,
+                userltx_path: None,
+                exe_path: None,
+                installed_path: "".to_owned(),
+                download_path: "".to_owned(),
+                installed_updates: vec![],
+                is_local: false,
+              });
+              added += 1;
+            }
+          }
+          if added > 0 {
+            log::info!("refresh_releases: merged {} API-only releases", added);
+            self.releases_cache.insert(provider_id, (Instant::now(), versions.clone()));
+          }
+        }
+        Err(e) => {
+          log::warn!("refresh_releases: API fetch failed (non-fatal): {}", e);
+        }
+      }
+    }
+
+    Ok(versions)
   }
 
   async fn get_release_manifest(&self, release_name: &str) -> Result<ReleaseManifest> {

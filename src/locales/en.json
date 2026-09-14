@@ -275,6 +275,8 @@
       "start": "Pack",
       "addFiles": "Adding files...",
       "compressing": "Packaging...",
+      "hashing": "Computing SHA-256 hashes...",
+      "hashesDone": "SHA-256 hashes computed (manifest schema 2)",
       "size": "Size: ",
       "file": "File: ",
       "chunkSize": "The size limit for one archive in MB",
@@ -321,6 +323,7 @@
       "movingCompleted": "Completed !",
       "runVersion": "Launch",
       "noAnyInstalledVersion": "No versions installed",
+      "refresh": "Refresh",
       "refreshing": "Refreshing...",
       "refreshFailed": "Update failed, showing saved list",
       "noSavedList": "No saved list found. Check your network connection.",
@@ -329,8 +332,16 @@
       "installed": "Downloaded",
       "republishIndex": "Re-publish index",
       "republishIndexOk": "Index re-published",
+      "forceRepublish": "Force re-publish index",
+      "forceRepublishConfirm": "Click again to confirm",
+      "forceRepublishHint": "Publishes the index even if it now contains fewer releases — use after deleting a release",
+      "notPublished": "not published",
+      "notPublishedHint": "The release is missing from the published index — players do not see it yet. Finish the upload or re-publish the index.",
       "republishIndexErr": "Failed to re-publish index",
       "commitIndex": "Commit index",
+      "getSha": "Get SHA",
+      "getShaHint": "Fetches the manifest and fills in server-side SHA-256 hashes for every file — to update manifest.json without re-packing",
+      "getShaResult": "Updated manifest.json — paste this over the existing file:",
       "patch": {
         "collectTitle": "Collect patch",
         "source": "Path to the game folder (main repository)",
@@ -434,6 +445,8 @@
         "pause": "Suspended",
         "files": "Downloading files...",
         "unpack": "Installing...",
+        "verify": "Verifying integrity...",
+        "error": "Download error",
         "text": ""
       },
       "status": {
@@ -441,7 +454,30 @@
         "file": "File:",
         "speed": "Download speed:",
         "files": "files:"
+      },
+      "retryFailed": "Retry",
+      "errors": {
+        "hashMismatch": "File corrupted: SHA-256 checksum mismatch",
+        "sizeMismatch": "Incomplete download: file size mismatch",
+        "network": "Network error: file could not be downloaded",
+        "unpackFailed": "Failed to unpack the archive",
+        "copyFailed": "Failed to copy the file into the install folder",
+        "verifyFailed": "Failed to read the file for verification"
       }
+    },
+    "verify": {
+      "title": "Version integrity",
+      "run": "Verify integrity",
+      "checking": "Verifying...",
+      "nothingToCheck": "Nothing to check: the manifest has no files with hashes",
+      "zipNote": "Only files installed without unpacking (raw) are verified. Files unpacked from zips cannot be checked: the manifest stores the archive hash, not the content hash.",
+      "ok": "Intact files",
+      "skippedNoHash": "size-checked only",
+      "missing": "Missing",
+      "sizeMismatch": "Size mismatch",
+      "hashMismatch": "Checksum mismatch",
+      "repair": "Repair",
+      "repairing": "Repairing..."
     }
   },
   "social": {

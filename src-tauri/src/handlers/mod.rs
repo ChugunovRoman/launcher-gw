@@ -17,4 +17,5 @@ pub mod system;
 pub mod updater;
 pub mod upload_v2;
 pub mod user_ltx;
+pub mod verify_install;
 pub mod window;

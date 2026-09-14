@@ -21,6 +21,13 @@ pub trait ApiProvider: Send + Sync {
 
   fn is_suppot_subgroups(&self) -> bool;
 
+  /// Drop any in-memory map of the org's repositories so the next listing is
+  /// re-read from the API.  Called together with `Service::invalidate_releases`
+  /// after a release is created/uploaded — otherwise a brand-new repo stays
+  /// invisible to every call that reuses the cached map.
+  /// Default: no-op for providers that keep no such map.
+  fn invalidate_projects_cache(&self) {}
+
   fn set_token(&self, token: String) -> Result<()>;
   fn get_token(&self) -> String;
 
@@ -54,6 +61,21 @@ pub trait ApiProvider: Send + Sync {
   async fn create_tag(&self, repo_id: &str, tag_name: &str, branch: &str) -> Result<()>;
   async fn create_release(&self, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse>;
   fn get_asset_url(&self) -> String;
+
+  /// Server-side SHA-256 of every asset of a released tag (no download).
+  /// Used to verify uploads and by the "Get SHA" developer tool.
+  async fn get_release_assets_sha256(&self, project_id: &str, tag_name: &str) -> Result<Vec<AssetSha256>>;
+
+  /// Server-side SHA-256 of a single uploaded asset; Ok(None) when the
+  /// provider cannot report it (verification is then skipped with a warning).
+  async fn get_uploaded_asset_sha256(&self, project_id: &str, tag_name: &str, file_name: &str) -> Result<Option<String>> {
+    let assets = self.get_release_assets_sha256(project_id, tag_name).await?;
+    Ok(assets.into_iter().find(|a| a.name == file_name).and_then(|a| a.sha256))
+  }
+
+  /// Delete an uploaded asset from the server (used to re-upload on a hash
+  /// mismatch so the old corrupted bytes are not left behind).
+  async fn delete_release_asset(&self, project_id: &str, tag_name: &str, file_name: &str) -> Result<()>;
 
   async fn get_launcher_latest_release(&self, owner: &str, project_id: &str) -> Result<ReleaseGit>;
   async fn get_releases(&self, cashed: bool) -> Result<Vec<Release>>;

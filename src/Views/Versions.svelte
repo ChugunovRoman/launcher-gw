@@ -10,7 +10,9 @@
     localVersions,
     versionsWillBeLoaded,
     startupState,
-    expandedIndex,
+    expandedKey,
+    localKey,
+    remoteKey,
     showDlgRemoveVersion,
     removeVersion,
     removeVersionInProcess,
@@ -29,7 +31,7 @@
   import { normalizeLaunchError, warnIfTempPath } from "../lib/main";
   import { COFF_FROM_COMPRESSED_SIZE, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
-  import { FileDown } from "lucide-svelte";
+  import { FileDown, RotateCw } from "lucide-svelte";
   import { choosePath } from "../utils/path";
   import { getInGb, parseBytes, formatSpeedBytesPerSec } from "../utils/dwn";
 
@@ -50,6 +52,14 @@
   let installingPatch = $state<{ version: string; patch: string } | null>(null);
   let patchDownloadInfo = $state<{ file: string; bytes: number; totalBytes: number; speedValue: number; sfxValue: string } | null>(null);
   let patchErrors = $state<Map<string, string>>(new Map());
+
+  // Integrity check state (installed versions)
+  let verifying = $state<string | null>(null);
+  let verifyProgress = $state<{ file: string; done: number; total: number } | null>(null);
+  let verifyReports = $state<Map<string, VerifyReport>>(new Map());
+  let verifyErrors = $state<Map<string, string>>(new Map());
+  let repairing = $state<string | null>(null);
+  let repairProgress = $state<number | null>(null);
 
   function parseSize(size: number | null): string {
     if (!size) return "";
@@ -140,6 +150,103 @@
     $showDlgPatchNotes = true;
   }
 
+  // Localized description of a per-file download error code.
+  function fileErrorText(code?: string): string {
+    switch (code) {
+      case "HASH_MISMATCH":
+        return $_("app.download.errors.hashMismatch");
+      case "SIZE_MISMATCH":
+        return $_("app.download.errors.sizeMismatch");
+      case "UNPACK_FAILED":
+        return $_("app.download.errors.unpackFailed");
+      case "COPY_FAILED":
+        return $_("app.download.errors.copyFailed");
+      case "VERIFY_FAILED":
+        return $_("app.download.errors.verifyFailed");
+      default:
+        return $_("app.download.errors.network");
+    }
+  }
+
+  function isVersionErrored(version: Version): boolean {
+    // Paused-but-errored (after an app restart) also counts: Continue retries
+    // the failed files, and the Error state must stay visible.
+    return !version.inProgress && version.status === DownloadStatus.Error;
+  }
+
+  // ---- Integrity check of an installed version (raw files only) ----
+  async function handleVerifyIntegrity(version: Version) {
+    const name = version.name;
+    verifying = name;
+    verifyProgress = null;
+    // Svelte 5 does not proxy Map: reassigning the SAME reference after
+    // .delete() is a no-op for reactivity — a stale error would stay on
+    // screen after a successful re-verify. Build a new Map instead.
+    verifyErrors = new Map(verifyErrors);
+    verifyErrors.delete(name);
+
+    try {
+      const report = await invoke<VerifyReport>("verify_installed_version", { versionName: name });
+      verifyReports = new Map(verifyReports).set(name, report);
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : String(e?.message ?? e);
+      verifyErrors = new Map(verifyErrors).set(name, msg);
+    } finally {
+      verifying = null;
+      verifyProgress = null;
+    }
+  }
+
+  $effect(() => {
+    const unlisten = listen<VerifyInstalledProgress>("verify-installed-progress", (e) => {
+      if (verifying && e.payload.version_name === verifying) {
+        verifyProgress = { file: e.payload.file, done: e.payload.done_files, total: e.payload.total_files };
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  });
+
+  // Repair progress rides the regular download-version events.
+  $effect(() => {
+    const unlisten = listen<DownloadProgress>("download-version", (e) => {
+      if (repairing && e.payload.version_name === repairing) {
+        repairProgress = e.payload.progress;
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  });
+
+  async function handleRepair(version: Version) {
+    const report = verifyReports.get(version.name);
+    if (!report || repairing) return;
+
+    // Labels may look like "name (target)" — the manifest name is the first part.
+    const files = [...report.missing, ...report.size_mismatch, ...report.hash_mismatch].map((f) => f.split(" (")[0]);
+    if (files.length === 0) return;
+
+    repairing = version.name;
+    repairProgress = 0;
+    // See the same Map-reactivity note in handleVerifyIntegrity above.
+    verifyErrors = new Map(verifyErrors);
+    verifyErrors.delete(version.name);
+
+    try {
+      await invoke<void>("start_repair_version", { versionName: version.name, files });
+      verifyReports = new Map(verifyReports);
+      verifyReports.delete(version.name);
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : String(e?.message ?? e);
+      verifyErrors = new Map(verifyErrors).set(version.name, msg);
+    } finally {
+      repairing = null;
+      repairProgress = null;
+    }
+  }
+
   function formatInstalledDate(iso: string | null | undefined): string {
     if (!iso) return "";
     return iso.slice(0, 10);
@@ -198,15 +305,15 @@
       currentTarget: EventTarget & HTMLButtonElement;
     },
     version: Version,
-    index: number,
   ) {
     event.preventDefault();
     event.stopPropagation();
 
     console.log("Start handleContinueDownload");
 
-    if ($expandedIndex !== index) {
-      $expandedIndex = index;
+    const key = remoteKey(version.name);
+    if ($expandedKey !== key) {
+      $expandedKey = key;
     }
 
     updateVersionProgress(version.name, () => ({
@@ -221,7 +328,19 @@
       });
     } catch (error: any) {
       const msg = typeof error === "string" ? error : String(error?.message ?? error);
-      if (msg.includes("USER_CANCELLED") && !version.wasCanceled) {
+      if (msg.includes("DOWNLOAD_FAILED")) {
+        // Some files failed permanently — the version stays errored with a
+        // Retry button; this is NOT a pause.
+        updateVersionProgress(version.name, () => ({
+          inProgress: false,
+          isStoped: false,
+          status: DownloadStatus.Error,
+        }));
+      } else if (msg.includes("DOWNLOAD_ALREADY_RUNNING")) {
+        // A download for this version is already running (e.g. this Retry
+        // click raced with an in-flight one) — leave the current progress
+        // state alone instead of resetting it to "Start".
+      } else if (msg.includes("USER_CANCELLED") && !version.wasCanceled) {
         updateVersionProgress(version.name, () => ({
           inProgress: false,
           isStoped: true,
@@ -370,7 +489,17 @@
     } catch (error: any) {
       const updatedVersion = $versions.find((v) => v.name === releaseName);
       const msg = typeof error === "string" ? error : String(error?.message ?? error);
-      if (msg.includes("USER_CANCELLED") && !updatedVersion!.wasCanceled) {
+      if (msg.includes("DOWNLOAD_FAILED")) {
+        // Some files failed permanently — keep progress, show Retry.
+        updateVersionProgress(releaseName, () => ({
+          inProgress: false,
+          isStoped: false,
+          status: DownloadStatus.Error,
+        }));
+      } else if (msg.includes("DOWNLOAD_ALREADY_RUNNING")) {
+        // A download for this version is already running — leave the
+        // current progress state alone instead of resetting it to "Start".
+      } else if (msg.includes("USER_CANCELLED") && !updatedVersion!.wasCanceled) {
         updateVersionProgress(releaseName, () => ({
           inProgress: false,
           isStoped: true,
@@ -493,24 +622,21 @@
         return $_("app.download.text.files");
       case DownloadStatus.Unpacking:
         return $_("app.download.text.unpack");
+      case DownloadStatus.Verifying:
+        return $_("app.download.text.verify");
+      case DownloadStatus.Error:
+        return $_("app.download.text.error");
       default:
         return `Invalid status: ${status}`;
     }
   }
 
-  function toggleExpand(index: number) {
-    $expandedIndex = $expandedIndex === index ? null : index;
+  function toggleExpand(key: string) {
+    $expandedKey = $expandedKey === key ? null : key;
 
     updateEachVersion((v) => {
       return v;
     });
-  }
-
-  function fetch(index: number) {
-    if (index != null) {
-      const releaseName = $versions[index]?.name;
-      fetchVersionManifest(releaseName);
-    }
   }
 
   function hasLocalVersion(version: Version) {
@@ -525,7 +651,7 @@
 
   $effect(() => {
     $selectedVersion = $selectedVersion;
-    $expandedIndex = $expandedIndex;
+    $expandedKey = $expandedKey;
   });
 
   onMount(async () => {
@@ -534,8 +660,8 @@
     // version is actively downloading or paused, re-expand it so the progress UI
     // survives navigation away and back. Otherwise (nothing in progress) keep the
     // default collapsed state.
-    const inProgressIdx = $versions.findIndex((v) => v.inProgress || v.isStoped);
-    $expandedIndex = inProgressIdx >= 0 ? inProgressIdx + $localVersions.size : null;
+    const inProgress = $versions.find((v) => v.inProgress || v.isStoped);
+    $expandedKey = inProgress ? remoteKey(inProgress.name) : null;
   });
 </script>
 
@@ -548,10 +674,10 @@
         {$_("app.releases.noAnyInstalledVersion")}
       </span>
     {/if}
-    {#each $localVersions as [name, version], i}
+    {#each $localVersions as [name, version] (name)}
       <div class="release-item">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div class="header local-versions" role="button" tabindex="0" onclick={() => toggleExpand(i)}>
+        <div class="header local-versions" role="button" tabindex="0" onclick={() => toggleExpand(localKey(name))}>
           <span class="plus-icon">
             {#if name === $selectedVersion}
               <Installed size={28} isButton={false} />
@@ -586,7 +712,7 @@
             {/if}
           </button>
         </div>
-        {#if $expandedIndex === i}
+        {#if $expandedKey === localKey(name)}
           <div class="expanded-content">
             <div class="content-row input-group">
               <div>
@@ -734,6 +860,88 @@
               {/if}
             </div>
 
+            <!-- Integrity check section (raw files only) -->
+            <div class="patch-section">
+              <div class="patch-section-header">
+                <span class="patch-section-title">{$_("app.verify.title")}</span>
+                <button
+                  type="button"
+                  class="choose-btn patch-check-btn"
+                  disabled={verifying === name || repairing === name}
+                  title={$_("app.verify.zipNote")}
+                  onclick={() => handleVerifyIntegrity(version)}>
+                  {#if verifying === name}
+                    <Spin size={12} /> {$_("app.verify.checking")}
+                  {:else}
+                    {$_("app.verify.run")}
+                  {/if}
+                </button>
+              </div>
+
+              {#if verifying === name && verifyProgress}
+                <div class="patch-dl-info">{verifyProgress.file}</div>
+                <Progress progress={verifyProgress.total > 0 ? (verifyProgress.done / verifyProgress.total) * 100 : 0} />
+              {/if}
+
+              {#if repairing === name}
+                <div class="patch-install-progress">
+                  <div class="patch-install-stage">{$_("app.verify.repairing")}</div>
+                  <Progress progress={repairProgress ?? 0} />
+                </div>
+              {/if}
+
+              {#if verifyErrors.has(name)}
+                <div class="patch-error">{verifyErrors.get(name)}</div>
+              {/if}
+
+              {#if verifyReports.has(name)}
+                {@const report = verifyReports.get(name)!}
+                {@const badCount = report.missing.length + report.size_mismatch.length + report.hash_mismatch.length}
+                {#if report.checked === 0}
+                  <div class="patch-up-to-date">{$_("app.verify.nothingToCheck")}</div>
+                  <div class="patch-hint" style="margin-left: 0;">{$_("app.verify.zipNote")}</div>
+                {:else if badCount === 0}
+                  <div class="patch-up-to-date">{$_("app.verify.ok")}: {report.ok}/{report.checked}</div>
+                {:else}
+                  <div class="patch-dl-info">
+                    {$_("app.verify.ok")}: {report.ok}/{report.checked}
+                    {#if report.skipped_no_hash > 0}
+                      · {$_("app.verify.skippedNoHash")}: {report.skipped_no_hash}
+                    {/if}
+                  </div>
+                  {#if report.missing.length > 0}
+                    <div class="patch-subsection">{$_("app.verify.missing")}</div>
+                    {#each report.missing as f}
+                      <div class="patch-row"><span class="patch-name">{f}</span></div>
+                    {/each}
+                  {/if}
+                  {#if report.size_mismatch.length > 0}
+                    <div class="patch-subsection">{$_("app.verify.sizeMismatch")}</div>
+                    {#each report.size_mismatch as f}
+                      <div class="patch-row"><span class="patch-name">{f}</span></div>
+                    {/each}
+                  {/if}
+                  {#if report.hash_mismatch.length > 0}
+                    <div class="patch-subsection">{$_("app.verify.hashMismatch")}</div>
+                    {#each report.hash_mismatch as f}
+                      <div class="patch-row"><span class="patch-name">{f}</span></div>
+                    {/each}
+                  {/if}
+                  <button
+                    type="button"
+                    class="download-btn patch-install-btn"
+                    disabled={repairing === name}
+                    onclick={() => handleRepair(version)}>
+                    {#if repairing === name}
+                      <Spin size={12} /> {$_("app.verify.repairing")}
+                    {:else}
+                      {$_("app.verify.repair")}
+                    {/if}
+                  </button>
+                {/if}
+              {/if}
+            </div>
+
             {#if $moveProgress.has(version.name)}
               <div class="input-group">
                 <div class="input-buttons">
@@ -791,7 +999,8 @@
       <!-- Empty list + error -> no cached data available -->
       <h2 style="color: rgba(254, 197, 208, 1)">{$_("app.releases.noSavedList")}</h2>
     {:else}
-      {#each $versions as version, i}
+      <!-- See the note in Releases.svelte: path+name is collision-proof. -->
+      {#each $versions as version (version.path + '|' + version.name)}
         {#if !hasLocalVersion(version)}
           <div class="release-item">
             <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -800,8 +1009,8 @@
               role="button"
               tabindex="0"
               onclick={() => {
-                fetch(i);
-                toggleExpand(i + $localVersions.size);
+                fetchVersionManifest(version.name);
+                toggleExpand(remoteKey(version.name));
               }}>
               <span class="plus-icon">
                 {#if version.inProgress}
@@ -826,15 +1035,21 @@
                   {version.name}
                 {/if}
               </span>
-              {#if version.isStoped}
+              {#if version.isStoped && !isVersionErrored(version)}
                 <Button
                   style="margin-left: auto;"
                   size="slim"
                   isYellow
-                  onclick={(e: any) => handleContinueDownload(e, version, i + $localVersions.size)}>{$_("app.download.continue")}</Button>
+                  onclick={(e: any) => handleContinueDownload(e, version)}>{$_("app.download.continue")}</Button>
+              {:else if isVersionErrored(version)}
+                <Button
+                  style="margin-left: auto;"
+                  size="slim"
+                  isYellow
+                  onclick={(e: any) => handleContinueDownload(e, version)}>{$_("app.download.retryFailed")}</Button>
               {/if}
             </div>
-            {#if $expandedIndex === i + $localVersions.size}
+            {#if $expandedKey === remoteKey(version.name)}
               <div class="expanded-content">
                 {#if version.status !== DownloadStatus.Unpacking}
                   <div class="content-row input-group">
@@ -869,7 +1084,7 @@
                     </span>
                   </div>
                 {/if}
-                {#if !version.inProgress && !version.isStoped}
+                {#if !version.inProgress && !version.isStoped && !isVersionErrored(version)}
                   <div class="input-group">
                     <label class="checkbox-label">
                       <input type="checkbox" bind:checked={addVersionName} onchange={(e) => onChangeAddNamePath(version)} />
@@ -913,7 +1128,7 @@
                     {/if}
                   </div>
                 {/if}
-                {#if !version.inProgress && !version.isStoped}
+                {#if !version.inProgress && !version.isStoped && !isVersionErrored(version)}
                   <div style="margin-bottom: 50px;"></div>
                 {:else}
                   <div class="content-row input-group">
@@ -935,13 +1150,13 @@
                   </div>
                 {/if}
                 <div class="content-row input-group">
-                  {#if version.inProgress || version.isStoped}
+                  {#if version.inProgress || version.isStoped || isVersionErrored(version)}
                     <Progress progress={version.downloadProgress} />
                   {/if}
-                  {#if version.isStoped}
+                  {#if version.isStoped && !isVersionErrored(version)}
                     <button
                       type="button"
-                      onclick={(e) => handleContinueDownload(e, version, i + $localVersions.size)}
+                      onclick={(e) => handleContinueDownload(e, version)}
                       class="download-btn icon-btn continue-btn">
                       <Play size={12} />
                     </button>
@@ -952,8 +1167,16 @@
                     <button type="button" onclick={(e) => handleCancelDownload(e, version.name)} class="download-btn icon-btn cancel-btn">
                       <Stop size={12} />
                     </button>
+                  {:else if isVersionErrored(version)}
+                    <button
+                      type="button"
+                      title={$_("app.download.retryFailed")}
+                      onclick={(e) => handleContinueDownload(e, version)}
+                      class="download-btn icon-btn continue-btn">
+                      <RotateCw size={12} />
+                    </button>
                   {/if}
-                  {#if !version.isStoped && !version.inProgress}
+                  {#if !version.isStoped && !version.inProgress && !isVersionErrored(version)}
                     {#if version.manifest}
                       <button type="button" onclick={(e) => handleStartDownload(e, version.name)} class="download-btn">
                         {$_("app.download.start")}
@@ -964,20 +1187,20 @@
                         <svg class="spinner" fill="#FFF" width="24px" height="24px" viewBox="0 0 1000 1000" xmlns="http://www.w3.org/2000/svg"
                           ><path
                             class="fil0"
-                            d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728 -28.483 -695.516 10.739 -12.623 21.132 -25.234 34.585 -33.667 36.553 -22.89 85.347 -18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117 -9.221 14.693 -16.299 22.289 -140.375 150.709 -144.886 378.867 -7.747 516.005 152.583 152.584 406.604 120.623 541.406 -34.133 106.781 -122.634 142.717 -297.392 77.857 -451.04 -83.615 -198.07 -305.207 -291.19 -510.476 -222.476l-.226 -.226c235.803 -82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204 -71.697 493.53 -11.48 14.653 -23.724 28.744 -36.852 41.948z" />
+                            d="M854.569 841.338c-188.268 189.444 -519.825 171.223 -704.157 -13.109 -190.56 -190.56 -200.048 -493.728-28.483-695.516 10.739-12.623 21.132-25.234 34.585-33.667 36.553-22.89 85.347-18.445 117.138 13.347 30.228 30.228 35.737 75.83 16.531 111.665 -4.893 9.117-9.221 14.693-16.299 22.289 -140.375 150.709-144.886 378.867-7.747 516.005 152.583 152.584 406.604 120.623 541.406-34.133 106.781-122.634 142.717-297.392 77.857-451.04 -83.615-198.07-305.207-291.19-510.476-222.476l-.226-.226c235.803-82.501 492.218 23.489 588.42 251.384 70.374 166.699 36.667 355.204-71.697 493.53-11.48 14.653-23.724 28.744-36.852 41.948z" />
                         </svg>
                       </button>
                     {/if}
                   {/if}
                 </div>
-                {#if !version.inProgress && !version.isStoped}
+                {#if !version.inProgress && !version.isStoped && !isVersionErrored(version)}
                   <div style="margin-bottom: 2px;"></div>
                 {:else}
                   <div class="content-row">
                     <span>{$_("app.download.filesStats")}</span>
                   </div>
-                  {#if version.inProgress || version.isStoped}
-                    {#each version.filesProgress as [name, progress], i}
+                  {#if version.inProgress || version.isStoped || isVersionErrored(version)}
+                    {#each version.filesProgress as [name, progress]}
                       {@const dl = parseBytes(progress.downloadedFileBytes)}
                       {@const tot = parseBytes(progress.totalFileBytes)}
                       <div class="file-row">
@@ -990,6 +1213,26 @@
                             <Spin size={12} />
                           {:else if progress.status === 3}
                             <Installed2 size={16} isButton={false} />
+                          {:else if progress.status === 4}
+                            <Spin size={12} />
+                          {:else if progress.status === 5}
+                            {#if version.inProgress}
+                              <!-- Other files of this version are still downloading (Q6: the
+                                   queue keeps going past one failed file) — retrying here would
+                                   hit DOWNLOAD_ALREADY_RUNNING, so show a static icon only. -->
+                              <span class="file-retry-btn is-static" title={fileErrorText(progress.errorCode)}>
+                                <RotateCw size={12} />
+                              </span>
+                            {:else}
+                              <!-- svelte-ignore a11y_click_events_have_key_events -->
+                              <button
+                                type="button"
+                                class="file-retry-btn"
+                                title={fileErrorText(progress.errorCode)}
+                                onclick={(e: any) => handleContinueDownload(e, version)}>
+                                <RotateCw size={12} />
+                              </button>
+                            {/if}
                           {/if}
                         </span>
 
@@ -1491,6 +1734,29 @@
     padding: 0 5px;
     margin-left: 8px;
     vertical-align: middle;
+  }
+
+  /* Per-file Retry icon in the download queue (status 5 = error). */
+  .file-retry-btn {
+    -webkit-app-region: no-drag;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    color: #ffca28;
+    background-color: rgba(40, 40, 40, 0.8);
+    border: 1px solid rgba(255, 193, 7, 0.6);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .file-retry-btn:hover {
+    background-color: rgba(80, 60, 10, 0.9);
+  }
+  .file-retry-btn.is-static {
+    cursor: default;
+  }
+  .file-retry-btn.is-static:hover {
+    background-color: rgba(40, 40, 40, 0.8);
   }
 
   .release-refresh-status {

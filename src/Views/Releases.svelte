@@ -5,6 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { configReady } from "../store/main";
   import { showUploading, inProcess, versions, logText, releaseName, releasePath, totalFiles, uploadedFiles, uploadFilesMap } from "../store/upload";
+  import { loadVersions } from "../lib/versions";
   import { choosePath } from "../utils/path";
   import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
 
@@ -13,12 +14,69 @@
   import Spin from "../Components/Spin.svelte";
   import { getInMb, parseBytes, formatSpeedBytesPerSec } from "../utils/dwn";
 
-  let expandedIndex = $state<number | null>(null);
+  // 5.18: Use version name (or special string key) instead of numeric index
+  // so that expanding a card survives a list replacement (e.g. after refresh).
+  let expandedName = $state<string | null>(null);
+  let refreshing = $state(false);
+  // 5.20: surfaced to the user instead of console-only.
+  let listError = $state("");
+  let createError = $state("");
+  // 5.21 / Q4: releases that exist on the provider but are missing from the
+  // published index — i.e. not visible to players yet.
+  let unpublished = $state<Set<string>>(new Set());
+  // Two-step confirmation for the forced index re-publish (it can shrink the
+  // index, so it must not fire on a single stray click).
+  let forceConfirm = $state(false);
+  let forcePublishing = $state(false);
+
+  // REGR-4: Reactive guard — load versions when the tab opens AND config is
+  // ready.  A plain onMount reads $configReady once; if the tab is opened
+  // before init completes, the load never fires.
+  let loaded = $state(false);
+  $effect(() => {
+    if ($configReady && !loaded) {
+      loaded = true;
+      fetchVersions();
+    }
+  });
   let republishingIndex = $state(false);
   let republishIndexMsg = $state<"ok" | "err" | "">("");
   let indexPreviewJson = $state("");
   let indexCommitting = $state(false);
   let indexCommitted = $state(false);
+
+  // --- Get SHA (developer tool: server-side asset hashes, filled into a
+  // full copy of the release/patch manifest.json for a straight paste-over) ---
+  let shaBusy = $state<string | null>(null);
+  let shaResults = $state<Map<string, ReleaseManifest>>(new Map());
+  let shaErrors = $state<Map<string, string>>(new Map());
+
+  async function handleGetSha(releaseNameStr: string) {
+    if (shaBusy) return;
+    shaBusy = releaseNameStr;
+    // Svelte 5 does not proxy Map: reassigning the SAME reference after
+    // .delete() is a no-op for reactivity — build a new Map instead, same as
+    // the Map-reactivity fix in Versions.svelte.
+    shaErrors = new Map(shaErrors);
+    shaErrors.delete(releaseNameStr);
+
+    try {
+      // The same updated manifest JSON is also pushed to the log panel by
+      // the backend via the upload-log listener.
+      const result = await invoke<ReleaseManifest>("get_release_assets_sha", { name: releaseNameStr });
+      shaResults = new Map(shaResults).set(releaseNameStr, result);
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : String(e?.message ?? e);
+      shaErrors = new Map(shaErrors).set(releaseNameStr, msg);
+      logText.push(msg);
+    } finally {
+      shaBusy = null;
+    }
+  }
+
+  function shaResultJson(manifest: ReleaseManifest): string {
+    return JSON.stringify(manifest, null, 2);
+  }
 
   // --- Patch collection (stage 1 of partial updates) ---
   let patchSourcePath = $state("");
@@ -70,8 +128,8 @@
       // Prefill the per-version "add patch" form with the collected folder.
       lastPatchUploadPath = patchResult.patch_dir;
       // If a version is expanded, also update its state directly.
-      if (expandedIndex !== null && expandedIndex >= 0) {
-        const vn = $versions[expandedIndex]?.name;
+      if (expandedName !== null && !expandedName.startsWith("__")) {
+        const vn = expandedName;
         if (vn)
           updateUploadState(vn, (s) => {
             s.uploadPath = patchResult!.patch_dir;
@@ -285,9 +343,71 @@
   }
 
   async function fetchVersions() {
-    const fetched = await invoke<Version[]>("get_available_versions");
+    try {
+      // Forced: this dev-only view must also show releases that exist on the
+      // provider but are not in the published index yet (freshly created, or
+      // an upload that never finished).  The non-forced path is index-only,
+      // so those releases would be invisible here and the "not published"
+      // badge would have no row to mark.
+      await loadVersions(true);
+      listError = "";
+    } catch (e) {
+      console.error("fetchVersions failed:", e);
+      listError = errText(e);
+    }
+    await fetchUnpublished();
+  }
 
-    versions.set(fetched.filter((r) => r.name !== $releaseName));
+  async function handleRefresh() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await loadVersions(true);
+      listError = "";
+    } catch (e) {
+      console.error("handleRefresh failed:", e);
+      listError = errText(e);
+    } finally {
+      refreshing = false;
+    }
+    await fetchUnpublished();
+  }
+
+  function errText(e: any): string {
+    return typeof e === "string" ? e : String(e?.message ?? e);
+  }
+
+  /// Which releases are not in the published index yet (dev-only, needs a token).
+  async function fetchUnpublished() {
+    try {
+      const names = await invoke<string[]>("get_unpublished_releases");
+      unpublished = new Set(names);
+    } catch (e) {
+      console.error("get_unpublished_releases failed:", e);
+      listError = errText(e);
+    }
+  }
+
+  async function handleForceRepublish() {
+    if (forcePublishing) return;
+    if (!forceConfirm) {
+      forceConfirm = true;
+      return;
+    }
+    forcePublishing = true;
+    republishIndexMsg = "";
+    try {
+      await invoke<void>("republish_index_force");
+      republishIndexMsg = "ok";
+      await fetchUnpublished();
+    } catch (e) {
+      console.error("republish_index_force failed:", e);
+      republishIndexMsg = "err";
+      listError = errText(e);
+    } finally {
+      forcePublishing = false;
+      forceConfirm = false;
+    }
   }
 
   async function handleCreateRelease(event: Event) {
@@ -297,7 +417,7 @@
 
     showUploading.set(true);
     inProcess.set(true);
-    expandedIndex = -1;
+    expandedName = "__uploading__";
 
     console.log("handleCreateRelease, ", {
       newReleaseName: $releaseName,
@@ -310,9 +430,14 @@
         path: $releasePath,
       });
 
+      // Stage 1 acceptance: the release must appear in the list right away,
+      // not only after step_finalize republishes the index.
+      await fetchVersions();
+
       await startUploadingRelease();
     } catch (e) {
       console.error("handleCreateRelease failed:", e);
+      createError = errText(e);
       showUploading.set(false);
     } finally {
       setTimeout(() => {
@@ -322,16 +447,32 @@
   }
 
   async function startUploadingRelease() {
+    let uploaded = false;
     try {
       await invoke<void>("upload_v2_release", {
         name: $releaseName,
         path: $releasePath,
       });
+      uploaded = true;
+      createError = "";
     } catch (e) {
       console.error("startUploadingRelease failed:", e);
+      createError = errText(e);
     }
 
     await fetchVersions();
+
+    if (uploaded) {
+      // Same cleanup (and same 2s grace period) as the resume path: leaving
+      // the form filled in makes the next "create release" click act on the
+      // previous release's name, and the upload card must not linger next to
+      // the list entry the release now has.
+      setTimeout(() => {
+        showUploading.set(false);
+        releaseName.set("");
+        releasePath.set("");
+      }, 2000);
+    }
   }
 
   async function chooseNewReleasePath(event: Event) {
@@ -360,14 +501,19 @@
       uploadCompleted = true;
     } catch (e) {
       console.error("handleContinueUploading failed:", e);
+      createError = errText(e);
     } finally {
       // Only hide the upload item if the upload actually finished (progress_upload cleared).
       // If resume failed, progress_upload is still in config and the UI item must stay visible.
       inProcess.set(false);
-      expandedIndex = null;
+      expandedName = null;
       if (uploadCompleted) {
         setTimeout(() => {
           showUploading.set(false);
+          // Clear the form state so it does not interfere with the next
+          // release creation or the version list filter.
+          releaseName.set("");
+          releasePath.set("");
         }, 2000);
         await fetchVersions();
       }
@@ -379,11 +525,12 @@
       await invoke<void>("cancel_upload", { name: $releaseName });
     } catch (e) {
       console.error("handleCancelUploading failed:", e);
+      createError = errText(e);
     }
   }
 
-  function toggleExpand(index: number) {
-    expandedIndex = expandedIndex === index ? null : index;
+  function toggleExpand(name: string) {
+    expandedName = expandedName === name ? null : name;
   }
 
   $effect(() => {
@@ -431,11 +578,11 @@
   <div class="releases-scroll">
     <!-- Элемент для добавления нового релиза -->
     <div class="release-item add-item">
-      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand(-2)}>
+      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand("__add__")}>
         <span class="plus-icon">+</span>
         <span class="placeholder-text">{$_("app.releases.add")}</span>
       </div>
-      {#if expandedIndex === -2}
+      {#if expandedName === "__add__"}
         <div class="expanded-content">
           <div class="one-row">
             <div class="input-group">
@@ -459,19 +606,63 @@
       {/if}
     </div>
 
+    {#if createError}
+      <div class="release-item">
+        <div class="expanded-content">
+          <span class="repo-status error">{createError}</span>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Refresh button (dev-only, already gated by allowPackMod in MenuBar) -->
+    <div class="release-item add-item">
+      <div class="header" role="button" tabindex="0" onclick={handleRefresh}>
+        {#if refreshing}
+          <Spin size={16} />
+          <span class="placeholder-text">{$_("app.releases.refreshing")}</span>
+        {:else}
+          <span class="placeholder-text">{$_("app.releases.refresh")}</span>
+        {/if}
+      </div>
+      {#if listError}
+        <div class="expanded-content">
+          <span class="repo-status error">{$_("app.releases.refreshFailed")}: {listError}</span>
+        </div>
+      {/if}
+    </div>
+
     <!-- Элемент сбора патча из git-репозиториев игры -->
     <div class="release-item patch-item">
-      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand(-4)}>
+      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand("__republish__")}>
         <span class="plus-icon">↻</span>
         <span class="placeholder-text">{$_("app.releases.republishIndex")}</span>
       </div>
-      {#if expandedIndex === -4}
+      {#if expandedName === "__republish__"}
         <div class="expanded-content" onclick={(e) => e.stopPropagation()}>
           <button type="button" class="create-btn" disabled={republishingIndex} onclick={handlePreviewIndex}>
             {#if republishingIndex}
               <Spin size={14} />
             {:else}
               {$_("app.releases.republishIndex")}
+            {/if}
+          </button>
+
+          <!-- Forced publish: skips the "index must not shrink" safety check.
+               Needed after a release was deleted, otherwise every automatic
+               publish keeps failing.  Two clicks to confirm. -->
+          <button
+            type="button"
+            class="create-btn"
+            style="margin-top: 0.5rem;"
+            disabled={forcePublishing}
+            title={$_("app.releases.forceRepublishHint")}
+            onclick={handleForceRepublish}>
+            {#if forcePublishing}
+              <Spin size={14} />
+            {:else if forceConfirm}
+              {$_("app.releases.forceRepublishConfirm")}
+            {:else}
+              {$_("app.releases.forceRepublish")}
             {/if}
           </button>
 
@@ -510,11 +701,11 @@
     </div>
 
     <div class="release-item patch-item">
-      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand(-3)}>
+      <div class="header" role="button" tabindex="0" onclick={() => toggleExpand("__collect__")}>
         <span class="plus-icon">±</span>
         <span class="placeholder-text">{$_("app.releases.patch.collectTitle")}</span>
       </div>
-      {#if expandedIndex === -3}
+      {#if expandedName === "__collect__"}
         <div class="expanded-content">
           <div class="input-group">
             <label class="input-label">{$_("app.releases.patch.source")}</label>
@@ -580,7 +771,7 @@
     </div>
 
     {#if $showUploading}
-      <div class="release-item uplaod-item" onclick={() => toggleExpand(-1)}>
+      <div class="release-item uplaod-item" onclick={() => toggleExpand("__uploading__")}>
         <div class="header" role="button" tabindex="0">
           <span class="plus-icon">
             {#if $inProcess}
@@ -607,7 +798,7 @@
             </button>
           {/if}
         </div>
-        {#if expandedIndex === -1}
+        {#if expandedName === "__uploading__"}
           <div class="expanded-content">
             {#each $uploadFilesMap as [name, progress], i}
               <div class="file-row">
@@ -632,17 +823,50 @@
     {/if}
 
     <!-- Список существующих релизов -->
-    {#each $versions as version, i}
-      <div class="release-item" onclick={() => toggleExpand(i)}>
+    <!-- Key on path+name: either alone can collide (GitLab subgroups may
+         share a display name, GitHub descriptions may share a path), and a
+         duplicate key throws and takes the whole view down. -->
+    {#each $versions as version (version.path + '|' + version.name)}
+      <div class="release-item" onclick={() => toggleExpand(version.name)}>
         <div class="header">
           <span class="version-name">{version.name}</span>
+          {#if unpublished.has(version.name)}
+            <span class="not-published-badge" title={$_("app.releases.notPublishedHint")}>
+              {$_("app.releases.notPublished")}
+            </span>
+          {/if}
         </div>
-        {#if expandedIndex === i}
+        {#if expandedName === version.name}
           {@const ups = readUploadState(version.name)}
           <div class="expanded-content installed-status">
             <span class="status-icon">✓</span>
             <span class="status-text">{$_("app.releases.installed")}</span>
+            <button
+              type="button"
+              class="get-sha-btn"
+              disabled={shaBusy === version.name}
+              title={$_("app.releases.getShaHint")}
+              onclick={(e) => {
+                e.stopPropagation();
+                handleGetSha(version.name);
+              }}>
+              {#if shaBusy === version.name}
+                <Spin size={14} />
+              {:else}
+                {$_("app.releases.getSha")}
+              {/if}
+            </button>
           </div>
+          {#if shaErrors.has(version.name)}
+            <div class="expanded-content"><span class="repo-status error">{shaErrors.get(version.name)}</span></div>
+          {/if}
+          {#if shaResults.has(version.name)}
+            <div class="expanded-content" onclick={(e) => e.stopPropagation()}>
+              <!-- svelte-ignore a11y_label_has_associated_control -->
+              <label class="input-label" style="margin-bottom: 0.4rem;">{$_("app.releases.getShaResult")}</label>
+              <textarea class="index-preview-textarea" rows="16" readonly value={shaResultJson(shaResults.get(version.name)!)}></textarea>
+            </div>
+          {/if}
           <div class="expanded-content patch-upload-section" onclick={(e) => e.stopPropagation()}>
             <span class="patch-repos-title">{$_("app.releases.patch.addTitle")}</span>
             <div class="input-group">
@@ -826,6 +1050,16 @@
     font-weight: 500;
   }
 
+  .not-published-badge {
+    margin-left: 0.5rem;
+    padding: 1px 6px;
+    font-size: 0.72rem;
+    color: #ffca28;
+    border: 1px solid rgba(255, 193, 7, 0.6);
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
   .expanded-content {
     padding: 1rem 1.25rem 1.25rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -855,6 +1089,28 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  .get-sha-btn {
+    -webkit-app-region: no-drag;
+    margin-left: auto;
+    padding: 0.3rem 1rem;
+    color: #fff;
+    background-color: rgba(61, 93, 236, 0.8);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .get-sha-btn:hover {
+    background-color: rgba(61, 93, 236, 1);
+  }
+  .get-sha-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
   }
 
   .status-icon {

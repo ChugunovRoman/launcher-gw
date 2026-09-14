@@ -4,7 +4,7 @@ import { selectedVersion, updateVersionProgress, removeDownloadState, versions }
 import { formatSpeedBytesPerSec } from '../utils/dwn';
 import { invoke } from '@tauri-apps/api/core';
 import { get } from 'svelte/store';
-import { expandedIndex, fetchLocalVersions, launcherDwnBytes, launcherDwnNeedUpdate, launcherDwnProgress, launcherDwnTotalBytes, launcherDwnVersion, localVersions } from '../store/main';
+import { expandedKey, fetchLocalVersions, launcherDwnBytes, launcherDwnNeedUpdate, launcherDwnProgress, launcherDwnTotalBytes, launcherDwnVersion, localVersions } from '../store/main';
 
 const unlisten: Map<string, (() => void)> = new Map();
 
@@ -73,6 +73,53 @@ export async function initDownloadListeners() {
         downloadSpeed: totalSpeed,
         speedValue: totalSpeedValue,
         sfxValue: totalSfxValue,
+        filesProgress: map,
+      };
+    });
+  }));
+  unlisten.set('download-version-file-verify', await listen('download-version-file-verify', (event: Event<[string, string, number, number]>) => {
+    const [versionName, fileName, doneBytes, totalBytes] = event.payload;
+
+    updateVersionProgress(versionName, (version) => {
+      const map = version.filesProgress;
+      const prev = map.get(fileName);
+      if (!prev) {
+        return {};
+      }
+
+      map.set(fileName, {
+        ...prev,
+        downloadProgress: 100,
+        status: 4,
+      });
+
+      return {
+        filesProgress: map,
+      };
+    });
+  }));
+  unlisten.set('download-version-file-error', await listen('download-version-file-error', (event: Event<FileErrorPayload>) => {
+    const { version_name, file, code } = event.payload;
+
+    updateVersionProgress(version_name, (version) => {
+      const map = version.filesProgress;
+      const prev = map.get(file);
+      if (prev) {
+        map.set(file, {
+          ...prev,
+          downloadProgress: 0,
+          status: 5,
+          errorCode: code,
+        });
+      }
+
+      // Do NOT flip the version-level status here: other files may still be
+      // downloading (the queue keeps going past one failed file, plan Q6),
+      // and DownloadStatus.Error would hide the Pause/Stop buttons while the
+      // version is genuinely still in progress. The version-level Error
+      // status + inProgress:false transition is set once, at the end, by the
+      // start/continue/repair command's DOWNLOAD_FAILED catch handler.
+      return {
         filesProgress: map,
       };
     });
@@ -150,6 +197,31 @@ export async function initDownloadListeners() {
 
     console.log("cancel-download-version, versionName: ", versionName);
   }));
+  unlisten.set('file-unzipped', await listen('file-unzipped', (event: Event<[string, string | null]>) => {
+    // Fired after unzip OR after a raw file was copied into the install dir —
+    // the file is fully post-processed. Payload carries the archive path.
+    const [versionName, archivePath] = event.payload;
+    if (!archivePath) return;
+    const fileName = archivePath.split(/[\\/]/).pop() ?? archivePath;
+
+    updateVersionProgress(versionName, (version) => {
+      const map = version.filesProgress;
+      const prev = map.get(fileName);
+      if (!prev) {
+        return {};
+      }
+
+      map.set(fileName, {
+        ...prev,
+        unpackProgress: 100,
+        status: 3,
+      });
+
+      return {
+        filesProgress: map,
+      };
+    });
+  }));
   unlisten.set('download-unpack-version', await listen('download-unpack-version', async (event: Event<string>) => {
     const versionName = event.payload;
 
@@ -191,6 +263,6 @@ export async function initDownloadListeners() {
       }
     }
 
-    expandedIndex.set(null);
+    expandedKey.set(null);
   }));
 }

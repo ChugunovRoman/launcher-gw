@@ -15,7 +15,7 @@ use crate::handlers::start_download_version::CancelMap;
 use crate::handlers::upload_v2::UploadCancelMap;
 use crate::service::files::ServiceFiles;
 use crate::service::game_tracker::{probe, GameTracker};
-use crate::service::get_release::ServiceGetRelease;
+use crate::service::get_release::{ServiceGetRelease, ReleaseSource};
 use crate::service::keybind_manager::KeybindManager;
 use crate::service::main::ProviderStats;
 use crate::service::startup_state::StartupTracker;
@@ -325,15 +325,18 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
       // 3. get_releases.
       if providers_error.is_none() {
-        let releases = {
+        let (releases, provider_id) = {
           let mut svc = service_clone.lock().await;
-          svc.get_releases(false).await
+          let pid = svc.api_client.current_provider().ok().map(|api| api.id().to_string());
+          let r = svc.get_releases(ReleaseSource::IndexFirst).await;
+          (r, pid)
         };
         match releases {
           Ok(releases) => {
             {
               let mut cfg = config_arc_clone_b.lock().await;
               cfg.versions = releases.clone();
+              cfg.versions_provider_id = provider_id;
               let _ = cfg.save();
             }
             let _ = app_handle_bg_b.emit("versions-loaded", releases);

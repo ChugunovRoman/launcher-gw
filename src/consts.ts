@@ -111,6 +111,8 @@ export enum DownloadStatus {
   Pause = "Pause",
   DownloadFiles = "DownloadFiles",
   Unpacking = "Unpacking",
+  Verifying = "Verifying",
+  Error = "Error",
 }
 
 export enum LangType {

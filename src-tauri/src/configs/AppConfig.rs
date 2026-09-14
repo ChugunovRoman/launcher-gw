@@ -102,9 +102,27 @@ pub struct FileProgress {
   pub download_link: String,
   pub name: String,
   pub is_downloaded: bool,
+  /// Semantics: "post-processed" — true after unzip OR after a raw file was
+  /// copied into the install dir. Kept the historic name for config compat.
   pub is_unpacked: bool,
   pub size: u64,
   pub total_size: u64,
+  /// Expected SHA-256 (manifest v2); None for old manifests → size-only check.
+  #[serde(default)]
+  pub sha256: Option<String>,
+  #[serde(default)]
+  pub kind: crate::handlers::dto::ManifestFileKind,
+  #[serde(default)]
+  pub target: Option<String>,
+  /// Per-file network retry counter (persists across launcher restarts).
+  #[serde(default)]
+  pub net_retries: u32,
+  /// Per-file size/hash mismatch retry counter.
+  #[serde(default)]
+  pub verify_retries: u32,
+  /// Terminal error code (FILE_ERR_*) once retries are exhausted.
+  #[serde(default)]
+  pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -350,6 +368,12 @@ pub struct AppConfig {
   #[serde(default)]
   pub versions: Vec<Version>,
 
+  /// The provider id that `versions` was loaded from.  Used by the frontend
+  /// to decide whether the cached versions are still valid after a provider
+  /// switch (C7: one slot for all providers).
+  #[serde(default)]
+  pub versions_provider_id: Option<String>,
+
   #[serde(default)]
   pub choosed_version_path: Option<String>,
 
@@ -409,6 +433,7 @@ impl Default for AppConfig {
       selected_profile: Some(CUSTOM_BIND_LTX.to_owned()),
       apply_key_profile: Some(true),
       versions: vec![],
+      versions_provider_id: None,
       progress_download: HashMap::new(),
       tokens: HashMap::new(),
       bg_etag: None,

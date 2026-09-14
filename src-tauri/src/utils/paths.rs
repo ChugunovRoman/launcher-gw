@@ -42,6 +42,23 @@ pub fn safe_download_join(base: &Path, remote_name: &str) -> Result<PathBuf, Str
   Ok(joined)
 }
 
+/// Validate a manifest `target` (raw files) / `deleted_files` entry: a
+/// RELATIVE path inside the install dir with '/' separators — no `..`, no
+/// absolute paths, no leading slash, no drive letters.
+pub fn assert_relative_target(target: &str) -> Result<(), String> {
+  if target.is_empty() {
+    return Err("target is empty".to_string());
+  }
+  let normalized = target.replace('\\', "/");
+  if normalized.starts_with('/') || Path::new(&normalized).is_absolute() {
+    return Err(format!("target must be relative: {}", target));
+  }
+  if normalized.split('/').any(|seg| seg == "..") {
+    return Err(format!("target must not contain '..': {}", target));
+  }
+  Ok(())
+}
+
 /// Allow only known release CDN hosts (SSRF guard for blob downloads).
 pub fn assert_download_url_allowed(url: &str) -> Result<()> {
   let parsed = url::Url::parse(url).map_err(|e| anyhow::anyhow!("invalid download URL: {}", e))?;

@@ -11,9 +11,9 @@ use tokio_util::io::ReaderStream;
 use crate::{
   configs::AppConfig::{AppConfig, VersionProgressUpload},
   consts::{DEFAULT_BRANCH, MANIFEST_NAME},
-  handlers::dto::{ReleaseManifest, UploadProgressPayload},
+  handlers::dto::{ReleaseManifest, ReleaseManifestFile, UploadProgressPayload},
   providers::dto::CreateReleaseAsset,
-  service::get_release::ServiceGetRelease,
+  service::get_release::{ServiceGetRelease, ReleaseSource},
   service::main::Service,
   utils::errors::{log_full_error, upload_log},
 };
@@ -22,7 +22,7 @@ use crate::{
 /// download cancel map so cancelling one cannot accidentally hit the other.
 pub type UploadCancelMap = Arc<StdMutex<HashMap<String, broadcast::Sender<()>>>>;
 
-const NAMESPACE: &str = "gw_releases";
+const NAMESPACE: &str = crate::consts::GENERIC_PACKAGE_NAMESPACE;
 
 /// Cancels an in-progress upload by release name.
 #[tauri::command]
@@ -151,6 +151,130 @@ async fn step_create_release(ctx: &UploadContext, api: &(dyn crate::providers::A
 /// ------------------------------------------------------------------
 /// Step 4: upload each asset file (skip already-uploaded in resume mode).
 /// ------------------------------------------------------------------
+/// Streams one asset to `asset_url` with progress events and returns the
+/// number of bytes actually streamed. Used by the first attempt and by the
+/// re-uploads after a server-side hash mismatch (the file is re-opened).
+#[allow(clippy::too_many_arguments)]
+async fn upload_asset_stream(
+  app: &tauri::AppHandle,
+  api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync),
+  file_path: PathBuf,
+  asset_name: String,
+  asset_url: String,
+  total_size: u64,
+  uploaded_before: u64,
+  grand_total: u64,
+  cancel_rx: broadcast::Receiver<()>,
+) -> Result<u64, String> {
+  let asset_name_for_stream = asset_name.clone();
+  let file_handle = File::open(&file_path).await.map_err(|e| {
+    let err = anyhow::anyhow!(e);
+    log_full_error(&err);
+    format!("Failed to open file '{}': {}", &asset_name, err)
+  })?;
+  let file_stream = ReaderStream::new(file_handle);
+  let start_time = Instant::now();
+
+  let uploaded_for_emit = Arc::new(std::sync::atomic::AtomicU64::new(0));
+  let uploaded_for_emit_in_stream = uploaded_for_emit.clone();
+  let mut cancel_rx_for_stream = cancel_rx;
+  // Owned handle: the stream is boxed as `dyn Stream + 'static`.
+  let app_handle = app.clone();
+
+  let progress_stream = async_stream::stream! {
+    let mut uploaded = 0u64;
+    for await chunk in file_stream {
+      if let Ok(()) = cancel_rx_for_stream.try_recv() {
+        log::info!("Upload of '{}' cancelled mid-stream", &asset_name_for_stream);
+        return;
+      }
+      if let Ok(ref data) = chunk {
+        uploaded += data.len() as u64;
+        uploaded_for_emit_in_stream.store(uploaded, std::sync::atomic::Ordering::Relaxed);
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let speed = if elapsed > 0.0 { uploaded as f64 / elapsed } else { 0.0 };
+        let _ = app_handle.emit("upload-progress", UploadProgressPayload {
+          file_name: asset_name_for_stream.clone(),
+          file_uploaded_size: uploaded,
+          file_total_size: total_size,
+          total_uploaded_size: uploaded_before + uploaded,
+          total_size: grand_total,
+          speed,
+        });
+      }
+      yield chunk;
+    }
+  };
+
+  let boxed_stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin> = Box::new(Box::pin(progress_stream));
+
+  log::debug!("Try upload asset: {} by url: {}", &asset_name, &asset_url);
+  api.upload_release_file(&asset_url, total_size, boxed_stream).await.map_err(|e| {
+    log_full_error(&e);
+    format!("upload_release_file '{}' failed: {}", &asset_name, e)
+  })?;
+
+  Ok(uploaded_for_emit.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Upload one asset and verify its hash on the server. On a mismatch the
+/// remote asset is deleted and the file re-uploaded, up to
+/// MAX_UPLOAD_VERIFY_RETRIES times; after that the command fails with
+/// UPLOAD_HASH_MISMATCH and the file is NOT recorded in `uploaded_files`, so
+/// continue_upload_v2 re-uploads it.
+async fn upload_and_verify_asset(ctx: &UploadContext, api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync), file: &ReleaseManifestFile, asset_url: &str, file_path: &Path, total_size: u64, uploaded_before: u64, grand_total: u64) -> Result<(), String> {
+  let asset_name = file.name.clone();
+  let mut verify_attempts: u32 = 0;
+
+  loop {
+    let cancel_rx = ctx.cancel_tx.subscribe();
+    let actually_uploaded = upload_asset_stream(&ctx.app, api, file_path.to_path_buf(), asset_name.clone(), asset_url.to_string(), total_size, uploaded_before, grand_total, cancel_rx).await?;
+
+    if actually_uploaded < total_size {
+      upload_log(&ctx.app, format!("Upload of '{}' was interrupted ({} of {} bytes)", &asset_name, actually_uploaded, total_size));
+      return Err("USER_CANCELLED".to_string());
+    }
+
+    let Some(expected) = file.sha256.as_deref().filter(|s| !s.is_empty()) else {
+      // No hash in the manifest (old manifest / manifest.json itself).
+      break;
+    };
+
+    match api.get_uploaded_asset_sha256(&ctx.project_id, &ctx.tag_name, &asset_name).await {
+      Ok(Some(remote)) if remote.eq_ignore_ascii_case(expected) => {
+        upload_log(&ctx.app, format!("File {}: sha256 verified on server", &asset_name));
+        break;
+      }
+      Ok(Some(remote)) => {
+        verify_attempts += 1;
+        if verify_attempts > crate::consts::MAX_UPLOAD_VERIFY_RETRIES {
+          upload_log(&ctx.app, format!("File {}: server sha256 {} != local {} after {} attempts", &asset_name, &remote, expected, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
+          return Err(crate::consts::ERR_UPLOAD_HASH_MISMATCH.to_string());
+        }
+        upload_log(&ctx.app, format!("File {}: server sha256 {} != local {}, deleting asset and re-uploading (attempt {}/{})", &asset_name, &remote, expected, verify_attempts, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
+        if let Err(e) = api.delete_release_asset(&ctx.project_id, &ctx.tag_name, &asset_name).await {
+          // Fatal: GitHub rejects a re-upload under an already-existing asset
+          // name (422 already_exists), so a failed delete would otherwise
+          // surface downstream as an opaque upload error instead of the
+          // correct UPLOAD_HASH_MISMATCH / retry-via-continue outcome.
+          upload_log(&ctx.app, format!("File {}: failed to delete stale asset before re-upload: {}", &asset_name, e));
+          return Err(crate::consts::ERR_UPLOAD_HASH_MISMATCH.to_string());
+        }
+      }
+      Ok(None) => {
+        upload_log(&ctx.app, format!("File {}: server returned no sha256, verification skipped", &asset_name));
+        break;
+      }
+      Err(e) => {
+        log::warn!("Cannot fetch server sha256 of '{}': {} — verification skipped", &asset_name, e);
+        break;
+      }
+    }
+  }
+
+  Ok(())
+}
+
 async fn step_upload_assets(ctx: &UploadContext, api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync)) -> Result<(), String> {
   // Recover the upload template (either from config or from context).
   let upload_template = {
@@ -229,73 +353,18 @@ async fn step_upload_assets(ctx: &UploadContext, api: &(dyn crate::providers::Ap
     }
 
     let asset_url = build_asset_url(&upload_template, &ctx.project_id, NAMESPACE, &ctx.tag_name, &file.name);
-    let asset_name = file.name.clone();
-    let asset_name_for_log = asset_name.clone();
-    let asset_name_for_stream = asset_name.clone();
-    let app_handle = ctx.app.clone();
+    let file_path = ctx.base_dir.join(&file.name);
 
-    let file_handle = File::open(ctx.base_dir.join(&asset_name)).await.map_err(|e| {
-      let err = anyhow::anyhow!(e);
-      log_full_error(&err);
-      format!("Failed to open file '{}': {}", &asset_name, err)
-    })?;
-    let total_size = file_size;
-    let file_stream = ReaderStream::new(file_handle);
-    let start_time = Instant::now();
+    upload_and_verify_asset(ctx, api, file, &asset_url, &file_path, file_size, uploaded_before, grand_total).await?;
 
-    let uploaded_before_this_file = uploaded_before;
-    let uploaded_for_emit = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let uploaded_for_emit_in_stream = uploaded_for_emit.clone();
-    let mut cancel_rx_for_stream = ctx.cancel_tx.subscribe();
-    let grand_total_for_stream = grand_total;
-
-    let progress_stream = async_stream::stream! {
-      let mut uploaded = 0u64;
-      for await chunk in file_stream {
-        if let Ok(()) = cancel_rx_for_stream.try_recv() {
-          log::info!("Upload of '{}' cancelled mid-stream", &asset_name_for_stream);
-          return;
-        }
-        if let Ok(ref data) = chunk {
-          uploaded += data.len() as u64;
-          uploaded_for_emit_in_stream.store(uploaded, std::sync::atomic::Ordering::Relaxed);
-          let elapsed = start_time.elapsed().as_secs_f64();
-          let speed = if elapsed > 0.0 { uploaded as f64 / elapsed } else { 0.0 };
-          let _ = app_handle.emit("upload-progress", UploadProgressPayload {
-            file_name: asset_name_for_stream.clone(),
-            file_uploaded_size: uploaded,
-            file_total_size: total_size,
-            total_uploaded_size: uploaded_before_this_file + uploaded,
-            total_size: grand_total_for_stream,
-            speed,
-          });
-        }
-        yield chunk;
-      }
-    };
-
-    let boxed_stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin> = Box::new(Box::pin(progress_stream));
-
-    log::debug!("Try upload asset: {} by url: {}", &asset_name_for_log, &asset_url);
-    api.upload_release_file(&asset_url, total_size, boxed_stream).await.map_err(|e| {
-      log_full_error(&e);
-      format!("upload_release_file '{}' failed: {}", &asset_name_for_log, e)
-    })?;
-
-    let actually_uploaded = uploaded_for_emit.load(std::sync::atomic::Ordering::Relaxed);
-    if actually_uploaded < total_size {
-      upload_log(&ctx.app, format!("Upload of '{}' was interrupted ({} of {} bytes)", &asset_name, actually_uploaded, total_size));
-      return Err("USER_CANCELLED".to_string());
-    }
-
-    uploaded_before += total_size;
+    uploaded_before += file_size;
 
     // Persist uploaded file name into config (guard against duplicates defensively).
     {
       let mut cfg = ctx.app_config.lock().await;
       if let Some(ref mut p) = cfg.progress_upload {
-        if !p.uploaded_files.iter().any(|n| n == &asset_name) {
-          p.uploaded_files.push(asset_name.clone());
+        if !p.uploaded_files.iter().any(|n| n == &file.name) {
+          p.uploaded_files.push(file.name.clone());
         }
       }
       let _ = cfg.save();
@@ -305,7 +374,7 @@ async fn step_upload_assets(ctx: &UploadContext, api: &(dyn crate::providers::Ap
     done_count += 1;
     let _ = ctx.app.emit("upload-files-count", (done_count, total_count));
 
-    upload_log(&ctx.app, format!("File {} uploaded successful !", &asset_name));
+    upload_log(&ctx.app, format!("File {} uploaded successful !", &file.name));
   }
 
   Ok(())
@@ -314,7 +383,12 @@ async fn step_upload_assets(ctx: &UploadContext, api: &(dyn crate::providers::Ap
 /// ------------------------------------------------------------------
 /// Step 5: finalize — set release visibility, clear progress.
 /// ------------------------------------------------------------------
-async fn step_finalize(ctx: &UploadContext, api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync), release_id: String) -> Result<(), String> {
+async fn step_finalize(
+  ctx: &UploadContext,
+  api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync),
+  service: &Arc<Mutex<Service>>,
+  release_id: String,
+) -> Result<(), String> {
   api.set_release_visibility(&release_id, true).await.map_err(|e| {
     log_full_error(&e);
     format!("set_release_visibility '{}' failed: {}", &release_id, e)
@@ -330,9 +404,19 @@ async fn step_finalize(ctx: &UploadContext, api: &(dyn crate::providers::ApiProv
   log::info!("Full upload of version {} finish successful !", &ctx.name);
 
   // Best-effort: re-publish the static release index so players see the
-  // new release without hitting the API.  Errors are non-fatal.
-  if let Err(e) = crate::service::index_publisher::publish_index(api).await {
+  // new release without hitting the API.  Errors are non-fatal but visible
+  // to the developer so they know the release may not appear for players.
+  if let Err(e) = crate::service::index_publisher::publish_index(api, false).await {
     log::warn!("Failed to publish release index after upload: {}", e);
+    upload_log(&ctx.app, format!("WARNING: Failed to publish release index: {}. The release may not appear for players until the index is re-published manually.", e));
+  }
+
+  // Invalidate AFTER publishing: a concurrent get_available_versions during
+  // the publish would otherwise refill the cache from the pre-publish index
+  // and keep serving it for the whole TTL window.
+  {
+    let mut svc = service.lock().await;
+    svc.invalidate_releases();
   }
 
   Ok(())
@@ -403,7 +487,7 @@ pub async fn upload_v2_release(
   let releases = {
     let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
     let mut service_guard = state.lock().await;
-    service_guard.get_releases(false).await
+    service_guard.get_releases(ReleaseSource::ApiOnly).await
   }.map_err(|e| { log_full_error(&e); e.to_string() })?;
 
   let release = releases
@@ -468,7 +552,8 @@ pub async fn upload_v2_release(
   step_create_tag(&ctx, api_ref).await?;
   step_create_release(&ctx, api_ref).await?;
   step_upload_assets(&ctx, api_ref).await?;
-  step_finalize(&ctx, api_ref, release_id).await?;
+  let service_ref = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+  step_finalize(&ctx, api_ref, service_ref.inner(), release_id).await?;
 
   Ok(())
 }
@@ -562,7 +647,7 @@ pub async fn continue_upload_v2(
     step_create_release(&ctx, api).await?;
   }
   step_upload_assets(&ctx, api).await?;
-  step_finalize(&ctx, api, release_id).await?;
+  step_finalize(&ctx, api, service.inner(), release_id).await?;
 
   Ok(())
 }

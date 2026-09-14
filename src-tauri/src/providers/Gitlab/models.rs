@@ -215,3 +215,29 @@ pub struct CreateReleaseResponseGitlab {
   pub tag_name: String,
   pub description: String,
 }
+
+/// Generic package record (GET /projects/:id/packages).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitlabPackage {
+  pub id: u32,
+  #[serde(default)]
+  pub name: String,
+  #[serde(default)]
+  pub version: String,
+  #[serde(default)]
+  pub package_type: Option<String>,
+}
+
+/// File inside a generic package (GET /projects/:id/packages/:pid/package_files).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitlabPackageFile {
+  pub id: u32,
+  pub package_id: u32,
+  pub file_name: String,
+  #[serde(default)]
+  pub size: Option<u64>,
+  /// SHA-256 of the stored file; None when the GitLab instance does not
+  /// compute it (older versions).
+  #[serde(default)]
+  pub file_sha256: Option<String>,
+}

@@ -1,22 +1,15 @@
 use crate::{
-  configs::AppConfig::AppConfig,
-  consts::PULL_FILES_SIZE,
+  configs::AppConfig::{AppConfig, FileProgress},
+  consts,
   handlers::{
-    dto::{DownlaodFileStat, DownloadProgress, DownloadStatus, UnzipTask},
+    dto::{DownlaodFileStat, DownloadProgress, DownloadStatus},
     start_download_version::CancelMap,
   },
-  service::{files::{DownloadOutcome, ServiceFiles}, main::Service, unpack::ServiceUnpacker},
+  service::{download_worker::VerifyResult, files::ServiceFiles, main::Service, unpack::ServiceUnpacker},
 };
-use std::{cmp::Reverse, fs, path::Path, sync::Arc, time::Duration};
-use std::{
-  path::PathBuf,
-  sync::atomic::{AtomicU32, Ordering},
-};
+use std::{cmp::Reverse, path::{Path, PathBuf}, sync::Arc};
 use tauri::Emitter;
-use tokio::sync::{Mutex, broadcast, mpsc};
-
-/// Max download attempts per file before giving up.
-const MAX_DOWNLOAD_RETRIES: u32 = 5;
+use tokio::sync::{Mutex, broadcast};
 
 #[tauri::command]
 pub async fn continue_download_version(
@@ -31,7 +24,7 @@ pub async fn continue_download_version(
   log::info!("Start continue_download_version, version: {:?}", &versionName);
 
   if crate::utils::locks::lock(&channel_map).contains_key(&versionName) {
-    return Err("DOWNLOAD_ALREADY_RUNNING".to_string());
+    return Err(consts::ERR_DOWNLOAD_ALREADY_RUNNING.to_string());
   }
 
   // 1. Инициализация каналов отмены
@@ -45,7 +38,22 @@ pub async fn continue_download_version(
 
   // 2. Сбор статистики и подготовка данных
   let mut file_sizes: Vec<DownlaodFileStat> = vec![];
-  let (version, mut files_to_download, files_to_unpack) = {
+
+  // Files that finished downloading in an earlier run and only need a resume
+  // re-verify (P5/2.3): the sha256 hash is computed OUTSIDE the config lock
+  // below — hashing a multi-GB part while holding the global config mutex
+  // would stall every other command that reads the config (bug fix).
+  struct PendingVerify {
+    name: String,
+    file_path: PathBuf,
+    part_path: PathBuf,
+    total_size: u64,
+    sha256: Option<String>,
+    file_progress: FileProgress,
+  }
+  let mut pending_verify: Vec<PendingVerify> = vec![];
+
+  let (mut version, mut files_to_download, mut files_to_postprocess) = {
     let mut cfg_guard = app_config.lock().await;
 
     // Ensure the download dir exists on resume: start_download_version creates it,
@@ -64,7 +72,7 @@ pub async fn continue_download_version(
     }
 
     let mut to_download = Vec::new();
-    let mut to_unpack = Vec::new();
+    let mut to_postprocess = Vec::new();
     let version_data = {
       let version_data = cfg_guard
         .progress_download
@@ -77,15 +85,41 @@ pub async fn continue_download_version(
         let file_path = Path::new(&version_data.download_path).join(&file_progress.name);
         let file_part_path = Path::new(&version_data.download_path).join(format!("{}.part", &file_progress.name));
 
-        let current_size = if file_part_path.exists() {
-          tokio::fs::read_to_string(&file_part_path)
-            .await
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(0)
-        } else if file_path.exists() && file_progress.is_downloaded {
-          file_progress.total_size
-        } else if !file_path.exists() && file_progress.is_unpacked {
+        // ---------------------------------------------------------------
+        // P5: the file on disk is the source of truth, the `.part` sidecar
+        // is only a hint written before the file was flushed.
+        // ---------------------------------------------------------------
+        let part_size: Option<u64> = tokio::fs::read_to_string(&file_part_path)
+          .await
+          .ok()
+          .and_then(|s| s.trim().parse::<u64>().ok());
+        let file_len: u64 = match tokio::fs::metadata(&file_path).await {
+          Ok(meta) => meta.len(),
+          Err(_) => 0,
+        };
+
+        let current_size = if let Some(part) = part_size {
+          if file_len == 0 {
+            // Sidecar exists but the file is gone → start over.
+            0
+          } else if file_len < part {
+            // Crash lost bytes after the sidecar write → trust the file.
+            file_len
+          } else if file_len > part {
+            // Extra bytes of unknown quality past the recorded point → cut
+            // the file back so the Range resume stays consistent.
+            let f = std::fs::OpenOptions::new().write(true).open(&file_path);
+            if let Ok(f) = f {
+              let _ = f.set_len(part);
+            }
+            part
+          } else {
+            part
+          }
+        } else if file_len > 0 && file_progress.is_downloaded {
+          file_len
+        } else if file_len == 0 && file_progress.is_unpacked {
+          // Already post-processed: the archive was removed after unpack.
           file_progress.total_size
         } else {
           0
@@ -93,16 +127,61 @@ pub async fn continue_download_version(
 
         file_progress.size = current_size;
 
+        // ---------------------------------------------------------------
+        // Retry entries from a previous failed run: reset the counters and
+        // re-route by error kind (network/hash → download, unpack/copy →
+        // post-process; the archive is still on disk for the latter).
+        // ---------------------------------------------------------------
+        if let Some(err) = file_progress.last_error.take() {
+          file_progress.net_retries = 0;
+          file_progress.verify_retries = 0;
+          match err.as_str() {
+            consts::FILE_ERR_UNPACK_FAILED | consts::FILE_ERR_COPY_FAILED => {
+              if file_len > 0 {
+                file_progress.is_downloaded = true;
+                to_postprocess.push(file_progress.clone());
+                files_dwn_cnt += 1;
+              } else {
+                file_progress.is_downloaded = false;
+                to_download.push(file_progress.clone());
+              }
+            }
+            _ => {
+              file_progress.is_downloaded = false;
+              to_download.push(file_progress.clone());
+            }
+          }
+
+          file_sizes.push(DownlaodFileStat {
+            name: file_progress.name.clone(),
+            unpacked: file_progress.is_unpacked,
+            size: Some(current_size),
+          });
+          continue;
+        }
+
         if current_size >= file_progress.total_size && file_progress.total_size > 0 {
           file_progress.is_downloaded = true;
           files_dwn_cnt += 1;
+
+          // 2.3: a file marked downloaded but not yet post-processed is
+          // re-verified before unpacking — it may have been corrupted on
+          // disk between sessions. On mismatch it goes back to the queue.
+          // The hash itself is computed AFTER the config lock is released
+          // (see `pending_verify` below) — this loop only queues it.
+          if !file_progress.is_unpacked && file_len > 0 {
+            pending_verify.push(PendingVerify {
+              name: file_progress.name.clone(),
+              file_path: file_path.clone(),
+              part_path: file_part_path.clone(),
+              total_size: file_progress.total_size,
+              sha256: file_progress.sha256.clone(),
+              file_progress: file_progress.clone(),
+            });
+          }
         } else {
           file_progress.is_downloaded = false;
           to_download.push(file_progress.clone());
-        }
-
-        if file_progress.is_downloaded && !file_progress.is_unpacked {
-          to_unpack.push(file_progress.clone());
         }
 
         file_sizes.push(DownlaodFileStat {
@@ -118,8 +197,53 @@ pub async fn continue_download_version(
 
     cfg_guard.save().map_err(|e| e.to_string())?;
 
-    (version_data.clone(), to_download, to_unpack)
+    (version_data.clone(), to_download, to_postprocess)
   };
+  // ^ config lock released here — the hashing below must not hold it.
+
+  // Phase B: resume re-verify (P5/2.3), OUTSIDE the config lock.
+  let mut regressed_names: Vec<String> = vec![];
+  for pv in pending_verify {
+    let verify = crate::service::download_worker::verify_downloaded_file(&pv.file_path, pv.total_size, pv.sha256.as_deref()).await;
+    match verify {
+      Ok(VerifyResult::Ok) | Ok(VerifyResult::Skipped) => {
+        files_to_postprocess.push(pv.file_progress);
+      }
+      Ok(VerifyResult::SizeMismatch { .. }) | Ok(VerifyResult::HashMismatch { .. }) => {
+        log::warn!("Resume verify failed for '{}': re-downloading", &pv.name);
+        let _ = tokio::fs::remove_file(&pv.file_path).await;
+        let _ = tokio::fs::remove_file(&pv.part_path).await;
+        let mut fp = pv.file_progress;
+        fp.is_downloaded = false;
+        fp.size = 0;
+        regressed_names.push(fp.name.clone());
+        files_to_download.push(fp);
+      }
+      Err(e) => {
+        // I/O error while hashing (AV lock, transient disk issue): the size
+        // already matched, so this is not necessarily corruption. Keep the
+        // fully downloaded file instead of discarding it — let it through to
+        // post-processing rather than forcing a redundant re-download.
+        log::warn!("Resume verify of '{}' errored (kept, not re-downloaded): {}", &pv.name, e);
+        files_to_postprocess.push(pv.file_progress);
+      }
+    }
+  }
+
+  if !regressed_names.is_empty() {
+    version.downloaded_files_cnt = version.downloaded_files_cnt.saturating_sub(regressed_names.len() as u32);
+    let mut cfg_guard = app_config.lock().await;
+    if let Some(ver) = cfg_guard.progress_download.get_mut(&versionName) {
+      ver.downloaded_files_cnt = version.downloaded_files_cnt;
+      for name in &regressed_names {
+        if let Some(existing) = ver.files.get_mut(name) {
+          existing.is_downloaded = false;
+          existing.size = 0;
+        }
+      }
+    }
+    let _ = cfg_guard.save();
+  }
 
   // Сортировка для UI (по номеру чанка в расширении)
   file_sizes.sort_by_key(|file| Reverse(file.size));
@@ -145,278 +269,18 @@ pub async fn continue_download_version(
     },
   );
 
-  // 3. Создание очереди задач
-  let total_file_count = version.total_file_count;
-  let downloaded_cnt = Arc::new(AtomicU32::new(version.downloaded_files_cnt));
-  let (tx_queue, rx_queue) = mpsc::channel(total_file_count as usize + 100);
-
-  for file in files_to_download {
-    log::debug!("tx_queue.send, file: {:?}", &file);
-    let _ = tx_queue.send(file).await;
-  }
-
-  let (tx_unzip, mut rx_unzip) = mpsc::channel::<UnzipTask>(total_file_count as usize);
-
-  // Отдельный поток-менеджер распаковки
-  let app_unzip = app.clone();
-  let version_name_unzip = versionName.clone();
-  let service_unpack_arc = service_unpack.inner().clone();
-  let app_config_arc = app_config.inner().clone();
-  let unzip_manager_handle = tokio::spawn(async move {
-    while let Some(data) = rx_unzip.recv().await {
-      log::debug!("Worker got msg to unpack file, data: {:?}", &data);
-
-      let app_inner = app_unzip.clone();
-      let v_name = version_name_unzip.clone();
-      let service_unpack_for_thread = service_unpack_arc.clone();
-      let app_config_arc_for_thread = app_config_arc.clone();
-      let archive_path = data.archive_path.clone();
-      let file_name = data.file_name.clone();
-      let v_name_for_thread = v_name.clone();
-
-      // Unpacking is CPU-intensive → run it in spawn_blocking, returning whether it
-      // succeeded so the config update happens in the async context (no block_on
-      // inside a blocking thread, which previously risked starving the pool).
-      let unpack_ok: bool = tokio::task::spawn_blocking(move || {
-        let res = service_unpack_for_thread.extract_zip(&v_name_for_thread, &data.file_name, &data.archive_path, &data.destination_path);
-        if let Err(e) = &res {
-          log::error!("Unpack of '{}' failed: {}", &data.file_name, e);
-        }
-        let _ = app_inner.emit("file-unzipped", (&v_name_for_thread, data.archive_path.to_str()));
-        res.is_ok()
-      })
-      .await
-      .unwrap_or(false);
-
-      // Config update + archive removal back in the async context.
-      if unpack_ok {
-        let mut config_guard = app_config_arc_for_thread.lock().await;
-        if let Some(ver) = config_guard.progress_download.get_mut(&v_name) {
-          if let Some(file_progress) = ver.files.get_mut(&file_name) {
-            file_progress.is_unpacked = true;
-          }
-        }
-        let _ = config_guard.save();
-        drop(config_guard);
-        let _ = fs::remove_file(&archive_path);
-      }
-    }
-    log::info!("Unzip queue finished");
-  });
-
-  let rx_queue_arc = Arc::new(Mutex::new(rx_queue));
-  let cancel_tx_arc = Arc::new(cancel_tx);
-  let tx_unzip_arc = Arc::new(tx_unzip);
-
-  for file in files_to_unpack {
-    let download_dir_c = Path::new(&version.download_path).to_path_buf();
-    let file_path = crate::utils::paths::safe_download_join(&download_dir_c, &file.name)?;
-    let _ = tx_unzip_arc
-      .send(UnzipTask {
-        file_name: file.name.clone(),
-        archive_path: file_path,
-        destination_path: PathBuf::from(&version.installed_path),
-      })
-      .await;
-  }
-
   let api_client = service.lock().await.api_client.clone();
-  let mut join_handles = Vec::new();
 
-  // 4. Run download workers
-  for _ in 0..PULL_FILES_SIZE {
-    let app_c = app.clone();
-    let app_config_c = app_config.inner().clone();
-    let service_files_c = service_files.inner().clone();
-    let api_client_c = api_client.clone();
-    let version_name_c = versionName.clone();
-    let version_install_path_c = version.installed_path.clone();
-    let download_dir_c = Path::new(&version.download_path).to_path_buf();
-    let downloaded_cnt_c = downloaded_cnt.clone();
-
-    let tx_unzip_c = tx_unzip_arc.clone();
-    let rx_queue_c = rx_queue_arc.clone();
-    let cancel_tx_arc_c = cancel_tx_arc.clone();
-    let mut stop_rx = cancel_tx_arc.subscribe();
-
-    let handle = tokio::spawn(async move {
-      // Per-file retry counter so a persistently failing file does not loop forever.
-      let mut retries: u32 = 0;
-      let mut current_task: Option<_> = None;
-
-      loop {
-        // Take next task either from the previous failed attempt or from the queue.
-        let file_task = if let Some(t) = current_task.take() {
-          t
-        } else {
-          let mut rx_lock = rx_queue_c.lock().await;
-          tokio::select! {
-              _ = stop_rx.recv() => break,
-              task = rx_lock.recv() => match task {
-                  Some(t) => t,
-                  None => break,
-              }
-          }
-        };
-
-        let file_path = match crate::utils::paths::safe_download_join(&download_dir_c, &file_task.name) {
-          Ok(p) => p,
-          Err(e) => {
-            log::error!("safe_download_join failed: {}", e);
-            continue;
-          }
-        };
-        let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
-
-        // Actual seek before each attempt
-        let seek_pos = tokio::fs::read_to_string(&part_path)
-          .await
-          .ok()
-          .and_then(|s| s.trim().parse::<u64>().ok());
-
-        let mut local_cancel = cancel_tx_arc_c.subscribe();
-        let res = service_files_c
-          .download_blob_to_file(
-            &api_client_c,
-            &version_name_c,
-            &file_task.download_link,
-            &file_task.total_size,
-            &file_path,
-            &seek_pos,
-            local_cancel,
-          )
-          .await;
-
-        match res {
-          Ok(DownloadOutcome::Completed) => {
-            retries = 0;
-            let current = downloaded_cnt_c.fetch_add(1, Ordering::SeqCst) + 1;
-
-            let _ = tx_unzip_c
-              .send(UnzipTask {
-                file_name: file_task.name.clone(),
-                archive_path: file_path.clone(),
-                destination_path: PathBuf::from(&version_install_path_c),
-              })
-              .await;
-
-            // Update config
-            {
-              let mut config_guard = app_config_c.lock().await;
-              if let Some(ver) = config_guard.progress_download.get_mut(&version_name_c) {
-                if let Some(fp) = ver.files.get_mut(&file_task.id) {
-                  fp.is_downloaded = true;
-                }
-                ver.downloaded_files_cnt = current;
-              }
-              let _ = config_guard.save();
-            }
-
-            // Emit progress
-            // Bug E fix: guard against division by zero.
-            let progress = if total_file_count > 0 {
-              (current as f32 / total_file_count as f32) * 100.0
-            } else {
-              0.0
-            };
-            let _ = app_c.emit(
-              "download-version",
-              DownloadProgress {
-                version_name: version_name_c.clone(),
-                status: DownloadStatus::DownloadFiles,
-                file: file_task.name,
-                progress,
-                downloaded_files_cnt: current,
-                total_file_count,
-              },
-            );
-
-            if current >= total_file_count {
-              let _ = cancel_tx_arc_c.send(());
-              break;
-            }
-          }
-          Ok(DownloadOutcome::Interrupted) => {
-            // User pause / shutdown: persist partial progress to config and stop without
-            // counting this file as completed.
-            log::info!("Download of '{}' interrupted by cancel signal, saving progress", file_task.name);
-            persist_file_size(&app_config_c, &version_name_c, &file_task.name, &part_path).await;
-            break;
-          }
-          Err(e) => {
-            retries += 1;
-            if retries > MAX_DOWNLOAD_RETRIES {
-              log::error!("Download of '{}' failed after {} attempts: {}", file_task.name, MAX_DOWNLOAD_RETRIES, e);
-              persist_file_size(&app_config_c, &version_name_c, &file_task.name, &part_path).await;
-              break;
-            }
-            log::warn!("Error downloading '{}' (attempt {}/{}): {}. Retrying...", file_task.name, retries, MAX_DOWNLOAD_RETRIES, e);
-            persist_file_size(&app_config_c, &version_name_c, &file_task.name, &part_path).await;
-            current_task = Some(file_task);
-            tokio::time::sleep(Duration::from_secs(2)).await;
-          }
-        }
-      }
-    });
-    join_handles.push(handle);
-  }
-
-  // 5. Wait for completion
-  drop(tx_queue); // Lets rx_lock.recv() return None once workers finish their retries
-
-  for h in join_handles {
-    let _ = h.await;
-  }
-
-  // Determine whether the download completed fully. We only emit the completion
-  // event when every file finished; otherwise the frontend would start unpacking
-  // a partial download and wipe the saved progress.
-  let downloaded_total = downloaded_cnt.load(Ordering::SeqCst);
-  let fully_downloaded = downloaded_total >= total_file_count;
-
-  // ВАЖНО: Закрываем передатчик очереди распаковки.
-  // После этого rx_unzip.recv() вернет None, когда обработает ВСЕ задачи в очереди.
-  drop(tx_unzip_arc);
-
-  // Ждем, пока менеджер распаковки закончит последний файл
-  let _ = unzip_manager_handle.await;
-
-  if fully_downloaded {
-    // Bug B fix: mark the version as fully downloaded in config.
-    {
-      let mut config_guard = app_config.lock().await;
-      if let Some(ver) = config_guard.progress_download.get_mut(&versionName) {
-        ver.is_downloaded = true;
-      }
-      let _ = config_guard.save();
-    }
-
-    let _ = app.emit("download-unpack-version", &versionName);
-    Ok(())
-  } else {
-    log::info!(
-      "Continue download of '{}' did not complete (downloaded {}/{}); keeping progress, no unpack event",
-      &versionName,
-      downloaded_total,
-      total_file_count
-    );
-    Err("USER_CANCELLED".to_string())
-  }
-}
-
-/// Reads the `.part` sidecar and persists its byte count into `FileProgress.size`,
-/// so the resume point survives an abrupt process kill. Called after interruptions/retries.
-async fn persist_file_size(config: &Arc<Mutex<AppConfig>>, version_name: &str, file_name: &str, part_path: &str) {
-  let size = match std::fs::read_to_string(part_path) {
-    Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
-    Err(_) => 0,
-  };
-
-  let mut config_guard = config.lock().await;
-  if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
-    if let Some(fp) = ver.files.get_mut(file_name) {
-      fp.size = size;
-    }
-  }
-  let _ = config_guard.save();
+  crate::service::download_worker::run_version_pipeline(
+    &app,
+    &app_config.inner().clone(),
+    &service_files.inner().clone(),
+    &service_unpack.inner().clone(),
+    api_client,
+    &version,
+    files_to_download,
+    files_to_postprocess,
+    cancel_tx,
+  )
+  .await
 }

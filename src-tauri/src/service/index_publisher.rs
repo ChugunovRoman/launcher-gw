@@ -17,7 +17,7 @@ use serde_json;
 
 use crate::{
   consts::*,
-  handlers::dto::ReleaseManifest,
+  handlers::dto::{ReleaseManifest, ReleaseManifestFile},
   providers::{ApiProvider::ApiProvider, dto::Project},
   service::index::*,
 };
@@ -75,9 +75,25 @@ pub async fn commit_index_json(api: &(dyn ApiProvider + Send + Sync), json: &str
   Ok(())
 }
 
+/// Release names are compared in a normalized form: a repo whose description
+/// was cleared yields the dash form ("Global-War-Dev") while the published
+/// index holds the description form ("Global War Dev"), and a carry-over
+/// lookup on the raw name would miss exactly when it is needed most.
+fn normalize_release_name(name: &str) -> String {
+  name.replace('-', " ").to_lowercase()
+}
+
 /// Collect the release index from live API data (no network commit).
 async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<ReleaseIndex> {
   let is_gitlab = api.is_suppot_subgroups();
+
+  // Load the existing published index so we can carry over entries that fail
+  // to collect this time (C5: don't lose releases on transient errors).
+  let old_index: Option<ReleaseIndex> = crate::service::index::load_index(api.id()).await.ok();
+  let old_entries_by_name: std::collections::HashMap<String, ReleaseIndexEntry> = old_index
+    .as_ref()
+    .map(|idx| idx.releases.iter().map(|e| (normalize_release_name(&e.name), e.clone())).collect())
+    .unwrap_or_default();
 
   // ---- Launcher (self-update) ----
   let launcher_project_id = if is_gitlab {
@@ -120,7 +136,12 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     let repos = match api.get_release_repos_by_name(&release.name).await {
       Ok(r) => r,
       Err(e) => {
-        log::warn!("index: get_release_repos_by_name('{}') failed, skipping: {}", &release.name, e);
+        log::warn!("index: get_release_repos_by_name('{}') failed: {}", &release.name, e);
+        // Carry over the old entry instead of losing the release.
+        if let Some(old) = old_entries_by_name.get(&normalize_release_name(&release.name)) {
+          log::info!("index: carrying over old entry for '{}'", &release.name);
+          release_entries.push(old.clone());
+        }
         continue;
       }
     };
@@ -128,7 +149,14 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     let main_repo = repos.iter().find(|r| is_main_repo(&r.name));
 
     let Some(main) = main_repo else {
-      log::warn!("index: no main_1 repo for release '{}', skipping", &release.name);
+      log::warn!("index: no main_1 repo for release '{}': {}", &release.name, {
+        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        format!("{:?}", names)
+      });
+      if let Some(old) = old_entries_by_name.get(&normalize_release_name(&release.name)) {
+        log::info!("index: carrying over old entry for '{}'", &release.name);
+        release_entries.push(old.clone());
+      }
       continue;
     };
 
@@ -140,7 +168,11 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     {
       Ok(r) => r,
       Err(e) => {
-        log::warn!("index: get_launcher_latest_release('{}') failed, skipping: {}", &project_id, e);
+        log::warn!("index: get_launcher_latest_release('{}') failed: {}", &project_id, e);
+        if let Some(old) = old_entries_by_name.get(&normalize_release_name(&release.name)) {
+          log::info!("index: carrying over old entry for '{}'", &release.name);
+          release_entries.push(old.clone());
+        }
         continue;
       }
     };
@@ -153,23 +185,42 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
       log::warn!("index: cannot fetch manifest for '{}', sizes will be 0", &release.name);
     }
 
+    // Manifest entries by file name — propagate sha256/kind/target into the
+    // index assets so players verify downloads without fetching the manifest.
+    let manifest_files: HashMap<&str, &ReleaseManifestFile> = manifest_info
+      .as_ref()
+      .map(|m| m.files.iter().map(|f| (f.name.as_str(), f)).collect())
+      .unwrap_or_default();
+
     let assets: Vec<IndexAsset> = latest
       .assets
       .iter()
-      .map(|a| IndexAsset {
-        name: a.name.clone(),
-        size: a.size,
-        url: a.download_link.clone(),
+      .map(|a| {
+        let mf = manifest_files.get(a.name.as_str()).copied();
+        IndexAsset {
+          name: a.name.clone(),
+          size: a.size,
+          url: a.download_link.clone(),
+          sha256: mf.and_then(|f| f.sha256.clone()),
+          kind: mf.map(|f| f.kind).unwrap_or_default(),
+          target: mf.and_then(|f| f.target.clone()),
+        }
       })
       .collect();
 
     // ---- Patches (updates repos) ----
     // GitLab expects numeric group id, GitHub expects release name.
     let updates_key = if is_gitlab { release.id.to_string() } else { release.name.clone() };
+    // C5 (patch chain): track whether ANY step of the patch collection failed.
+    // Publishing a truncated chain would silently hide already-released
+    // patches from every player, and the anti-collapse guard below only
+    // counts releases, not patches.
+    let mut patches_incomplete = false;
     let updates_repos = match api.get_updates_repos_by_name(&updates_key).await {
       Ok(r) => r,
       Err(e) => {
         log::warn!("index: get_updates_repos_by_name('{}') failed, skipping patches: {}", &updates_key, e);
+        patches_incomplete = true;
         Vec::new()
       }
     };
@@ -181,13 +232,14 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
         Ok(r) => r,
         Err(e) => {
           log::warn!("index: get_repo_releases('{}') failed, skipping: {}", &updates_project_id, e);
+          patches_incomplete = true;
           continue;
         }
       };
 
       for rr in repo_releases {
         let mut manifest_asset_url: Option<String> = None;
-        let patch_assets: Vec<IndexAsset> = rr
+        let mut patch_assets: Vec<IndexAsset> = rr
           .assets
           .iter()
           .map(|a| {
@@ -198,12 +250,27 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
               name: a.name.clone(),
               size: a.size.unwrap_or(0),
               url: a.download_link.clone(),
+              sha256: None,
+              kind: Default::default(),
+              target: None,
             }
           })
           .collect();
 
-        // Extract base_patch from the patch manifest (CDN, not rate-limited).
-        let base_patch = extract_base_patch(manifest_asset_url.as_deref()).await;
+        // Fetch the full patch manifest (CDN, not rate-limited): base_patch
+        // for the chain order + per-file sha256/kind/target for the assets.
+        let patch_manifest = extract_patch_manifest(manifest_asset_url.as_deref()).await;
+        let base_patch = patch_manifest.as_ref().and_then(|m| m.base_patch.clone());
+        if let Some(m) = &patch_manifest {
+          let by_name: HashMap<&str, &ReleaseManifestFile> = m.files.iter().map(|f| (f.name.as_str(), f)).collect();
+          for asset in patch_assets.iter_mut() {
+            if let Some(mf) = by_name.get(asset.name.as_str()).copied() {
+              asset.sha256 = mf.sha256.clone();
+              asset.kind = mf.kind;
+              asset.target = mf.target.clone();
+            }
+          }
+        }
 
         patches.push(IndexPatch {
           tag: rr.tag_name,
@@ -220,6 +287,25 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     // provider APIs return releases newest-first, which would otherwise
     // invert the chain and mislead the user.
     let patches = order_patches_by_chain(patches);
+
+    // Carry over the previously published chain when this run could not read
+    // it in full — but only if the old chain is actually longer, so a genuine
+    // new patch is never replaced by a stale list.
+    let patches = if patches_incomplete {
+      match old_entries_by_name.get(&normalize_release_name(&release.name)) {
+        Some(old) if old.patches.len() > patches.len() => {
+          log::warn!(
+            "index: patch collection for '{}' was incomplete, carrying over {} previously published patches",
+            &release.name,
+            old.patches.len()
+          );
+          old.patches.clone()
+        }
+        _ => patches,
+      }
+    } else {
+      patches
+    };
 
     release_entries.push(ReleaseIndexEntry {
       name: release.name.clone(),
@@ -268,9 +354,38 @@ fn apply_dev_managed_fields(mut index: ReleaseIndex, existing: Option<ReleaseInd
 /// Rebuild `index.json` from live API data and commit it to the provider's
 /// index repo.  Errors are returned but callers should treat them as
 /// non-fatal warnings.
-pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> {
-  log::info!("Publishing release index (provider: {})...", api.id());
+/// Publish the release index.  When `force` is false (normal uploads), a
+/// safety check refuses to publish if the new index would have fewer releases
+/// than the previous one (prevents a transient API outage from wiping
+/// releases).  When `force` is true, the check is skipped — required after
+/// deleting a release, otherwise the old entry would block publishing forever.
+pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync), force: bool) -> Result<()> {
+  log::info!("Publishing release index (provider: {}, force={})...", api.id(), force);
   let index = collect_release_index(api).await?;
+
+  // Safety check: refuse to publish if any release of the previously published
+  // index would disappear (unless force=true, e.g. after a deliberate
+  // deletion).  Compares NAME SETS, not counts: dropping release A while a new
+  // release B appears keeps the count equal and would slip through.
+  if !force {
+    if let Ok(old_index) = crate::service::index::load_index(api.id()).await {
+      let new_names: std::collections::HashSet<String> =
+        index.releases.iter().map(|r| normalize_release_name(&r.name)).collect();
+      let lost: Vec<&str> = old_index
+        .releases
+        .iter()
+        .filter(|r| !new_names.contains(&normalize_release_name(&r.name)))
+        .map(|r| r.name.as_str())
+        .collect();
+      if !lost.is_empty() {
+        anyhow::bail!(
+          "index safety: {:?} present in the previous index but missing now — refusing to publish (use the forced re-publish if the release was deleted on purpose)",
+          lost
+        );
+      }
+    }
+  }
+
   let index = merge_existing_dev_managed_fields(api, index).await?;
   let content = serde_json::to_string_pretty(&index).context("index: serialize")?;
   commit_index_json(api, &content).await?;
@@ -290,9 +405,9 @@ fn manifest_url_for(api: &(dyn ApiProvider + Send + Sync), main: &Project) -> St
   format!("{}/{}/{}/raw/master/{}", GITHUB_HOST, GITHUB_ORG, main.name, MANIFEST_NAME,)
 }
 
-/// Download a patch manifest (CDN URL) and extract the `base_patch` field.
+/// Download a patch manifest (CDN URL) and return it parsed.
 /// Returns `None` on any error (non-fatal — the writer should not abort).
-async fn extract_base_patch(manifest_url: Option<&str>) -> Option<String> {
+async fn extract_patch_manifest(manifest_url: Option<&str>) -> Option<ReleaseManifest> {
   let url = manifest_url?;
   let cached = crate::utils::http_cache::fetch(
     &crate::utils::http_cache::SHARED_CLIENT,
@@ -301,8 +416,7 @@ async fn extract_base_patch(manifest_url: Option<&str>) -> Option<String> {
   )
   .await
   .ok()?;
-  let manifest: ReleaseManifest = serde_json::from_slice(&cached.bytes).ok()?;
-  manifest.base_patch
+  serde_json::from_slice(&cached.bytes).ok()
 }
 
 /// Choose the correct `project_id` argument for provider API calls.

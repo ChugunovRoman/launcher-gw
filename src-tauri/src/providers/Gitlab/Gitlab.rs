@@ -77,6 +77,9 @@ impl Gitlab {
   pub fn put(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().put(url)
   }
+  pub fn delete(&self, url: &str) -> reqwest::RequestBuilder {
+    self.get_client().delete(url)
+  }
   pub fn head(&self, url: &str) -> reqwest::RequestBuilder {
     self.get_client().head(url)
   }
@@ -235,6 +238,14 @@ impl ApiProvider for Gitlab {
 
   async fn create_release(&self, repo_id: &str, tag_name: &str, assets: Vec<CreateReleaseAsset>) -> Result<CreateReleaseResponse> {
     __create_release(self, repo_id, tag_name, assets).await
+  }
+
+  async fn get_release_assets_sha256(&self, project_id: &str, tag_name: &str) -> Result<Vec<AssetSha256>> {
+    __get_release_assets_sha256(self, project_id, tag_name).await
+  }
+
+  async fn delete_release_asset(&self, project_id: &str, tag_name: &str, file_name: &str) -> Result<()> {
+    __delete_release_asset(self, project_id, tag_name, file_name).await
   }
 
   // Issues API

@@ -131,3 +131,16 @@ pub struct CreateReleaseResponse {
   pub id: u32,
   pub upload_url: String,
 }
+
+/// Server-side hash of a released asset, as reported by the provider
+/// (GitHub `digest`, GitLab `file_sha256`). `sha256 = None` when the provider
+/// has no hash for the asset (e.g. GitHub assets uploaded before the
+/// `digest` field existed).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetSha256 {
+  pub name: String,
+  #[serde(default)]
+  pub size: Option<u64>,
+  #[serde(default)]
+  pub sha256: Option<String>,
+}

@@ -217,12 +217,12 @@ pub async fn fetch(
             // Non-2xx, non-304 — try stale fallback
             let status = r.status();
             log::warn!("http_cache: unexpected status {} for {}", status, url);
-            serve_stale_or_err(&body_path, status.as_u16(), url)
+            serve_stale_or_err(&body_path, &meta_path, status.as_u16(), url)
         }
         Err(e) => {
             // Network/timeout error — serve stale if we have it
             log::warn!("http_cache: network error for {}: {}", url, e);
-            serve_stale_or_err(&body_path, 0, url)
+            serve_stale_or_err(&body_path, &meta_path, 0, url)
         }
     }
 }
@@ -325,24 +325,61 @@ fn touch_meta_fetched_at(path: &PathBuf, etag: &Option<String>, url: &str) {
     }
 }
 
-fn serve_stale_or_err(body_path: &PathBuf, status_code: u16, url: &str) -> Result<CachedBody> {
-    if body_path.exists() {
-        let bytes = fs::read(body_path)
-            .context("http_cache: failed to read stale body")?;
-        log::warn!(
-            "http_cache: serving stale cache for {} (status {})",
-            url, status_code
-        );
-        Ok(CachedBody {
-            bytes,
-            source: CacheSource::StaleFallback,
-        })
-    } else {
+/// Maximum age of a stale entry that may still be served when the live request
+/// failed (plan decision Q3: 7 days).  A body older than this is no longer
+/// trustworthy, so the caller gets an error and falls back to its own source
+/// (e.g. the live API) instead of silently presenting week-old data as current.
+///
+/// Applies to BOTH failure kinds — a server error and no network at all.  The
+/// consequence for a player who has been offline for over a week is an explicit
+/// error instead of a stale release list; that is the agreed behaviour (B4 was
+/// precisely "stale of unlimited age is served as valid").
+const MAX_STALE_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// Serve the cached body when the live request failed (`status_code == 0`
+/// means a network/timeout error, anything else is the server's status).
+/// The entry must be younger than `MAX_STALE_AGE`; a missing or unreadable
+/// `.meta.json` counts as "age unknown" and is refused for the same reason.
+fn serve_stale_or_err(body_path: &PathBuf, meta_path: &PathBuf, status_code: u16, url: &str) -> Result<CachedBody> {
+    if !body_path.exists() {
         bail!(
             "http_cache: request to {} failed (status {}) and no cached body available",
             url, status_code
         );
     }
+
+    let age = read_meta(meta_path).ok().and_then(|meta| {
+        chrono::DateTime::parse_from_rfc3339(&meta.fetched_at)
+            .ok()
+            .map(|fetched| Utc::now().signed_duration_since(fetched.with_timezone(&Utc)))
+    });
+    match age {
+        // A negative age means the timestamp is in the future (clock skew, DST
+        // rollback) — clamp to 0 and treat the entry as fresh instead of
+        // reporting a nonsensical "too old (-0 days)".
+        Some(age) if (age.num_seconds().max(0) as u64) < MAX_STALE_AGE.as_secs() => {}
+        Some(age) => bail!(
+            "http_cache: request to {} failed (status {}) and the cached body is too old ({} days)",
+            url,
+            status_code,
+            age.num_days()
+        ),
+        None => bail!(
+            "http_cache: request to {} failed (status {}) and the cached body has no usable timestamp",
+            url, status_code
+        ),
+    }
+
+    let bytes = fs::read(body_path)
+        .context("http_cache: failed to read stale body")?;
+    log::warn!(
+        "http_cache: serving stale cache for {} (status {})",
+        url, status_code
+    );
+    Ok(CachedBody {
+        bytes,
+        source: CacheSource::StaleFallback,
+    })
 }
 
 /// Delete oldest cache entries until total body size ≤ MAX_CACHE_SIZE_BYTES.

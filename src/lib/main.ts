@@ -1,11 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { allowPackMod, versionsWillBeLoaded, appConfig, startupState, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind } from '../store/main';
+import { allowPackMod, appConfig, startupState, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind } from '../store/main';
 import { DownloadStatus } from "../consts";
-import { versions } from '../store/upload';
+import { applyVersions } from './versions';
 import { get } from 'svelte/store';
-import { sep } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
 
 const unlisten: Map<string, (() => void)> = new Map();
@@ -103,9 +102,10 @@ export async function initMainListeners() {
         console.error("versions-loaded: get_config fallback failed", e);
       }
     }
-    const separ = await sep();
-    versions.set(event.payload.map(version => prepareVersionItem(get(appConfig), version, separ)));
-    versionsWillBeLoaded.set(true);
+    // Through applyVersions so this event shares the generation counter with
+    // loadVersions — otherwise a late startup event overwrites a list the
+    // user just refreshed by hand (and vice versa).
+    await applyVersions(event.payload);
   }));
   unlisten.set('providers-stats', await listen('providers-stats', () => {
     // Refresh the providers store from the backend.
@@ -143,6 +143,12 @@ export function prepareVersionItem(appConfig: AppConfig, version: Version, sep: 
     isStoped = true;
     downloadProgress = (downloadedFilesCnt / totalFileCount) * 100.0;
     status = DownloadStatus.Pause;
+    // Files with a terminal error keep the version in the Error state after a
+    // restart, so the UI offers "Retry" (continue re-downloads failed files).
+    const hasErroredFiles = Object.values(progress.files ?? {}).some((f) => !!f.last_error);
+    if (hasErroredFiles) {
+      status = DownloadStatus.Error;
+    }
 
     invoke('emit_file_list_stats', { versionName: version.name });
   }

@@ -64,6 +64,8 @@
         return "addFiles";
       case 1:
         return "compressing";
+      case 2:
+        return "hashing";
     }
   }
 
@@ -143,6 +145,10 @@
 
   <Progress progress={$progress} />
 
+  {#if $completed}
+    <div class="pack-summary">{$_("app.pack.hashesDone")}</div>
+  {/if}
+
   <span
     role="button"
     tabindex="0"
@@ -175,6 +181,14 @@
     -webkit-app-region: no-drag;
     margin-bottom: 0.5rem;
     text-align: left;
+  }
+
+  .pack-summary {
+    -webkit-app-region: no-drag;
+    margin-top: 0.5rem;
+    text-align: left;
+    color: #4caf50;
+    font-size: 0.85rem;
   }
 
   .input-group {

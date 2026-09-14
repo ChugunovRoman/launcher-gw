@@ -1,8 +1,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import {
-    appConfig,
-    expandedIndex,
+    expandedKey,
     localVersions,
     removeLocalVersion,
     removeVersion,
@@ -12,29 +11,19 @@
   import Modal from "./Base.svelte";
   import Button from "../Components/Button.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { mainVersion, selectedVersion, versions } from "../store/upload";
-  import { sep } from "@tauri-apps/api/path";
-  import { prepareVersionItem } from "../lib/main";
+  import { mainVersion, selectedVersion } from "../store/upload";
+  import { loadVersions } from "../lib/versions";
 
   function handleClose() {
     console.log("Dlg was closed");
   }
-  function hasLocalVersion(version: Version) {
-    for (const [name, local] of $localVersions) {
-      if (name === version.name) return true;
-      if (local.path === version.name) return true;
-      if (local.path === version.path) return true;
-    }
 
-    return false;
-  }
   async function yesHandler() {
     $showDlgRemoveVersion = false;
     $removeVersionInProcess = true;
 
     try {
       const version = $removeVersion!;
-      const separ = await sep();
       await invoke<void>("delete_installed_version", { versionName: version.path });
 
       removeLocalVersion(version.name);
@@ -51,21 +40,15 @@
         selectedVersion.set(undefined);
       }
 
-      setTimeout(() => {
-        invoke<Version[]>("get_available_versions").then((data) => {
-          versions.clear();
+      // D3: use loadVersions instead of clear()+push() which silently
+      // fails to notify Svelte subscribers.  No setTimeout needed.
+      try {
+        await loadVersions();
+      } catch (e) {
+        console.error("RemoveVersion: loadVersions failed:", e);
+      }
 
-          for (const item of data) {
-            const found = $versions.find((v) => v.name === item.name);
-            const hasLocal = hasLocalVersion(item);
-            if (!found && !hasLocal) {
-              $versions.push(prepareVersionItem($appConfig, item, separ));
-            }
-          }
-        });
-      }, 200);
-
-      $expandedIndex = null;
+      $expandedKey = null;
     } finally {
       $removeVersionInProcess = false;
     }

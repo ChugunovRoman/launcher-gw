@@ -8,6 +8,8 @@ pub enum DownloadStatus {
   Pause,
   DownloadFiles,
   Unpacking,
+  Verifying,
+  Error,
 }
 
 #[derive(Clone, Serialize)]
@@ -44,15 +46,42 @@ pub struct DownlaodFileStat {
   pub size: Option<u64>,
 }
 
+/// How a manifest entry is processed after downloading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestFileKind {
+  /// Unpack the zip into the install dir, then delete the archive.
+  #[default]
+  Zip,
+  /// Copy the file as-is into `<install>/<target>` (or `<name>` when target is
+  /// empty) — for future engine `.db*`/`.xdb` archives that need no unpacking.
+  Raw,
+  /// The patch `manifest.json` itself, stored in `files` as an asset; it is
+  /// metadata, not download data.
+  Manifest,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseManifestFile {
   #[serde(default)]
   pub name: String,
   #[serde(default)]
   pub size: u64,
+  /// SHA-256 of the finished output file (the `dataN.zip` / `.db` itself, not
+  /// the archive contents), lowercase hex. None = old manifest without hashes.
+  #[serde(default)]
+  pub sha256: Option<String>,
+  #[serde(default)]
+  pub kind: ManifestFileKind,
+  /// Raw files only: path inside the install dir, '/' separators.
+  #[serde(default)]
+  pub target: Option<String>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReleaseManifest {
+  /// 0 = legacy (no hashes), 2 = sha256 + kind/target manifest (this schema).
+  #[serde(default)]
+  pub schema: u32,
   #[serde(default)]
   pub total_files_count: u32,
   #[serde(default)]
@@ -114,4 +143,24 @@ pub struct UnzipTask {
   pub file_name: String,
   pub archive_path: PathBuf,
   pub destination_path: PathBuf,
+}
+
+/// Post-processing dispatched after a downloaded file passes verification.
+/// `Unzip` — extract the zip into `destination_path` (a directory), then the
+/// archive is deleted. `Copy` — move a raw file to `destination_path` (a full
+/// file path inside the install dir), no unpacking (engine `.db*` archives).
+#[derive(Debug)]
+pub enum PostProcessTask {
+  Unzip(UnzipTask),
+  Copy(UnzipTask),
+}
+
+/// Error payload of the `download-version-file-error` event.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileErrorPayload {
+  pub version_name: String,
+  pub file: String,
+  /// One of the FILE_ERR_* constants from consts.rs.
+  pub code: String,
+  pub message: String,
 }

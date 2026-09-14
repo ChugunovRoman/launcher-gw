@@ -110,6 +110,30 @@ pub const GITHUB_PID: &str = "github";
 
 pub const PULL_FILES_SIZE: u8 = 1;
 
+// Download/upload integrity retry limits (per file, not per worker).
+/// Network errors: connection resets, HTTP failures, interrupted streams.
+pub const MAX_DOWNLOAD_RETRIES: u32 = 5;
+/// Size/hash mismatches of a completed download.
+pub const MAX_VERIFY_RETRIES: u32 = 3;
+/// Asset hash mismatches detected on the server after an upload.
+pub const MAX_UPLOAD_VERIFY_RETRIES: u32 = 3;
+
+// Command-level error codes (returned as Err strings to the frontend).
+pub const ERR_USER_CANCELLED: &str = "USER_CANCELLED";
+pub const ERR_DOWNLOAD_FAILED: &str = "DOWNLOAD_FAILED";
+pub const ERR_UPLOAD_HASH_MISMATCH: &str = "UPLOAD_HASH_MISMATCH";
+pub const ERR_RELEASE_NOT_IN_INDEX: &str = "RELEASE_NOT_IN_INDEX";
+pub const ERR_DOWNLOAD_ALREADY_RUNNING: &str = "DOWNLOAD_ALREADY_RUNNING";
+pub const ERR_VERIFY_ALREADY_RUNNING: &str = "VERIFY_ALREADY_RUNNING";
+
+// Per-file error codes carried by the `download-version-file-error` event.
+pub const FILE_ERR_HASH_MISMATCH: &str = "HASH_MISMATCH";
+pub const FILE_ERR_SIZE_MISMATCH: &str = "SIZE_MISMATCH";
+pub const FILE_ERR_NETWORK: &str = "NETWORK";
+pub const FILE_ERR_UNPACK_FAILED: &str = "UNPACK_FAILED";
+pub const FILE_ERR_COPY_FAILED: &str = "COPY_FAILED";
+pub const FILE_ERR_VERIFY_FAILED: &str = "VERIFY_FAILED";
+
 // Static release index (player-side, raw CDN — not counted against API rate limit)
 // Per-provider: each provider gets its own index with provider-specific URLs.
 // The writer publishes the index for the *currently selected* provider; the
@@ -147,3 +171,8 @@ pub const CACHE_TTL_BACKGROUND_SECS: u64 = 86400; // 24 hours
 /// `create_tag` / `create_release` (which currently hardcode "master" on the
 /// provider side too — see Github::__create_release `target_commitish`).
 pub const DEFAULT_BRANCH: &str = "master";
+
+/// GitLab generic package namespace used for release assets
+/// (`packages/generic/<namespace>/<tag>/<file>`). Kept in consts so the
+/// package-lookup API calls match the upload URLs.
+pub const GENERIC_PACKAGE_NAMESPACE: &str = "gw_releases";

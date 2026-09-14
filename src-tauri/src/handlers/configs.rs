@@ -205,6 +205,8 @@ pub async fn set_current_api_provider(
 
   {
     let mut service_guard = service.lock().await;
+    // Invalidate all cached release lists — the new provider has its own set.
+    service_guard.releases_cache.clear();
     let api_client = &mut service_guard.api_client;
     api_client.set_current_provider(&provider).map_err(|e| e.to_string())?;
   };

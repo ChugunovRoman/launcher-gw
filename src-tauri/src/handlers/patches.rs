@@ -37,6 +37,71 @@ fn patch_upload_log(app: &tauri::AppHandle, message: String) {
   let _ = app.emit("patch-upload-log", message);
 }
 
+/// Streams one patch asset to `asset_url` with `patch-upload-progress` events;
+/// returns the number of bytes actually streamed. Re-used by the re-uploads
+/// after a server-side hash mismatch (the file is re-opened each attempt).
+#[allow(clippy::too_many_arguments)]
+async fn upload_patch_asset_stream(
+  app: &tauri::AppHandle,
+  api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync),
+  file_path: &Path,
+  asset_name: String,
+  asset_url: String,
+  total_size: u64,
+  uploaded_before: u64,
+  grand_total: u64,
+  cancel_rx: broadcast::Receiver<()>,
+) -> Result<u64, String> {
+  let asset_name_for_stream = asset_name.clone();
+  let file_handle = File::open(file_path).await.map_err(|e| {
+    let err = anyhow::anyhow!(e);
+    log_full_error(&err);
+    format!("Failed to open file '{}': {}", &asset_name, err)
+  })?;
+  let file_stream = ReaderStream::new(file_handle);
+  let start_time = Instant::now();
+
+  let uploaded_for_emit = Arc::new(std::sync::atomic::AtomicU64::new(0));
+  let uploaded_for_emit_in_stream = uploaded_for_emit.clone();
+  let mut cancel_rx_for_stream = cancel_rx;
+  // Owned handle: the stream is boxed as `dyn Stream + 'static`.
+  let app_handle = app.clone();
+
+  let progress_stream = async_stream::stream! {
+    let mut uploaded = 0u64;
+    for await chunk in file_stream {
+      if let Ok(()) = cancel_rx_for_stream.try_recv() {
+        log::info!("Patch upload of '{}' cancelled mid-stream", &asset_name_for_stream);
+        return;
+      }
+      if let Ok(ref data) = chunk {
+        uploaded += data.len() as u64;
+        uploaded_for_emit_in_stream.store(uploaded, std::sync::atomic::Ordering::Relaxed);
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let speed = if elapsed > 0.0 { uploaded as f64 / elapsed } else { 0.0 };
+        let _ = app_handle.emit("patch-upload-progress", UploadProgressPayload {
+          file_name: asset_name_for_stream.clone(),
+          file_uploaded_size: uploaded,
+          file_total_size: total_size,
+          total_uploaded_size: uploaded_before + uploaded,
+          total_size: grand_total,
+          speed,
+        });
+      }
+      yield chunk;
+    }
+  };
+  let boxed_stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin> = Box::new(Box::pin(progress_stream));
+
+  log::debug!("upload_patch: asset: {} by url: {}", &asset_name, &asset_url);
+  api.upload_release_file(&asset_url, total_size, boxed_stream).await.map_err(|e| {
+    log_full_error(&e);
+    format!("upload_release_file '{}' failed: {}", &asset_name, e)
+  })?;
+
+  Ok(uploaded_for_emit.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Collects a partial-update patch from the game git repositories:
 /// committed changes (latest reachable tag -> HEAD) of every repo found
 /// under the selected folder. Heavy git/fs work runs on a blocking thread.
@@ -190,15 +255,20 @@ pub async fn upload_patch(
     vec![],
     None,
     Some(patch_meta),
+    Vec::new(),
   )
   .await?;
 
   // The patch manifest itself is uploaded as a release asset (NOT committed
   // into the repo: full releases already own the single manifest.json path).
+  // kind = Manifest so installers skip it as data; sha256 stays None.
   let manifest_size = fs::metadata(pack_dir.join(MANIFEST_NAME)).map(|m| m.len()).unwrap_or(0);
   manifest.files.push(ReleaseManifestFile {
     name: MANIFEST_NAME.to_string(),
     size: manifest_size,
+    sha256: None,
+    kind: crate::handlers::dto::ManifestFileKind::Manifest,
+    target: None,
   });
 
   // ------------------------------------------------------------------
@@ -249,69 +319,75 @@ pub async fn upload_patch(
   let _ = app.emit("patch-upload-files-count", (done_count, total_count));
 
   for file in &manifest.files {
-    // Cancel check before opening.
-    if cancel_tx.receiver_count() > 0 {
-      let mut probe = cancel_tx.subscribe();
-      if probe.try_recv().is_ok() {
-        patch_upload_log(&app, format!("Patch upload cancelled before file: {}", &file.name));
-        return Err("USER_CANCELLED".to_string());
-      }
-    }
-
     let asset_url = build_asset_url(&upload_template, &project_id, "gw_releases", &tag_name, &file.name);
     let asset_name = file.name.clone();
-    let asset_name_for_stream = asset_name.clone();
     let total_size = file.size;
-    let file_handle = File::open(pack_dir.join(&asset_name)).await.map_err(|e| {
-      let err = anyhow::anyhow!(e);
-      log_full_error(&err);
-      format!("Failed to open file '{}': {}", &asset_name, err)
-    })?;
-    let file_stream = ReaderStream::new(file_handle);
-    let start_time = Instant::now();
+    let file_path = pack_dir.join(&asset_name);
 
-    let uploaded_before_this_file = uploaded_before;
-    let uploaded_for_emit = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let uploaded_for_emit_in_stream = uploaded_for_emit.clone();
-    let mut cancel_rx_for_stream = cancel_tx.subscribe();
-    let app_handle = app.clone();
-
-    let progress_stream = async_stream::stream! {
-      let mut uploaded = 0u64;
-      for await chunk in file_stream {
-        if let Ok(()) = cancel_rx_for_stream.try_recv() {
-          log::info!("Patch upload of '{}' cancelled mid-stream", &asset_name_for_stream);
-          return;
+    // Upload + server-side hash verification loop: on a mismatch the remote
+    // asset is deleted and re-uploaded, up to MAX_UPLOAD_VERIFY_RETRIES times.
+    let mut verify_attempts: u32 = 0;
+    loop {
+      // Cancel check before each attempt.
+      if cancel_tx.receiver_count() > 0 {
+        let mut probe = cancel_tx.subscribe();
+        if probe.try_recv().is_ok() {
+          patch_upload_log(&app, format!("Patch upload cancelled before file: {}", &file.name));
+          return Err("USER_CANCELLED".to_string());
         }
-        if let Ok(ref data) = chunk {
-          uploaded += data.len() as u64;
-          uploaded_for_emit_in_stream.store(uploaded, std::sync::atomic::Ordering::Relaxed);
-          let elapsed = start_time.elapsed().as_secs_f64();
-          let speed = if elapsed > 0.0 { uploaded as f64 / elapsed } else { 0.0 };
-          let _ = app_handle.emit("patch-upload-progress", UploadProgressPayload {
-            file_name: asset_name_for_stream.clone(),
-            file_uploaded_size: uploaded,
-            file_total_size: total_size,
-            total_uploaded_size: uploaded_before_this_file + uploaded,
-            total_size: grand_total,
-            speed,
-          });
-        }
-        yield chunk;
       }
-    };
-    let boxed_stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin> = Box::new(Box::pin(progress_stream));
 
-    log::debug!("upload_patch: asset: {} by url: {}", &asset_name, &asset_url);
-    api.upload_release_file(&asset_url, total_size, boxed_stream).await.map_err(|e| {
-      log_full_error(&e);
-      format!("upload_release_file '{}' failed: {}", &asset_name, e)
-    })?;
+      let actually_uploaded = upload_patch_asset_stream(
+        &app,
+        api,
+        &file_path,
+        asset_name.clone(),
+        asset_url.clone(),
+        total_size,
+        uploaded_before,
+        grand_total,
+        cancel_tx.subscribe(),
+      )
+      .await?;
 
-    let actually_uploaded = uploaded_for_emit.load(std::sync::atomic::Ordering::Relaxed);
-    if actually_uploaded < total_size {
-      patch_upload_log(&app, format!("Upload of '{}' was interrupted ({} of {} bytes)", &asset_name, actually_uploaded, total_size));
-      return Err("USER_CANCELLED".to_string());
+      if actually_uploaded < total_size {
+        patch_upload_log(&app, format!("Upload of '{}' was interrupted ({} of {} bytes)", &asset_name, actually_uploaded, total_size));
+        return Err("USER_CANCELLED".to_string());
+      }
+
+      let Some(expected) = file.sha256.as_deref().filter(|s| !s.is_empty()) else {
+        break;
+      };
+
+      match api.get_uploaded_asset_sha256(&project_id, &tag_name, &asset_name).await {
+        Ok(Some(remote)) if remote.eq_ignore_ascii_case(expected) => {
+          patch_upload_log(&app, format!("File {}: sha256 verified on server", &asset_name));
+          break;
+        }
+        Ok(Some(remote)) => {
+          verify_attempts += 1;
+          if verify_attempts > crate::consts::MAX_UPLOAD_VERIFY_RETRIES {
+            patch_upload_log(&app, format!("File {}: server sha256 {} != local {} after {} attempts", &asset_name, &remote, expected, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
+            return Err(crate::consts::ERR_UPLOAD_HASH_MISMATCH.to_string());
+          }
+          patch_upload_log(&app, format!("File {}: server sha256 {} != local {}, deleting asset and re-uploading (attempt {}/{})", &asset_name, &remote, expected, verify_attempts, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
+          if let Err(e) = api.delete_release_asset(&project_id, &tag_name, &asset_name).await {
+            // Fatal: see the identical comment in upload_v2.rs — GitHub
+            // rejects a re-upload under an existing asset name, so a failed
+            // delete must not be swallowed as a warning.
+            patch_upload_log(&app, format!("File {}: failed to delete stale asset before re-upload: {}", &asset_name, e));
+            return Err(crate::consts::ERR_UPLOAD_HASH_MISMATCH.to_string());
+          }
+        }
+        Ok(None) => {
+          patch_upload_log(&app, format!("File {}: server returned no sha256, verification skipped", &asset_name));
+          break;
+        }
+        Err(e) => {
+          log::warn!("Cannot fetch server sha256 of '{}': {} — verification skipped", &asset_name, e);
+          break;
+        }
+      }
     }
 
     uploaded_before += total_size;
@@ -322,9 +398,16 @@ pub async fn upload_patch(
 
   patch_upload_log(&app, format!("Patch '{}' uploaded successful !", &tag_name));
 
-  // Best-effort: re-publish the static release index.  Non-fatal.
-  if let Err(e) = crate::service::index_publisher::publish_index(api).await {
+  // Best-effort: re-publish the static release index.  Non-fatal but visible.
+  if let Err(e) = crate::service::index_publisher::publish_index(api, false).await {
     log::warn!("Failed to publish release index after patch upload: {}", e);
+    patch_upload_log(&app, format!("WARNING: Failed to publish release index: {}. The patch may not appear for players until the index is re-published manually.", e));
+  }
+
+  // Invalidate AFTER publishing (see the same note in upload_v2.rs).
+  {
+    let mut svc = service.lock().await;
+    svc.invalidate_releases();
   }
 
   // ------------------------------------------------------------------

@@ -1,5 +1,6 @@
 pub mod client;
 pub mod create_release;
+pub mod download_worker;
 pub mod dto;
 pub mod game_tracker;
 pub mod files;

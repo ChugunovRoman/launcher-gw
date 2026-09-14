@@ -39,8 +39,10 @@ declare interface VersionFileDownload {
   downloadSpeed: number;
   speedValue: number;
   sfxValue: string;
-  // 0 - в очереди на загрузку; 1 - загружается; 2 - распаковывается; 3 - скачаен и распакован
+  // 0 - в очереди на загрузку; 1 - загружается; 2 - распаковывается; 3 - скачан и распакован;
+  // 4 - проверка хэша (verifying); 5 - ошибка (код в errorCode)
   status: number;
+  errorCode?: string;
 }
 declare interface InstalledPatch {
   name: string;
@@ -96,6 +98,12 @@ declare interface FileProgress {
   is_unpacked: boolean;
   size: number;
   total_size: number;
+  sha256?: string | null;
+  kind?: ManifestFileKind;
+  target?: string | null;
+  net_retries?: number;
+  verify_retries?: number;
+  last_error?: string | null;
 }
 declare interface IndexPreset {
   id: string;
@@ -180,6 +188,7 @@ declare interface AppConfig {
   patch_upload_dir: string;
   patch_exclude_patterns: string[];
   versions: Version[];
+  versions_provider_id?: string | null;
   choosed_version_path?: string | null;
   selected_version?: string;
   selected_profile?: string;
@@ -200,11 +209,16 @@ declare interface UploadManifest {
   total_size: number;
   compressed_size: number;
 }
+declare type ManifestFileKind = "zip" | "raw" | "manifest";
 declare interface ReleaseManifestFile {
   name: string;
   size: number;
+  sha256?: string | null;
+  kind?: ManifestFileKind;
+  target?: string | null;
 }
 declare interface ReleaseManifest {
+  schema?: number;
   total_files_count: number;
   total_size: number;
   compressed_size: number;
@@ -334,9 +348,41 @@ declare interface PatchCheckResult {
   missing: string[];
 }
 declare interface PatchInstallProgress {
-  stage: "download" | "unpack" | "delete" | "done";
+  stage: "download" | "unpack" | "delete" | "done" | "error";
   version: string;
   file: string;
   file_progress: number;
   total_progress: number;
+}
+
+// Integrity check of an installed version (raw files only).
+declare interface VerifyReport {
+  checked: number;
+  ok: number;
+  missing: string[];
+  size_mismatch: string[];
+  hash_mismatch: string[];
+  skipped_no_hash: number;
+}
+declare interface VerifyInstalledProgress {
+  version_name: string;
+  file: string;
+  done_files: number;
+  total_files: number;
+  done_bytes: number;
+  total_bytes: number;
+}
+// Per-file download error event payload.
+declare interface FileErrorPayload {
+  version_name: string;
+  file: string;
+  // hashMismatch | sizeMismatch | network | unpackFailed | copyFailed | verifyFailed
+  code: string;
+  message: string;
+}
+// Server-side asset hashes (Get SHA developer tool).
+declare interface AssetSha256 {
+  name: string;
+  size: number | null;
+  sha256: string | null;
 }

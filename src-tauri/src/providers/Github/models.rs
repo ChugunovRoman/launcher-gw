@@ -43,6 +43,10 @@ pub struct ReleaseAssetGithub {
   pub size: u64,
   pub name: String,
   pub browser_download_url: String,
+  /// "sha256:<hex>" of the uploaded bytes; present only for assets uploaded
+  /// after GitHub added the field — None for older assets.
+  #[serde(default)]
+  pub digest: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseGithub {

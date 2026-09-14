@@ -1,5 +1,5 @@
 use crate::consts::MANIFEST_NAME;
-use crate::handlers::dto::{CompressProgressPayload, PatchMeta, ReleaseManifest, ReleaseManifestFile};
+use crate::handlers::dto::{CompressProgressPayload, ManifestFileKind, PatchMeta, ReleaseManifest, ReleaseManifestFile};
 use crate::utils::CountingWriter::CountingWriter;
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
@@ -21,7 +21,7 @@ pub async fn create_split_archives(
   excludePatterns: Vec<String>,
   exePath: Option<String>,
 ) -> Result<(), String> {
-  pack_split_archives(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, None)
+  pack_split_archives(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, None, Vec::new())
     .await
     .map(|_| ())
 }
@@ -30,6 +30,10 @@ pub async fn create_split_archives(
 /// `targetPath` and writes `manifest.json` next to them. Shared by the Pack
 /// view (full releases, `patch_meta = None`) and patch uploads
 /// (`patch_meta = Some(..)` adds patch fields into the manifest).
+///
+/// `extra_raw_files` — (src, target) pairs copied as-is into the pack dir and
+/// recorded with `kind = Raw` (dev/test hook for future `.db` archives; not
+/// exposed in the Pack UI).
 pub async fn pack_split_archives(
   app: &tauri::AppHandle,
   sourceDir: String,
@@ -38,16 +42,52 @@ pub async fn pack_split_archives(
   excludePatterns: Vec<String>,
   exePath: Option<String>,
   patch_meta: Option<PatchMeta>,
+  extra_raw_files: Vec<(PathBuf, String)>,
 ) -> Result<ReleaseManifest, String> {
   // Zip+zstd packing of tens of GB is pure sync CPU/IO — run it on the
   // blocking pool so it does not stall the async runtime (and every IPC
   // command with it) for minutes.
   let app = app.clone();
   tokio::task::spawn_blocking(move || {
-    pack_split_archives_blocking(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, patch_meta)
+    pack_split_archives_blocking(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, patch_meta, extra_raw_files)
   })
   .await
   .map_err(|e| e.to_string())?
+}
+
+/// Hash a finished archive and push its manifest entry.
+/// The hash is computed by re-reading the file: ZipWriter seeks backwards
+/// inside the archive, so a streaming hash over the written bytes is wrong.
+fn finalize_archive(
+  app: &tauri::AppHandle,
+  out_dir: &Path,
+  archive_name: String,
+  manifest: &mut ReleaseManifest,
+  compressed_size: &mut u64,
+) -> Result<(), String> {
+  let file_path = out_dir.join(&archive_name);
+  let _ = app.emit(
+    "packing-progress",
+    CompressProgressPayload {
+      status: 2,
+      current_file: archive_name.clone(),
+      total_size: 0,
+      processed_size: 0,
+      percentage: 0.,
+    },
+  );
+  let sha = crate::utils::hash::sha256_file(&file_path, None, None).map_err(|e| e.to_string())?;
+  let size = file_path.metadata().map_err(|e| e.to_string())?.len();
+  *compressed_size += size;
+  log::info!("Packed {}: {} bytes, sha256 {}", &archive_name, size, &sha);
+  manifest.files.push(ReleaseManifestFile {
+    name: archive_name,
+    size,
+    sha256: Some(sha),
+    kind: ManifestFileKind::Zip,
+    target: None,
+  });
+  Ok(())
 }
 
 fn pack_split_archives_blocking(
@@ -58,6 +98,7 @@ fn pack_split_archives_blocking(
   excludePatterns: Vec<String>,
   exePath: Option<String>,
   patch_meta: Option<PatchMeta>,
+  extra_raw_files: Vec<(PathBuf, String)>,
 ) -> Result<ReleaseManifest, String> {
   let src_dir = Path::new(&sourceDir);
   let out_dir = Path::new(&targetPath);
@@ -107,6 +148,8 @@ fn pack_split_archives_blocking(
   );
 
   let mut manifest = ReleaseManifest {
+    // schema 2 = sha256 + kind/target per file (see download-integrity plan).
+    schema: 2,
     total_files_count: all_files.len() as u32,
     total_size,
     compressed_size: 0,
@@ -169,12 +212,7 @@ fn pack_split_archives_blocking(
       zip.finish().map_err(|e| e.to_string())?;
 
       let archive_name = format!("data{}.zip", part_number);
-      let file_path = out_dir.join(&archive_name);
-      let meta = file_path.metadata().map_err(|e| e.to_string())?;
-      let size = meta.len();
-      compressed_size += size;
-
-      manifest.files.push(ReleaseManifestFile { name: archive_name, size });
+      finalize_archive(app, out_dir, archive_name, &mut manifest, &mut compressed_size)?;
 
       part_number += 1;
       let archive_path = out_dir.join(format!("data{}.zip", part_number));
@@ -216,17 +254,56 @@ fn pack_split_archives_blocking(
   zip.finish().map_err(|e| e.to_string())?;
 
   let archive_name = format!("data{}.zip", part_number);
-  let file_path = out_dir.join(&archive_name);
-  let meta = file_path.metadata().map_err(|e| e.to_string())?;
-  let size = meta.len();
-  compressed_size += size;
+  finalize_archive(app, out_dir, archive_name, &mut manifest, &mut compressed_size)?;
 
-  manifest.files.push(ReleaseManifestFile {
-    name: archive_name,
-    size,
-  });
+  // Extra raw files (dev/test hook for future engine `.db` archives): copy
+  // into the pack dir under a flat name and record with kind = Raw. Flat name
+  // is required — download names must be simple file names (safe_download_join).
+  for (src, target) in extra_raw_files {
+    let normalized_target = target.replace('\\', "/");
+    crate::utils::paths::assert_relative_target(&normalized_target)
+      .map_err(|e| format!("extra_raw_files target '{}': {}", &normalized_target, e))?;
+
+    let flat_name = Path::new(&normalized_target)
+      .file_name()
+      .and_then(|n| n.to_str())
+      .ok_or_else(|| format!("extra_raw_files target has no file name: {}", &normalized_target))?
+      .to_string();
+    if manifest.files.iter().any(|f| f.name == flat_name) {
+      return Err(format!("extra_raw_files name collision with an existing pack file: {}", &flat_name));
+    }
+
+    let dest = out_dir.join(&flat_name);
+    fs::copy(&src, &dest).map_err(|e| format!("copy raw file {:?}: {}", &src, e))?;
+
+    let _ = app.emit(
+      "packing-progress",
+      CompressProgressPayload {
+        status: 2,
+        current_file: flat_name.clone(),
+        total_size: 0,
+        processed_size: 0,
+        percentage: 0.,
+      },
+    );
+    let sha = crate::utils::hash::sha256_file(&dest, None, None).map_err(|e| e.to_string())?;
+    let size = dest.metadata().map_err(|e| e.to_string())?.len();
+
+    log::info!("Added raw file {}: {} bytes, sha256 {}", &flat_name, size, &sha);
+    compressed_size += size;
+    total_size += size;
+    manifest.total_files_count += 1;
+    manifest.files.push(ReleaseManifestFile {
+      name: flat_name,
+      size,
+      sha256: Some(sha),
+      kind: ManifestFileKind::Raw,
+      target: Some(normalized_target),
+    });
+  }
 
   manifest.compressed_size = compressed_size;
+  manifest.total_size = total_size;
 
   // Patch metadata lands in the manifest as-is (full releases leave it empty).
   if let Some(pm) = &patch_meta {

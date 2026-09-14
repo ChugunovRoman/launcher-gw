@@ -32,7 +32,13 @@ export const fontColor = derived(startupState, ($s) => {
   return "rgba(243, 240, 63, 1)";
 });
 
-export const expandedIndex = writable<number | null>(null);
+// Which version card is expanded, addressed by a STABLE key instead of a
+// positional index: "local:<name>" for an installed version, "remote:<name>"
+// for a release from the list.  A numeric index silently pointed at a
+// different card whenever the list was replaced (refresh, provider switch).
+export const expandedKey = writable<string | null>(null);
+export const localKey = (name: string) => `local:${name}`;
+export const remoteKey = (name: string) => `remote:${name}`;
 
 export const versionsWillBeLoaded = writable(false);
 
