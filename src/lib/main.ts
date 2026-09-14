@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Event } from "@tauri-apps/api/event";
-import { allowPackMod, appConfig, startupState, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind } from '../store/main';
+import { allowPackMod, appConfig, startupState, showDlgRestartApp, newLauncherVersionDownloaded, launcherDwnVersion, launcherDwnNeedUpdate, providers, moveProgress, gameStatus, showDlgTempPathWarning, tempPathWarningCodes, tempPathWarningKind, radioApiProvider, configLoadError } from '../store/main';
 import { DownloadStatus } from "../consts";
+import { getBackendProviderSwitch, setBackendProviderSwitch } from "./providers";
 import { applyVersions } from './versions';
 import { get } from 'svelte/store';
+import { tick } from 'svelte';
 import { getVersion } from '@tauri-apps/api/app';
 
 const unlisten: Map<string, (() => void)> = new Map();
@@ -114,6 +116,21 @@ export async function initMainListeners() {
       providers.set(result);
     }).catch(e => console.error("providers-stats refresh failed:", e));
   }));
+  unlisten.set('provider-fallback', await listen('provider-fallback', async (event: Event<string>) => {
+    console.log('provider-fallback:', event.payload);
+    // Announce the expected value so the Settings effect skips the redundant
+    // switchProvider call for exactly this provider — the backend already
+    // switched (R7 fix).
+    setBackendProviderSwitch(event.payload);
+    // Update both the radio and the config store so the UI stays in sync.
+    radioApiProvider.set(event.payload);
+    appConfig.update(cfg => ({ ...cfg, selected_provider_id: event.payload }));
+    // Settings is usually not mounted on startup, so no effect ever runs to
+    // clear the expectation. Drop it once pending effects are flushed, or it
+    // would swallow the first real user switch to this provider (R11 fix).
+    await tick();
+    if (getBackendProviderSwitch() === event.payload) setBackendProviderSwitch(null);
+  }));
   unlisten.set('launcher-new-version', await listen('launcher-new-version', (event: Event<string>) => {
     console.log('launcher-new-version:', event.payload);
     newLauncherVersionDownloaded.set(event.payload);
@@ -121,6 +138,10 @@ export async function initMainListeners() {
   unlisten.set('move-version', await listen('move-version', (event: Event<ProgressPayload>) => {
     const { version_name } = event.payload;
     moveProgress.setItem(version_name, event.payload);
+  }));
+  unlisten.set('config-load-error', await listen('config-load-error', (event: Event<string>) => {
+    console.error('Config load error (running from defaults):', event.payload);
+    configLoadError.set(event.payload);
   }));
 }
 

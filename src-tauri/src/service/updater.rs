@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::consts::{BASE_DIR, GITHUB_LAUNCHER_REPO_NAME, MAIN_DEVELOPER_NAME, REPO_LAUNCGER_ID_2};
+use crate::consts::{BASE_DIR, GITHUB_LAUNCHER_REPO_NAME, LAUNCHER_SHA256_MISMATCH, MAIN_DEVELOPER_NAME, REPO_LAUNCGER_ID_2};
 use crate::providers::ApiClient::ApiClient::ApiClient;
 use crate::providers::dto::{ReleaseAssetGit, ReleaseGit, ReleasePlatform};
 use crate::utils::paths::get_exe_name;
@@ -101,6 +101,40 @@ impl ServiceUpdater {
     Ok(None)
   }
 
+  /// Expected SHA-256 of a launcher asset as published in the release index.
+  ///
+  /// The hash is looked up by asset name and only when the index describes the
+  /// very version being downloaded — a stale index must never be used to judge
+  /// a newer binary. Any failure (no index, old schema without `sha256`,
+  /// unknown asset) yields None: the caller then falls back to the size check,
+  /// exactly as before.
+  async fn expected_sha256(&self, api_client: &ApiClient, version: &str, asset_name: &str) -> Option<String> {
+    let provider_id = api_client.current_provider().ok()?.id();
+    let index = crate::service::index::load_index(provider_id).await.ok()?;
+
+    if index.launcher.version != version {
+      log::warn!(
+        "ServiceUpdater.download, index launcher version '{}' != downloaded '{}', skipping sha256 check",
+        &index.launcher.version,
+        version
+      );
+      return None;
+    }
+
+    let sha = index
+      .launcher
+      .assets
+      .iter()
+      .find(|a| a.name == asset_name)
+      .and_then(|a| a.sha256.clone());
+
+    if sha.is_none() {
+      log::warn!("ServiceUpdater.download, no sha256 in index for asset '{}', size check only", asset_name);
+    }
+
+    sha
+  }
+
   pub async fn download(&self, api_client: &ApiClient, app_handle: &tauri::AppHandle, release: ReleaseGit) -> Result<Option<PathBuf>> {
     let api = api_client.current_provider()?;
 
@@ -147,13 +181,54 @@ impl ServiceUpdater {
       }
 
       file.flush().await.context("Failed to flush launcher download")?;
+      // Close the handle before hashing/deleting: on Windows an open handle
+      // makes `remove_file` fail, which would leave a rejected binary on disk.
+      drop(file);
 
-      if target.size > 0 && downloaded != target.size {
+      // The downloaded file replaces the running launcher, and there is no
+      // second copy to fall back on, so accept it only when the size is both
+      // KNOWN and exact.  A provider/proxy answering 200 with an HTML error
+      // page used to pass straight through when `size` was 0.
+      if target.size == 0 {
+        let _ = tokio::fs::remove_file(&file_path).await;
+        bail!("Launcher asset {:?} has no size in the index, refusing to install it", &asset_name);
+      }
+      if downloaded != target.size {
+        let _ = tokio::fs::remove_file(&file_path).await;
         bail!(
           "Launcher download size mismatch: got {} bytes, expected {}",
           downloaded,
           target.size
         );
+      }
+
+      // The size is a weak guarantee (a truncated/substituted body of the same
+      // length passes it), so verify the digest published in the index whenever
+      // it is there. Old indexes carry no hash — behaviour stays size-only.
+      if let Some(expected) = self.expected_sha256(api_client, &release.version, &target.name).await {
+        let hash_path = file_path.clone();
+        let actual = tokio::task::spawn_blocking(move || crate::utils::hash::sha256_file(&hash_path, None, None))
+          .await
+          .context("Failed to join launcher hash task")?;
+
+        match actual {
+          Ok(actual) => {
+            if !actual.eq_ignore_ascii_case(expected.trim()) {
+              let _ = tokio::fs::remove_file(&file_path).await;
+              bail!(
+                "{}: got {}, expected {}",
+                LAUNCHER_SHA256_MISMATCH,
+                actual,
+                expected.trim()
+              );
+            }
+            log::info!("ServiceUpdater.download, sha256 verified for '{}'", &target.name);
+          }
+          Err(e) => {
+            let _ = tokio::fs::remove_file(&file_path).await;
+            bail!("{}: {}", LAUNCHER_SHA256_MISMATCH, e);
+          }
+        }
       }
 
       log::debug!("ServiceUpdater.download, finish download file: {:?}", &target.download_link);

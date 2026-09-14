@@ -230,19 +230,46 @@ pub async fn __add_file_to_repo(s: &Github, repo_id: &str, file_name: &str, cont
     return Ok(());
   }
 
-  // If the file disappeared between our GET and PUT (race), retry once as a
-  // create (no `sha`). Non-fatal: the next publish will resolve the new sha.
+  // 422 means our `sha` no longer matches the remote: either the file was
+  // deleted between GET and PUT, or somebody else wrote it first.
+  //
+  // Retrying with a freshly read sha is safe ONLY in the deletion case. In the
+  // concurrent-write case that retry turns a protective error into a silent
+  // "last writer wins" — it overwrites an index.json edited from the GitHub web
+  // UI, from another machine or by a second launcher instance, and PUBLISH_LOCK
+  // (process-local) cannot see any of those. So retry only when a re-read says
+  // the file is gone; otherwise report the conflict and let the caller rebuild
+  // the preview on top of the current content (R12).
   let status = resp.status();
   let body = resp.text().await.unwrap_or_else(|_| "No body".to_string());
-  if existing_sha.is_some() && status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
-    log::warn!("__add_file_to_repo: PUT 422 with stale sha, retrying as create (no sha)");
-    let create_data = AddFileContentBodyGithub {
+  if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+    let recheck = s
+      .get(&format!("{}?ref={}", &url, branch))
+      .send()
+      .await
+      .context("Failed to send request to Github (__add_file_to_repo 422 re-check GET)")?;
+
+    if recheck.status() != reqwest::StatusCode::NOT_FOUND {
+      // The file still exists (or we cannot tell) — treat it as a conflict and
+      // never overwrite blindly.
+      bail!(
+        "{}: '{}' was modified by someone else between read and write (PUT {}: {}), url: {}",
+        INDEX_CONFLICT_ERR,
+        file_name,
+        status,
+        body,
+        url
+      );
+    }
+
+    let retry_data = AddFileContentBodyGithub {
       content: content_base64.to_string(),
       message: commmit_msg.to_string(),
       branch: branch.to_string(),
-      sha: None,
+      sha: None, // the file is gone — recreate it
     };
-    let resp2 = s.put(&url).json(&create_data).send().await
+    log::warn!("__add_file_to_repo: PUT 422 and file is gone, retrying as create");
+    let resp2 = s.put(&url).json(&retry_data).send().await
       .context("Failed to send request to Github (__add_file_to_repo retry PUT)")?;
     if resp2.status().is_success() {
       return Ok(());

@@ -24,7 +24,8 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
-  import { configReady, startupState } from "./store/main";
+  import { configReady, startupState, configLoadError } from "./store/main";
+  import { _ } from "svelte-i18n";
   import { currentView, previousView } from "./store/menu";
 
   let bgUrl = "/static/bg.jpg";
@@ -114,6 +115,11 @@
   <!-- svelte-ignore element_invalid_self_closing_tag -->
   <div class="bgimg" style="background-image: url({bgUrl})" />
   <Header />
+  {#if $configLoadError}
+    <div class="config-error-banner">
+      {$_("app.dlg.configLoadError")}{$configLoadError}
+    </div>
+  {/if}
   <div class="appbody">
     <div class="menubar">
       <MenuBar onSelect={handleSelect} />
@@ -213,6 +219,15 @@
   }
   .bar {
     /* background-color: rgba(0, 0, 0, 0.5); */
+  }
+
+  .config-error-banner {
+    background-color: rgba(200, 60, 60, 0.85);
+    color: #fff;
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    text-align: center;
+    z-index: 100;
   }
 
   @media (max-width: 1920px) and (max-height: 1080px) {

@@ -14,12 +14,51 @@ use std::{
 use tauri::Emitter;
 use tokio::sync::{Mutex, broadcast};
 
-pub type CancelMap = Arc<StdMutex<HashMap<String, broadcast::Sender<()>>>>;
+/// Cancellation handle for one running operation.
+///
+/// A bare broadcast channel was not enough: a receiver only sees messages sent
+/// AFTER it subscribed, and `send` fails outright while no receiver exists.  A
+/// cancel arriving during a preparation phase (resume re-verification, repair
+/// setup) was therefore LOST, and the operation ran to completion with no way
+/// to stop it.  The flag retains the state; the channel only wakes up tasks
+/// that are already waiting.
+#[derive(Clone)]
+pub struct CancelHandle {
+  pub tx: broadcast::Sender<()>,
+  pub flag: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CancelHandle {
+  pub fn new() -> Self {
+    let (tx, _rx) = broadcast::channel::<()>(1);
+    Self { tx, flag: Arc::new(std::sync::atomic::AtomicBool::new(false)) }
+  }
+
+  pub fn cancel(&self) {
+    self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = self.tx.send(());
+  }
+
+  pub fn is_cancelled(&self) -> bool {
+    self.flag.load(std::sync::atomic::Ordering::SeqCst)
+  }
+
+  pub fn subscribe(&self) -> broadcast::Receiver<()> {
+    self.tx.subscribe()
+  }
+}
+
+pub type CancelMap = Arc<StdMutex<HashMap<String, CancelHandle>>>;
 
 #[tauri::command]
 pub async fn cancel_download_version(channel_map: tauri::State<'_, CancelMap>, releaseName: String) -> Result<(), String> {
-  if let Some(tx) = crate::utils::locks::lock(&channel_map).remove(&releaseName) {
-    let _ = tx.send(());
+  // Do NOT remove the entry here: removing it dropped the "already running"
+  // guard (a second pipeline could start on the same files) and made every
+  // further cancel a no-op.  The command that owns the handle removes it when
+  // it actually finishes.
+  let handle = crate::utils::locks::lock(&channel_map).get(&releaseName).cloned();
+  if let Some(handle) = handle {
+    handle.cancel();
   }
 
   Ok(())
@@ -33,28 +72,28 @@ pub async fn cancel_all_downloads_and_save(
   channel_map: tauri::State<'_, CancelMap>,
   app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
 ) -> Result<(), String> {
-  let senders: Vec<broadcast::Sender<()>> = {
+  let handles: Vec<CancelHandle> = {
     let map = crate::utils::locks::lock(&channel_map);
-    map.iter().map(|(_, v)| v.clone()).collect()
+    map.values().cloned().collect()
   };
 
   // Signal every active download worker to stop (they persist .part + config on the way out).
-  for tx in senders {
-    let _ = tx.send(());
+  for handle in handles {
+    handle.cancel();
   }
 
   // Give workers a brief moment to flush their .part files and config updates.
   tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
   // Final defensive save of the whole config.
-  let mut config_guard = app_config.lock().await;
+  let config_guard = app_config.lock().await;
   let _ = config_guard.save();
   Ok(())
 }
 
 /// Fill sha256/kind/target of a FileProgress from the version manifest
 /// (manifest v2). Old manifests simply leave the defaults (size-only checks).
-fn enrich_file_progress(file: &mut FileProgress, manifest: Option<&crate::handlers::dto::ReleaseManifest>) {
+pub fn enrich_file_progress(file: &mut FileProgress, manifest: Option<&crate::handlers::dto::ReleaseManifest>) {
   let Some(manifest) = manifest else { return };
   let Some(entry) = manifest.files.iter().find(|f| f.name == file.name) else {
     return;
@@ -88,13 +127,20 @@ pub async fn start_download_version(
   // reached `rx`, so the early cancel checks were dead. Now one `cancel_tx` is
   // created upfront, registered in the map, used for early checks AND subscribed
   // to by the workers.
-  let (cancel_tx, mut rx) = broadcast::channel::<()>(1);
+  let cancel = CancelHandle::new();
+  let cancel_flag_for_guard = cancel.flag.clone();
+  let mut rx = cancel.subscribe();
   {
-    crate::utils::locks::lock(&channel_map).insert(versionName.clone(), cancel_tx.clone());
+    crate::utils::locks::lock(&channel_map).insert(versionName.clone(), cancel.clone());
   }
   // Удаляем запись после завершения (успешного или нет)
   scopeguard::defer! {
-    crate::utils::locks::lock(&channel_map).remove(&versionName);
+    // Remove only if the map still holds OUR handle: otherwise a later command
+    // for the same version would lose its cancellation entry.
+    let mut map = crate::utils::locks::lock(&channel_map);
+    if map.get(&versionName).is_some_and(|h| Arc::ptr_eq(&h.flag, &cancel_flag_for_guard)) {
+      map.remove(&versionName);
+    }
   };
 
   let cfg = app_config.lock().await.clone();
@@ -265,7 +311,7 @@ pub async fn start_download_version(
     &version,
     files_to_download,
     Vec::new(),
-    cancel_tx,
+    cancel,
   )
   .await
 }

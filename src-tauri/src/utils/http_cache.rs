@@ -38,7 +38,22 @@ fn fetch_lock() -> &'static Mutex<()> {
 /// Shared client for ad-hoc metadata GETs/HEADs (release index, manifests,
 /// bg etag). One connection pool instead of a fresh TLS context per call
 /// site — `reqwest::Client::new()` was created on the fly in 6 places.
-pub static SHARED_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+///
+/// Timeouts are mandatory here: `fetch` holds the global `FETCH_LOCK` across
+/// `send().await`, so a request that never completes (captive portal, silently
+/// dropping firewall) would block every other cache user forever.
+/// `Client::new()` has no timeouts at all — the values mirror the Github /
+/// Gitlab clients.
+pub static SHARED_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(crate::consts::HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(crate::consts::HTTP_REQUEST_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|e| {
+            log::error!("http_cache: failed to build SHARED_CLIENT with timeouts ({}), falling back to the default client", e);
+            reqwest::Client::new()
+        })
+});
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -130,6 +145,27 @@ pub async fn fetch(
     url: &str,
     ttl: Duration,
 ) -> Result<CachedBody> {
+    fetch_inner(client, url, Some(ttl)).await
+}
+
+/// Like [`fetch`], but ALWAYS goes to the network (no TTL fast path).
+///
+/// Used by explicit "Refresh" actions: with a plain TTL the org-repos listing
+/// was served from disk for a whole hour, so the button could not pick up a
+/// newly published release. The ETag is still sent, so the usual answer is
+/// `304 Not Modified` — the body comes from disk and almost no traffic is
+/// spent. On a network error the stale cache is served exactly as in `fetch`.
+pub async fn fetch_force(client: &reqwest::Client, url: &str) -> Result<CachedBody> {
+    fetch_inner(client, url, None).await
+}
+
+/// Shared implementation. `ttl == None` means "never serve from the TTL fast
+/// path — always revalidate".
+async fn fetch_inner(
+    client: &reqwest::Client,
+    url: &str,
+    ttl: Option<Duration>,
+) -> Result<CachedBody> {
     let dir = cache_dir()?.to_path_buf();
     let key = hash_url(url);
     let meta_path = dir.join(format!("{}.meta.json", key));
@@ -138,7 +174,7 @@ pub async fn fetch(
     // Fast path: a fresh, intact cache entry can be served without the lock —
     // it is a read of two immutable-once-written files. If anything looks off
     // we fall through to the locked path and re-fetch.
-    if meta_path.exists() && body_path.exists() {
+    if let (Some(ttl), true) = (ttl, meta_path.exists() && body_path.exists()) {
         if let Ok(meta) = read_meta(&meta_path) {
             if let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&meta.fetched_at) {
                 let age = Utc::now() - fetched_at.with_timezone(&Utc);
@@ -160,7 +196,7 @@ pub async fn fetch(
 
     // Re-check freshness under the lock: another call may have just populated
     // the cache while we were waiting.
-    if meta_path.exists() && body_path.exists() {
+    if let (Some(ttl), true) = (ttl, meta_path.exists() && body_path.exists()) {
         if let Ok(meta) = read_meta(&meta_path) {
             if let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&meta.fetched_at) {
                 let age = Utc::now() - fetched_at.with_timezone(&Utc);
@@ -383,8 +419,11 @@ fn serve_stale_or_err(body_path: &PathBuf, meta_path: &PathBuf, status_code: u16
 }
 
 /// Delete oldest cache entries until total body size ≤ MAX_CACHE_SIZE_BYTES.
+/// Also removes orphaned `.body` files (no matching `.meta.json`) and stale
+/// `.tmp` files that are older than a few minutes.
 fn enforce_size_limit(dir: &PathBuf) -> Result<()> {
     let mut entries: Vec<(PathBuf, u64, String)> = Vec::new();
+    let mut known_bodies: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -393,14 +432,41 @@ fn enforce_size_limit(dir: &PathBuf) -> Result<()> {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
+
         if name.ends_with(".meta.json") {
             if let Ok(meta) = read_meta(&path) {
                 let body_path = path.with_extension("").with_extension("body");
                 let size = fs::metadata(&body_path)
                     .map(|m| m.len())
                     .unwrap_or(0);
+                known_bodies.insert(body_path.clone());
                 entries.push((body_path, size, meta.fetched_at));
             }
+        } else if name.ends_with(".tmp") {
+            // Stale temp files from interrupted writes — remove if older than 5 min.
+            if let Ok(meta) = fs::metadata(&path) {
+                if let Ok(modified) = meta.modified() {
+                    if modified.elapsed().unwrap_or_default().as_secs() > 300 {
+                        let _ = fs::remove_file(&path);
+                        log::debug!("http_cache: removed stale tmp {:?}", path);
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove orphaned .body files that have no matching .meta.json
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name.ends_with(".body") && !known_bodies.contains(&path) {
+            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let _ = fs::remove_file(&path);
+            log::debug!("http_cache: removed orphaned body {:?} ({} bytes)", path, size);
         }
     }
 
@@ -446,7 +512,10 @@ pub fn read_body(url: &str) -> Option<Vec<u8>> {
 /// (raw.githubusercontent.com in particular can lag a push by a few seconds).
 /// No ETag is stored, so the next real revalidation after TTL expiry falls
 /// back to a plain GET instead of a conditional one — a one-time cost.
-pub fn store(url: &str, bytes: &[u8]) -> Result<()> {
+/// Write a cache entry under the global fetch lock so body and metadata
+/// cannot be interleaved with a concurrent `fetch` or `clear_all` (R9 fix).
+pub async fn store(url: &str, bytes: &[u8]) -> Result<()> {
+    let _guard = fetch_lock().lock().await;
     let dir = cache_dir()?;
     let key = hash_url(url);
     let meta_path = dir.join(format!("{}.meta.json", key));
@@ -473,6 +542,25 @@ pub fn read_etag(url: &str) -> Option<String> {
     read_meta(&dir.join(format!("{}.meta.json", hash_url(url))))
         .ok()
         .and_then(|m| m.etag)
+}
+
+/// Remove all cached files from the disk cache directory.
+/// Called when the API token changes so that private responses cached under
+/// the anonymous context are not served after authentication (or vice versa).
+/// Remove all cached files under the global fetch lock so a concurrent
+/// `fetch` or `store` cannot leave orphaned body/metadata pairs (R9 fix).
+pub async fn clear_all() {
+    let _guard = fetch_lock().lock().await;
+    let dir = match cache_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    log::info!("http_cache: cleared all cached entries");
 }
 
 mod hex {

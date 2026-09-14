@@ -23,14 +23,27 @@ export const mainVersion = writable<Version | undefined>();
 export const downloadStates = createMapStore<string, Version>();
 
 export function updateVersionProgress(releaseName: string, cb: (data: Version) => Partial<Version>) {
+  // Compute the patch once from the current versions store to avoid calling
+  // `cb` twice (which resets aggregate byte counts mid-download).
+  const current = get(versions).find(v => v.name === releaseName);
+  // `downloadStates` exists precisely to survive version list replacements
+  // (a provider switch drops the list mid-download), so it — and not a bare
+  // `{ name }` stub — is the fallback base. Building the patch from a stub
+  // zeroed the accumulated progress overlay.
+  const saved = get(downloadStates).get(releaseName);
+  const base = current ?? saved ?? ({ name: releaseName } as Version);
+  const patch = cb(base);
+
   // Update in the main versions list if present.
-  updateVersion(releaseName, cb);
+  versions.update((data) =>
+    data.map(v => v.name === releaseName ? { ...v, ...patch } : v)
+  );
   // Mirror into the persistent progress overlay.
   downloadStates.update((map) => {
-    const existing = map.get(releaseName);
+    const existing = map.get(releaseName) ?? saved;
     const updated = {
       ...(existing ?? { name: releaseName } as Version),
-      ...cb(existing ?? { name: releaseName } as Version),
+      ...patch,
     };
     const next = new Map(map);
     next.set(releaseName, updated);
@@ -60,7 +73,10 @@ export function restoreDownloadState(version: Version): Version {
     speedValue: saved.speedValue || version.speedValue,
     sfxValue: saved.sfxValue || version.sfxValue,
     status: saved.status || version.status,
-    filesProgress: saved.filesProgress.size > 0 ? saved.filesProgress : version.filesProgress,
+    // The overlay entry can be created by an event handler that returns no
+    // filesProgress at all (repair/progress events build it from `{name}`),
+    // so this must not assume the Map exists.
+    filesProgress: saved.filesProgress && saved.filesProgress.size > 0 ? saved.filesProgress : version.filesProgress,
     manifest: saved.manifest || version.manifest,
   };
 }

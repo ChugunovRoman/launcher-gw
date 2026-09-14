@@ -48,7 +48,14 @@ impl Github {
     let mut headers = HeaderMap::new();
     headers.insert("User-Agent", HeaderValue::from_str(&user_agent)?);
 
-    let client = Client::builder().default_headers(headers).build()?;
+    let client = Client::builder()
+      .default_headers(headers)
+      // Without timeouts a silently dropping network (captive portal,
+      // firewall) leaves the request pending forever, and the startup
+      // task holds the Service lock while it waits.
+      .connect_timeout(std::time::Duration::from_secs(15))
+      .timeout(std::time::Duration::from_secs(120))
+      .build()?;
 
     Ok(Self {
       host: h.to_string(),
@@ -113,7 +120,14 @@ impl ApiProvider for Github {
     }
     headers.insert("User-Agent", HeaderValue::from_str(&user_agent)?);
 
-    *crate::utils::locks::lock(&self.client) = Client::builder().default_headers(headers).build()?;
+    *crate::utils::locks::lock(&self.client) = Client::builder()
+      .default_headers(headers)
+      // Without timeouts a silently dropping network (captive portal,
+      // firewall) leaves the request pending forever, and the startup
+      // task holds the Service lock while it waits.
+      .connect_timeout(std::time::Duration::from_secs(15))
+      .timeout(std::time::Duration::from_secs(120))
+      .build()?;
 
     Ok(())
   }

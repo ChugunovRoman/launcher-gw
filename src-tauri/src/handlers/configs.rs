@@ -27,8 +27,18 @@ pub async fn save_config(app: tauri::AppHandle) -> Result<(), String> {
   config_guard.save().map_err(|e| e.to_string())
 }
 
+/// What `update_run_params` actually managed to write. The command used to
+/// answer `Ok(())` even when nothing had been patched (no active version,
+/// alife.ltx missing, writing disabled), so the UI showed "saved" regardless.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunParamsApplyStatus {
+  pub user_ltx: handlers::user_ltx::ApplyOutcome,
+  pub alife_ltx: handlers::user_ltx::ApplyOutcome,
+}
+
 #[tauri::command]
-pub async fn update_run_params(app: tauri::AppHandle, mut run_params: RunParams) -> Result<(), String> {
+pub async fn update_run_params(app: tauri::AppHandle, mut run_params: RunParams) -> Result<RunParamsApplyStatus, String> {
   let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("Config not initialized")?;
   let config_snapshot = {
     let mut config_guard = state.lock().await;
@@ -40,14 +50,20 @@ pub async fn update_run_params(app: tauri::AppHandle, mut run_params: RunParams)
     config_guard.save().map_err(|e| e.to_string())?;
     config_guard.clone()
   };
-  handlers::user_ltx::apply_run_params_to_version_ltx(&config_snapshot).await?;
+  let user_ltx = handlers::user_ltx::apply_run_params_to_version_ltx(&config_snapshot).await?;
 
   // alife.ltx is non-critical: its failure must not break saving the settings.
-  if let Err(e) = handlers::user_ltx::apply_alife_settings_to_version_ltx(&config_snapshot).await {
-    log::warn!("update_run_params: не удалось записать alife.ltx: {}", e);
-  }
+  // The outcome is still reported so the UI can say the settings were saved
+  // but not applied, instead of claiming plain success.
+  let alife_ltx = match handlers::user_ltx::apply_alife_settings_to_version_ltx(&config_snapshot).await {
+    Ok(outcome) => outcome,
+    Err(e) => {
+      log::warn!("update_run_params: не удалось записать alife.ltx: {}", e);
+      handlers::user_ltx::ApplyOutcome::Failed
+    }
+  };
 
-  Ok(())
+  Ok(RunParamsApplyStatus { user_ltx, alife_ltx })
 }
 
 #[tauri::command]
@@ -197,19 +213,18 @@ pub async fn set_current_api_provider(
   provider: String,
 ) -> Result<(), String> {
   {
-    let mut config_guard = app_config.lock().await;
-
-    config_guard.selected_provider_id = Some(provider.clone());
-    config_guard.save().map_err(|e| e.to_string())?;
-  }
-
-  {
     let mut service_guard = service.lock().await;
     // Invalidate all cached release lists — the new provider has its own set.
     service_guard.releases_cache.clear();
     let api_client = &mut service_guard.api_client;
     api_client.set_current_provider(&provider).map_err(|e| e.to_string())?;
-  };
+  }
+
+  {
+    let mut config_guard = app_config.lock().await;
+    config_guard.selected_provider_id = Some(provider.clone());
+    config_guard.save().map_err(|e| e.to_string())?;
+  }
 
   Ok(())
 }

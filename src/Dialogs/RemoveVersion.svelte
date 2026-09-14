@@ -14,13 +14,16 @@
   import { mainVersion, selectedVersion } from "../store/upload";
   import { loadVersions } from "../lib/versions";
 
+  let removeError = $state("");
+
   function handleClose() {
     console.log("Dlg was closed");
+    removeError = "";
   }
 
   async function yesHandler() {
-    $showDlgRemoveVersion = false;
     $removeVersionInProcess = true;
+    removeError = "";
 
     try {
       const version = $removeVersion!;
@@ -28,16 +31,19 @@
 
       removeLocalVersion(version.name);
 
-      if ($localVersions.size) {
-        const name = [...$localVersions.keys()][0];
-        await invoke<void>("set_current_game_version", { versionName: name });
-        selectedVersion.set(name);
-      } else if ($mainVersion) {
-        await invoke<void>("set_current_game_version", { versionName: $mainVersion.name });
-        selectedVersion.set($mainVersion.name);
-      } else {
-        await invoke<void>("set_current_game_version");
-        selectedVersion.set(undefined);
+      // Only switch the selected version when the deleted one was active.
+      if ($selectedVersion === version.name) {
+        if ($localVersions.size) {
+          const name = [...$localVersions.keys()][0];
+          await invoke<void>("set_current_game_version", { versionName: name });
+          selectedVersion.set(name);
+        } else if ($mainVersion) {
+          await invoke<void>("set_current_game_version", { versionName: $mainVersion.name });
+          selectedVersion.set($mainVersion.name);
+        } else {
+          await invoke<void>("set_current_game_version");
+          selectedVersion.set(undefined);
+        }
       }
 
       // D3: use loadVersions instead of clear()+push() which silently
@@ -49,6 +55,9 @@
       }
 
       $expandedKey = null;
+      $showDlgRemoveVersion = false;
+    } catch (e) {
+      removeError = `${$_("app.dlg.removeVersionFailed")}${e}`;
     } finally {
       $removeVersionInProcess = false;
     }
@@ -61,6 +70,10 @@
   {/snippet}
 
   <p>{$_("app.dlg.removeVersion")} {$removeVersion?.name}?</p>
+
+  {#if removeError}
+    <p class="error-text">{removeError}</p>
+  {/if}
 
   {#snippet footer()}
     <Button onclick={yesHandler}>{$_("app.dlg.yes")}</Button>
@@ -76,5 +89,10 @@
 
   p {
     padding-bottom: 10px;
+  }
+
+  .error-text {
+    color: #ff6b6b;
+    font-size: 0.9rem;
   }
 </style>

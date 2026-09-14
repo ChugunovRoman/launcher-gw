@@ -265,24 +265,58 @@ pub async fn get_installed_versions(app_config: tauri::State<'_, Arc<Mutex<AppCo
 
 #[tauri::command]
 pub async fn delete_installed_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: String) -> Result<(), String> {
-  let version = {
+  let (version, resolved_key) = {
     let cfg = app_config.lock().await;
-    cfg.installed_versions.get(&versionName).cloned()
+    // Try by key first, then by name, path, or installed_path for versions
+    // outside installed_versions (main version, scan-found).
+    if let Some(v) = cfg.installed_versions.get(&versionName) {
+      (Some(v.clone()), Some(versionName.clone()))
+    } else {
+      // HashMap iteration order is arbitrary: with two entries matching the
+      // same name/path `.find()` picked a different one on every run. Sort by
+      // key so the resolved version (and the folder that gets deleted) is
+      // always the same one.
+      let mut found: Vec<_> = cfg
+        .installed_versions
+        .iter()
+        .filter(|(_, v)| v.name == versionName || v.path == versionName || v.installed_path == versionName)
+        .collect();
+      found.sort_by(|a, b| a.0.cmp(b.0));
+      match found.first() {
+        Some((key, v)) => (Some((*v).clone()), Some((*key).clone())),
+        None => (None, None),
+      }
+    }
   };
 
-  if let Some(v) = version {
-    fs::remove_dir_all(Path::new(&v.installed_path)).map_err(|e| e.to_string())?;
+  // Versions outside `installed_versions` (the main version, scan-found ones)
+  // have no config entry and no known folder — nothing is left to remove, so
+  // report success instead of failing the removal flow in the UI with an error
+  // the user cannot act on.
+  let Some(v) = version else {
+    log::warn!("delete_installed_version: '{}' is not in installed_versions, nothing to remove", versionName);
 
-    {
-      let mut config_guard = app_config.lock().await;
+    return Ok(());
+  };
 
-      let _ = config_guard.installed_versions.remove(&versionName);
-
-      config_guard.save().map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
+  // Treat "not found" as success — the folder is already gone.
+  match fs::remove_dir_all(Path::new(&v.installed_path)) {
+    Ok(()) => {}
+    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+      log::info!("delete_installed_version: folder already absent: {}", &v.installed_path);
     }
+    Err(e) => return Err(e.to_string()),
+  }
+
+  {
+    let mut config_guard = app_config.lock().await;
+    if let Some(key) = resolved_key {
+      let _ = config_guard.installed_versions.remove(&key);
+    }
+    config_guard.save().map_err(|e| {
+      log_full_error(&e);
+      e.to_string()
+    })?;
   }
 
   Ok(())

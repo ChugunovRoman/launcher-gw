@@ -1,5 +1,5 @@
 use fs_extra::dir::{CopyOptions, TransitProcess, TransitProcessResult, move_dir_with_progress};
-use std::{fs, path::Path, sync::Arc};
+use std::{fs, path::{Path, PathBuf}, sync::Arc};
 use tauri::Emitter;
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -8,7 +8,7 @@ use crate::{
   configs::AppConfig::AppConfig,
   handlers::dto::ProgressPayload,
   providers::dto::ProviderStatus,
-  service::{files::ServiceFiles, main::{ProviderStats, Service}, startup_state::{StartupState, StartupTracker}},
+  service::{main::{ProviderStats, Service}, startup_state::{StartupState, StartupTracker}},
   utils::encoding::*,
 };
 
@@ -150,6 +150,7 @@ pub async fn get_launcher_bg(
   if let (Some(idx), Some(saved)) = (&index_bg_etag, &saved_etag)
     && idx == saved
     && let Some(bytes) = crate::utils::http_cache::read_body(&url)
+    && !bytes.is_empty()
   {
     log::info!("get_launcher_bg: etag match, serving cached bg (0 network requests)");
     return Ok(bytes);
@@ -176,34 +177,65 @@ pub async fn get_launcher_bg(
 
 #[tauri::command]
 pub async fn set_token_for_provider(app: tauri::AppHandle, token: String, providerId: String) -> Result<(), String> {
-  let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
-  let service_guard = state.lock().await;
-  let provider = match service_guard.api_client.get_provider(&providerId) {
-    Ok(p) => p,
-    Err(e) => {
+  // Validate BEFORE anything is persisted: `set_token` builds an
+  // `Authorization` header and fails on a newline or a non-ASCII character (a
+  // typical clipboard paste). Persisting such a token reported success to the
+  // user while every request went out unauthenticated — on this launch and on
+  // every launch after it.
+  if !token.is_empty() && reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)).is_err() {
+    log::error!("set_token_for_provider: token for '{}' is not a valid header value", &providerId);
+
+    return Err(crate::consts::ERR_INVALID_TOKEN.to_string());
+  }
+
+  {
+    // Scoped: the Service guard must not be held across the AppConfig lock or
+    // across `clear_all().await`, otherwise every command that needs Service
+    // waits behind an unrelated token update.
+    let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+    let service_guard = state.lock().await;
+    if let Err(e) = service_guard.api_client.get_provider(&providerId) {
       let msg = format!("Cannot get api provider by id {}, error: {:?}", &providerId, e);
       log::error!("{}", msg);
 
       return Err(msg);
     }
-  };
-
-  if let Err(e) = provider.set_token(token.clone()) {
-    let msg = format!("Cannot set token for api provider by id {}, error: {:?}", &providerId, e);
-    log::error!("{}", msg);
-
-    return Err(msg);
   }
 
-  let encoded_token = encode_token(&token);
-  log::info!("set_token_for_provider: id: {}", &providerId);
+  // Save config FIRST; only then apply the token to the live provider so that
+  // a write error does not leave the runtime and persisted state diverged.
+  log::info!("set_token_for_provider: id: {}, empty: {}", &providerId, token.is_empty());
   {
     let state = app.try_state::<Arc<Mutex<AppConfig>>>().ok_or("AppConfig not initialized")?;
-    let mut service_guard = state.lock().await;
+    let mut cfg_guard = state.lock().await;
 
-    service_guard.tokens.insert(providerId, encoded_token);
-    service_guard.save().map_err(|e| e.to_string())?;
+    if token.is_empty() {
+      cfg_guard.tokens.remove(&providerId);
+    } else {
+      let encoded_token = encode_token(&token).map_err(|e| e.to_string())?;
+      cfg_guard.tokens.insert(providerId.clone(), encoded_token);
+    }
+    cfg_guard.save().map_err(|e| e.to_string())?;
     log::info!("Save set_token_for_provider");
+  }
+
+  // Invalidate disk cache so private responses are not served under the
+  // wrong auth context after token change. No Service guard is held here.
+  crate::utils::http_cache::clear_all().await;
+
+  // Config persisted successfully — now apply to the live provider.
+  {
+    let state = app.try_state::<Arc<Mutex<Service>>>().ok_or("Service not initialized")?;
+    let service_guard = state.lock().await;
+    match service_guard.api_client.get_provider(&providerId) {
+      Ok(provider) => {
+        if let Err(e) = provider.set_token(token) {
+          // Non-fatal: the token is saved on disk; next launch will pick it up.
+          log::warn!("set_token_for_provider: live set_token failed (will apply on next launch): {}", e);
+        }
+      }
+      Err(e) => log::warn!("set_token_for_provider: provider '{}' is gone: {}", &providerId, e),
+    }
   }
 
   Ok(())
@@ -240,16 +272,34 @@ pub async fn remove_download_version(app_config: tauri::State<'_, Arc<Mutex<AppC
       .ok_or_else(|| format!("remove_download_version() version not found: {} !", &versionName))?
   };
 
-  // The download dir may already be absent (already removed in a prior run, or
-  // cleared by the user/OS). Cleanup is best-effort: treat NotFound as success
-  // instead of bubbling os error 3 up to the frontend, which previously aborted
-  // the post-unpack sequence (clear_progress_version never ran, UI hung).
-  match fs::remove_dir_all(Path::new(&version.download_path)) {
-    Ok(_) => {}
-    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-      log::warn!("remove_download_version: dir already absent: {}", &version.download_path);
+  // NEVER delete the download dir when it IS the install dir, or contains it:
+  // the UI explicitly allows picking the same folder for both, and this
+  // cleanup runs right after a SUCCESSFUL install — deleting here would wipe
+  // the game that was just installed (and any sibling version, when the
+  // download dir is a parent).
+  let canon = |p: &str| std::fs::canonicalize(Path::new(p)).unwrap_or_else(|_| PathBuf::from(p));
+  let download_dir = canon(&version.download_path);
+  let install_dir = canon(&version.installed_path);
+  let protects_install =
+    !version.installed_path.is_empty() && (download_dir == install_dir || install_dir.starts_with(&download_dir));
+
+  if protects_install {
+    log::warn!(
+      "remove_download_version: skipping cleanup, download dir '{}' is the install dir (or its parent) '{}'",
+      &version.download_path, &version.installed_path
+    );
+  } else {
+    // The download dir may already be absent (already removed in a prior run, or
+    // cleared by the user/OS). Cleanup is best-effort: treat NotFound as success
+    // instead of bubbling os error 3 up to the frontend, which previously aborted
+    // the post-unpack sequence (clear_progress_version never ran, UI hung).
+    match fs::remove_dir_all(Path::new(&version.download_path)) {
+      Ok(_) => {}
+      Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        log::warn!("remove_download_version: dir already absent: {}", &version.download_path);
+      }
+      Err(e) => return Err(e.to_string()),
     }
-    Err(e) => return Err(e.to_string()),
   }
 
   {
@@ -361,11 +411,80 @@ pub async fn move_version(
       .get_mut(&versionName)
       .ok_or_else(|| format!("move_version() version not found: {} !", &versionName))?;
 
-    v.installed_path = dest;
+    let old_path = v.installed_path.clone();
+
+    // Rebase engine_path, fsgame_path, and userltx_path on the new location.
+    // Comparison is done component-wise and case-insensitively on Windows:
+    // a plain `strip_prefix` on the raw strings left the old location in place
+    // whenever the stored paths differed only by drive letter case or by
+    // separator style (`C:\x` vs `c:/x`) — and it also matched `..\v1` against
+    // `..\v10`.
+    let rebase = |old: &Option<String>| -> Option<String> {
+      old.as_ref()
+        .map(|p| rebase_path(&old_path, &dest, p).unwrap_or_else(|| p.clone()))
+    };
+    v.engine_path = rebase(&v.engine_path);
+    v.fsgame_path = rebase(&v.fsgame_path);
+    v.userltx_path = rebase(&v.userltx_path);
+
+    v.installed_path = dest.clone();
+
+    // The in-progress entry keeps its own copy of installed_path and it is the
+    // one `remove_install_dir` reads; leaving it at the old location would make
+    // the cleanup either fail or delete a directory that no longer belongs to
+    // this version.
+    if let Some(progress) = cfg.progress_download.get_mut(&versionName) {
+      let old_progress_path = progress.installed_path.clone();
+      progress.installed_path = rebase_path(&old_path, &dest, &old_progress_path)
+        .unwrap_or_else(|| dest.clone());
+      log::info!(
+        "move_version: progress_download['{}'].installed_path {:?} -> {:?}",
+        &versionName, old_progress_path, &progress.installed_path
+      );
+    }
+
     cfg.save().map_err(|e| e.to_string())?;
   };
 
   Ok(())
+}
+
+/// Split a path into its non-empty components, ignoring the separator style
+/// (`/` and `\` are equivalent) and `.` segments.
+fn path_components(path: &str) -> Vec<&str> {
+  path.split(['/', '\\']).filter(|c| !c.is_empty() && *c != ".").collect()
+}
+
+/// Compare two path components. Windows file names are case-insensitive, so a
+/// path stored as `C:\Games` must match `c:\games`; on Unix the comparison
+/// stays case-sensitive.
+fn components_match(a: &str, b: &str) -> bool {
+  if cfg!(windows) { a.eq_ignore_ascii_case(b) } else { a == b }
+}
+
+/// Re-root `path` from `old_root` onto `new_root`.
+///
+/// Returns `None` when `path` is not inside `old_root`, so the caller can keep
+/// the original value. The match is component-wise, which - unlike the previous
+/// `str::strip_prefix` - is immune to separator style, drive-letter case and to
+/// `<...>/v1` being treated as a prefix of `<...>/v10`.
+fn rebase_path(old_root: &str, new_root: &str, path: &str) -> Option<String> {
+  let root = path_components(old_root);
+  let target = path_components(path);
+
+  if root.is_empty() || target.len() < root.len() {
+    return None;
+  }
+  if !root.iter().zip(target.iter()).all(|(a, b)| components_match(a, b)) {
+    return None;
+  }
+
+  let mut rebased = PathBuf::from(new_root);
+  for component in &target[root.len()..] {
+    rebased.push(component);
+  }
+
+  Some(rebased.to_string_lossy().into_owned())
 }
 
 /// Collect release index JSON from live API data for preview.
@@ -497,3 +616,59 @@ pub async fn get_unpublished_releases(app: tauri::AppHandle) -> Result<Vec<Strin
 pub async fn get_startup_state(tracker: tauri::State<'_, Arc<StartupTracker>>) -> Result<StartupState, String> {
   Ok(tracker.snapshot().await)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn norm(p: &str) -> String {
+    PathBuf::from(p).to_string_lossy().into_owned()
+  }
+
+  #[test]
+  fn rebase_path_handles_mixed_separators_and_drive_case() {
+    // The regression: config.json holds `C:\Games\GW\v1\...` while the stored
+    // installed_path came back from a folder dialog as `c:/games/gw/v1`.
+    let out = rebase_path("c:/games/gw/v1", r"D:\Games\GW\v1", r"C:\Games\GW\v1\bin\xrEngine.exe");
+    if cfg!(windows) {
+      assert_eq!(out, Some(norm(r"D:\Games\GW\v1\bin\xrEngine.exe")));
+    } else {
+      // Case-sensitive platforms keep the old (correct) behaviour: no match.
+      assert_eq!(out, None);
+    }
+  }
+
+  #[test]
+  fn rebase_path_handles_mixed_separators_with_same_case() {
+    let out = rebase_path("C:/Games/GW/v1", r"D:\Games\GW\v1", r"C:\Games\GW\v1\bin\xrEngine.exe");
+    assert_eq!(out, Some(norm(r"D:\Games\GW\v1\bin\xrEngine.exe")));
+  }
+
+  #[test]
+  fn rebase_path_rejects_sibling_with_shared_string_prefix() {
+    // `strip_prefix` used to rebase v10 as if it were inside v1.
+    assert_eq!(rebase_path(r"C:\Games\v1", r"D:\Games\v1", r"C:\Games\v10\bin"), None);
+  }
+
+  #[test]
+  fn rebase_path_returns_none_for_unrelated_path() {
+    assert_eq!(rebase_path(r"C:\Games\v1", r"D:\Games\v1", r"E:\Other\file.ltx"), None);
+  }
+
+  #[test]
+  fn rebase_path_maps_the_root_itself() {
+    assert_eq!(rebase_path(r"C:\Games\v1", r"D:\Games\v1", "C:/Games/v1"), Some(norm(r"D:\Games\v1")));
+  }
+
+  #[test]
+  fn rebase_path_ignores_trailing_separators_and_dot_segments() {
+    let out = rebase_path(r"C:\Games\v1\", r"D:\Games\v1", r"C:\Games\.\v1\gamedata\configs");
+    assert_eq!(out, Some(norm(r"D:\Games\v1\gamedata\configs")));
+  }
+
+  #[test]
+  fn rebase_path_with_empty_root_keeps_caller_value() {
+    assert_eq!(rebase_path("", r"D:\Games\v1", r"C:\Games\v1\bin"), None);
+  }
+}
+

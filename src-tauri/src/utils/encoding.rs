@@ -93,20 +93,28 @@ fn dpapi_unprotect(cipher: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Encode a token for storage in config.json. Empty token stays empty.
-pub fn encode_token(plain: &str) -> String {
+/// Returns an error when DPAPI protection fails (Windows) instead of
+/// silently falling back to weak obfuscation.
+pub fn encode_token(plain: &str) -> Result<String> {
   if plain.is_empty() {
-    return String::new();
+    return Ok(String::new());
   }
 
   #[cfg(windows)]
   {
     match dpapi_protect(plain.as_bytes()) {
-      Ok(cipher) => return format!("{}{}", TOKEN_PREFIX_DPAPI, general_purpose::STANDARD.encode(cipher)),
-      Err(e) => log::warn!("DPAPI protect failed, falling back to legacy token encoding: {}", e),
+      Ok(cipher) => return Ok(format!("{}{}", TOKEN_PREFIX_DPAPI, general_purpose::STANDARD.encode(cipher))),
+      Err(e) => {
+        log::error!("DPAPI protect failed: {}", e);
+        return Err(anyhow::anyhow!("Failed to protect token with DPAPI: {}", e));
+      }
     }
   }
 
-  legacy_encode(plain)
+  #[cfg(not(windows))]
+  {
+    Ok(legacy_encode(plain))
+  }
 }
 
 /// Decode a stored token; understands both DPAPI and legacy formats.

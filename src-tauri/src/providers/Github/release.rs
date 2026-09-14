@@ -7,13 +7,23 @@ use crate::{
     Github::{Github::Github, models::*, repo::*},
     dto::*,
   },
-  utils::http_cache,
 };
 
 use anyhow::{Context, Result, bail};
 use std::time::Duration;
 
+use crate::consts::JSON_ERROR_BODY_PREVIEW_LEN;
+
+/// First bytes of a response body, lossily decoded and truncated, for error
+/// messages. Keeps a non-JSON answer (HTML login page, rate-limit notice)
+/// visible in the log instead of a bare serde position error.
+fn body_preview(bytes: &[u8]) -> String {
+  let end = JSON_ERROR_BODY_PREVIEW_LEN.min(bytes.len());
+  String::from_utf8_lossy(&bytes[..end]).replace(['\n', '\r'], " ")
+}
+
 async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
+  const PER_PAGE: u32 = 100;
   let mut map: HashMap<u32, ProjectGithub> = HashMap::new();
   let mut page: u32 = 1;
   let mut release_count = crate::utils::locks::lock(&s.projects_map).len();
@@ -27,49 +37,50 @@ async fn __fetch_releases(s: &Github, cashed: bool) -> Result<()> {
       break;
     }
 
-    let search_params = HashMap::from([("page".to_owned(), page.to_string()), ("per_page".to_owned(), "100".to_owned())]);
-    let params = search_params.iter().map(|v| format!("{}={}", v.0, v.1)).collect::<Vec<_>>().join("&");
-    let mut url = format!("{}/orgs/{}/repos", s.host, GITHUB_ORG);
+    let url = format!("{}/orgs/{}/repos?per_page={}&page={}", s.host, GITHUB_ORG, PER_PAGE, page);
 
-    if search_params.len() > 0 {
-      url = format!("{}?{}", &url, &params);
+    // `cashed == false` is the explicit "Refresh" path. Resetting `release_count`
+    // alone was not enough: `get_cached` with the 1-hour TTL answered straight
+    // from disk without touching the network, so a newly published repo did not
+    // appear in the list for up to an hour. `fetch_force` always revalidates —
+    // the ETag usually yields 304, so the traffic cost is negligible.
+    let cached = if cashed {
+      crate::utils::http_cache::fetch(&s.get_client(), &url, Duration::from_secs(CACHE_TTL_ORG_REPOS_SECS)).await
+    } else {
+      crate::utils::http_cache::fetch_force(&s.get_client(), &url).await
     }
+    .context("Failed to send request to Github (__get_releases)")?;
 
-    let resp = s
-      .get(&url)
-      .send()
-      .await
-      .context(format!("Failed to send request to Github (__get_releases)"))?;
+    let projects: Vec<ProjectGithub> = serde_json::from_slice(&cached.bytes).map_err(|e| {
+      // A raw serde error ("expected value at line 1") hides what actually came
+      // back — a GitHub error object, a rate-limit body or a captive-portal HTML
+      // page (served with 200, so the cache stored it happily).
+      anyhow::anyhow!(
+        "Failed to parse Github repos response as JSON ({}): url={}, source={:?}, body[..{}]={}",
+        e,
+        url,
+        cached.source,
+        JSON_ERROR_BODY_PREVIEW_LEN.min(cached.bytes.len()),
+        body_preview(&cached.bytes)
+      )
+    })?;
 
-    if !resp.status().is_success() {
-      let status = resp.status();
-      let body = resp.text().await?;
-      bail!("__get_releases, Github API error ({}): {} url: {}", status, body, url);
-    }
+    let len = projects.len();
 
-    let headers = resp.headers().clone();
-    let projects: Vec<ProjectGithub> = resp.json().await?;
-
-    if projects.len() == 0 {
-      log::info!("Github __get_releases, no releases, project: {:?}", projects);
-      return Ok(());
+    if projects.is_empty() {
+      // `break`, NOT `return`: returning here skips the assignment below, so an
+      // org whose repo count is an exact multiple of per_page (page N full,
+      // page N+1 empty) ends up with an EMPTY projects_map and therefore an
+      // empty release list, re-paginating the API on every subsequent call.
+      log::info!("Github __get_releases: page {} empty, stopping pagination", page);
+      break;
     }
 
     for project in projects {
       map.insert(project.id, project);
     }
 
-    let mut has_next_page = false;
-
-    if let Some(link) = headers.get("link") {
-      if let Some(has_next) = link.to_str()?.to_string().find("next") {
-        if has_next > 0 {
-          has_next_page = true;
-        }
-      };
-    };
-
-    if !has_next_page {
+    if (len as u32) < PER_PAGE {
       break;
     }
 

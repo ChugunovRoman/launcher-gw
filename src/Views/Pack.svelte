@@ -3,7 +3,19 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onDestroy } from "svelte";
 
-  import { progress, isInProcess, finish, completed, currentFile, processedSize, totalSize, status } from "../store/pack";
+  import {
+    progress,
+    isInProcess,
+    finish,
+    completed,
+    success,
+    error,
+    skippedFiles,
+    currentFile,
+    processedSize,
+    totalSize,
+    status,
+  } from "../store/pack";
   import { configReady } from "../store/main";
   import { choosePath, chooseFilePath } from "../utils/path";
   import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
@@ -26,20 +38,30 @@
   async function chooseExePath() {
     await chooseFilePath((selected) => (exePath = selected));
   }
+  type PackResult = {
+    skippedFiles: string[];
+    totalFilesCount: number;
+  };
+
   async function startPack() {
-    console.log("startPack");
-    console.log("startPack, packPath: ", packPath);
-    console.log("startPack, targetPath: ", targetPath);
     if (packPath === "" || targetPath === "" || $isInProcess) return;
+
+    // chunkSize must be a positive integer (MB)
+    const chunkSizeInt = Math.floor(Number(chunkSize));
+    if (!Number.isFinite(chunkSizeInt) || chunkSizeInt <= 0) return;
+    chunkSize = chunkSizeInt;
 
     $progress = 0;
     $isInProcess = true;
     $finish = false;
+    $success = false;
+    $error = "";
+    $skippedFiles = [];
 
     try {
       await invoke<AppConfig>("set_pack_paths", { source: packPath, target: targetPath });
 
-      const result = await invoke<string>("create_split_archives", {
+      const result = await invoke<PackResult>("create_split_archives", {
         sourceDir: packPath,
         targetPath: targetPath,
         chunkSize,
@@ -48,13 +70,23 @@
       });
 
       $progress = 100;
-      $completed = true;
-      console.log("pack result: ", result);
-    } finally {
-      // completed effect still animates finish; ensure process flag can clear on error
-      if (!$completed) {
-        $isInProcess = false;
+      // `success` survives the effect below (which immediately clears
+      // `completed`), so the result message stays visible.
+      $success = true;
+      $skippedFiles = result?.skippedFiles ?? [];
+      if ($skippedFiles.length) {
+        console.warn("pack skipped files: ", $skippedFiles);
       }
+      $completed = true;
+    } catch (e) {
+      // Every packing error (no files, file over the chunk limit, walk failure)
+      // used to end up as an unhandled rejection — the user only saw the button
+      // reset (item 33).
+      console.error("pack failed: ", e);
+      $error = e instanceof Error ? e.message : String(e);
+      $progress = 0;
+      $isInProcess = false;
+      $finish = false;
     }
   }
 
@@ -131,7 +163,7 @@
   <div class="input-group">
     <label class="input-label">{$_("app.pack.chunkSize")}</label>
     <div class="input-row">
-      <input type="number" bind:value={chunkSize} placeholder={$_("app.pack.chunkSize")} class="uuid-input" />
+      <input type="number" min="1" step="1" bind:value={chunkSize} placeholder={$_("app.pack.chunkSize")} class="uuid-input" />
     </div>
   </div>
 
@@ -145,15 +177,22 @@
 
   <Progress progress={$progress} />
 
-  {#if $completed}
+  {#if $error}
+    <div class="pack-error">{$_("app.pack.failed")}: {$error}</div>
+  {/if}
+
+  {#if $success}
     <div class="pack-summary">{$_("app.pack.hashesDone")}</div>
+    {#if $skippedFiles.length}
+      <div class="pack-warning">{$_("app.pack.skippedFiles", { values: { count: $skippedFiles.length } })}</div>
+    {/if}
   {/if}
 
   <span
     role="button"
     tabindex="0"
     class="packbtn"
-    onclick={startPack}
+    onclick={() => void startPack()}
     class:packbtn__coping={$isInProcess}
     class:packbtn__finish={$finish}
     class:long_t={$finish}>
@@ -189,6 +228,23 @@
     text-align: left;
     color: #4caf50;
     font-size: 0.85rem;
+  }
+
+  .pack-warning {
+    -webkit-app-region: no-drag;
+    margin-top: 0.25rem;
+    text-align: left;
+    color: #e9c53d;
+    font-size: 0.85rem;
+  }
+
+  .pack-error {
+    -webkit-app-region: no-drag;
+    margin-top: 0.5rem;
+    text-align: left;
+    color: #ec6161;
+    font-size: 0.85rem;
+    word-break: break-word;
   }
 
   .input-group {

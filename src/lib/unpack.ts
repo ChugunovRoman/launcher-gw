@@ -31,7 +31,7 @@ export async function initUnpackListener() {
 
       if (versionName !== "") {
         updateVersionProgress(versionName, (version) => {
-          const map = version.filesProgress;
+          const map = version.filesProgress ?? new Map();
           const prev = map.get(fileName);
           if (!prev) {
             return {};

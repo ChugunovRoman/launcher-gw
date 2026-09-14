@@ -10,6 +10,7 @@
 
   let sourcePath = $state("");
   let targetPath = $state("");
+  let unpackError = $state("");
 
   async function chooseSrcPath() {
     await choosePath((selected) => (sourcePath = selected));
@@ -23,31 +24,46 @@
     $isInProcess = true;
     $progress = 0;
     $finish = false;
+    unpackError = "";
 
     try {
       await invoke("set_unpack_paths", { source: sourcePath, target: targetPath });
 
-      // Prefer Pack output (data1.zip); fall back to any .zip in the source folder.
-      let archivePath = await join(sourcePath, "data1.zip");
-      const data1Exists = await invoke<boolean>("check_file_exists", { path: archivePath });
-      if (!data1Exists) {
-        archivePath = await join(sourcePath, "game.zip");
-        const gameZipExists = await invoke<boolean>("check_file_exists", { path: archivePath });
+      // Pack produces a SPLIT archive set (data1.zip … dataN.zip).  Extracting
+      // only the first part used to report 100% success while silently leaving
+      // most of the game unpacked, so collect every part first.
+      const archives: string[] = [];
+      for (let i = 1; ; i++) {
+        const candidate = await join(sourcePath, `data${i}.zip`);
+        const exists = await invoke<boolean>("check_file_exists", { path: candidate });
+        if (!exists) break;
+        archives.push(candidate);
+      }
+
+      if (archives.length === 0) {
+        // Fall back to a single-file archive.
+        const gameZip = await join(sourcePath, "game.zip");
+        const gameZipExists = await invoke<boolean>("check_file_exists", { path: gameZip });
         if (!gameZipExists) {
           throw new Error("No data1.zip / game.zip found in source folder");
         }
+        archives.push(gameZip);
       }
 
-      await invoke("extract_archive", {
-        versionName: "manual-unpack",
-        archivePath,
-        outputDir: targetPath,
-      });
+      for (let i = 0; i < archives.length; i++) {
+        await invoke("extract_archive", {
+          versionName: "manual-unpack",
+          archivePath: archives[i],
+          outputDir: targetPath,
+        });
+        $progress = ((i + 1) / archives.length) * 100;
+      }
 
       $progress = 100;
       $finish = true;
     } catch (err) {
       console.error("Unpack failed:", err);
+      unpackError = typeof err === "string" ? err : String((err as any)?.message ?? err);
     } finally {
       setTimeout(() => ($isInProcess = false), 500);
       setTimeout(() => ($finish = false), 1500);
@@ -104,6 +120,10 @@
     <div class="progress-bar" style="width: {Math.min(100, Math.max(0, $progress))}%;"></div>
     <span class="progress-text">{Math.round($progress)}%</span>
   </div>
+
+  {#if unpackError}
+    <span class="unpack-error">{$_("app.unpack.failed")}: {unpackError}</span>
+  {/if}
 
   <span
     role="button"
@@ -176,6 +196,14 @@
   }
   .choose-btn:hover {
     background-color: rgba(61, 93, 236, 1);
+  }
+
+  .unpack-error {
+    display: block;
+    margin-top: 0.5rem;
+    color: rgba(254, 197, 208, 1);
+    font-size: 0.85rem;
+    word-break: break-word;
   }
 
   .progress-container {

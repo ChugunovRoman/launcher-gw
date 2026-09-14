@@ -62,6 +62,10 @@ export const launcherDwnBytes = writable(0);
 export const launcherDwnTotalBytes = writable(0);
 export const launcherDwnProgress = writable(0);
 
+/// Non-empty when AppConfig::load_or_create failed and the launcher is running
+/// from in-memory defaults (config changes will not persist across restarts).
+export const configLoadError = writable("");
+
 // Game process state. Single source of truth is the backend GameTracker:
 // the frontend only mirrors `game-status` events / `get_game_status` here.
 export const gameStatus = writable<GameStatus>({ running: false, pid: null, version_name: null });

@@ -34,13 +34,13 @@ pub fn app_exit(app: tauri::AppHandle) {
 pub async fn graceful_shutdown(app: &tauri::AppHandle) {
   // Cancel all active downloads so workers stop writing and flush their .part files.
   if let Some(channel_map) = app.try_state::<CancelMap>() {
-    let senders: Vec<tokio::sync::broadcast::Sender<()>> = {
+    let handles: Vec<crate::handlers::start_download_version::CancelHandle> = {
       let map = crate::utils::locks::lock(&channel_map);
-      map.iter().map(|(_, v)| v.clone()).collect()
+      map.values().cloned().collect()
     };
 
-    for tx in senders {
-      let _ = tx.send(());
+    for handle in handles {
+      handle.cancel();
     }
   }
 

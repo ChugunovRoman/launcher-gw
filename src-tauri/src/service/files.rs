@@ -77,12 +77,16 @@ impl ServiceFiles {
     // appending at the old offset would corrupt the file.
     let requested_offset = seek.unwrap_or(0);
     let restart_from_zero = requested_offset > 0 && stream_start == 0;
-    let mut file = if restart_from_zero {
-      log::warn!(
-        "Download restart from byte 0 for {}: server ignored the Range request (requested offset {})",
-        file_name,
-        requested_offset
-      );
+    let mut file = if restart_from_zero || stream_start == 0 {
+      // Truncate when starting from the beginning — a stale leftover tail from
+      // a previous partial download would cause a redundant full re-download.
+      if restart_from_zero {
+        log::warn!(
+          "Download restart from byte 0 for {}: server ignored the Range request (requested offset {})",
+          file_name,
+          requested_offset
+        );
+      }
       OpenOptions::new().write(true).create(true).truncate(true).open(&output_path).await?
     } else {
       OpenOptions::new().write(true).create(true).open(&output_path).await?

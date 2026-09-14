@@ -101,6 +101,14 @@ pub const TMP_LTX: &str = "tmp.ltx";
 pub const FSGAME_LTX: &str = "fsgame.ltx";
 
 pub const NO_KEY: &str = "---";
+
+/// user.ltx commands whose SECOND token is a name, not a value
+/// (`bind <action> <key>`, `bind_sec <action> <key>`). Every other command is a
+/// flat `cvar value` pair whose value may itself contain spaces
+/// (`vid_mode 1920x1080`, `player_name John Doe`). Nesting used to be guessed
+/// from the number of spaces on the line, which misparsed every bind line with
+/// a trailing comment or a double space.
+pub const LTX_NESTED_COMMANDS: &[&str] = &["bind", "bind_sec"];
 pub const DEFAULT_BIND_LTX: &str = "default.ltx";
 pub const CUSTOM_BIND_LTX: &str = "custom.ltx";
 
@@ -125,6 +133,16 @@ pub const ERR_UPLOAD_HASH_MISMATCH: &str = "UPLOAD_HASH_MISMATCH";
 pub const ERR_RELEASE_NOT_IN_INDEX: &str = "RELEASE_NOT_IN_INDEX";
 pub const ERR_DOWNLOAD_ALREADY_RUNNING: &str = "DOWNLOAD_ALREADY_RUNNING";
 pub const ERR_VERIFY_ALREADY_RUNNING: &str = "VERIFY_ALREADY_RUNNING";
+/// Manifest reconciliation refused: the server release carries no assets at
+/// all (index published before the upload finished, or an empty API answer).
+pub const ERR_RELEASE_NO_ASSETS: &str = "RELEASE_NO_ASSETS";
+/// Manifest reconciliation refused: the server release lists drastically fewer
+/// assets than the saved progress, so "everything was deleted" is not believed.
+pub const ERR_RELEASE_ASSETS_SHRUNK: &str = "RELEASE_ASSETS_SHRUNK";
+/// Token cannot be used as an `Authorization` header value (newline / non-ASCII).
+pub const ERR_INVALID_TOKEN: &str = "INVALID_TOKEN";
+/// Keybind profile export destination has no `.ltx` extension.
+pub const ERR_EXPORT_NOT_LTX: &str = "EXPORT_NOT_LTX";
 
 // Per-file error codes carried by the `download-version-file-error` event.
 pub const FILE_ERR_HASH_MISMATCH: &str = "HASH_MISMATCH";
@@ -133,6 +151,12 @@ pub const FILE_ERR_NETWORK: &str = "NETWORK";
 pub const FILE_ERR_UNPACK_FAILED: &str = "UNPACK_FAILED";
 pub const FILE_ERR_COPY_FAILED: &str = "COPY_FAILED";
 pub const FILE_ERR_VERIFY_FAILED: &str = "VERIFY_FAILED";
+pub const FILE_ERR_BAD_MANIFEST: &str = "BAD_MANIFEST";
+
+/// Marker prefix for "the remote file changed between read and write".
+/// The frontend matches on it to tell the maintainer to rebuild the index
+/// preview instead of retrying blindly (R12).
+pub const INDEX_CONFLICT_ERR: &str = "INDEX_CONFLICT";
 
 // Static release index (player-side, raw CDN — not counted against API rate limit)
 // Per-provider: each provider gets its own index with provider-specific URLs.
@@ -165,6 +189,19 @@ pub const CACHE_TTL_RAW_FILE_SECS: u64 = 600; // 10 min
 /// Launcher background image.
 pub const CACHE_TTL_BACKGROUND_SECS: u64 = 86400; // 24 hours
 
+// HTTP client timeouts (seconds).  Mirrors the values used by the Github /
+// Gitlab clients: without them a silently dropping network (captive portal,
+// firewall) leaves a request pending forever while a global lock is held.
+/// TCP/TLS connect timeout.
+pub const HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
+/// Whole-request timeout (connect + headers + body).
+pub const HTTP_REQUEST_TIMEOUT_SECS: u64 = 120;
+
+/// How many bytes of a response body are quoted in a "failed to parse JSON"
+/// error. Enough to recognise an HTML captive-portal page or an API error
+/// object without dumping a whole response into the log.
+pub const JSON_ERROR_BODY_PREVIEW_LEN: usize = 300;
+
 /// Default git branch used when uploading the manifest and creating a tag.
 /// TODO: this is a temporary crutch. The correct fix is to fetch the repo's
 /// default branch from the provider and thread it through `add_file_to_repo` /
@@ -176,3 +213,33 @@ pub const DEFAULT_BRANCH: &str = "master";
 /// (`packages/generic/<namespace>/<tag>/<file>`). Kept in consts so the
 /// package-lookup API calls match the upload URLs.
 pub const GENERIC_PACKAGE_NAMESPACE: &str = "gw_releases";
+
+/// Error prefix used when the downloaded launcher binary does not match the
+/// SHA-256 published in the release index. The file replaces the RUNNING
+/// executable, so a mismatch is always terminal — the download is deleted.
+pub const LAUNCHER_SHA256_MISMATCH: &str = "Launcher download sha256 mismatch";
+
+// Pack (release building) error prefixes. The Pack view shows the message as
+// is; the prefix makes the cause greppable in the launcher log.
+/// The chosen source folder does not exist (validated before the target dir is
+/// cleaned — item 80).
+pub const PACK_ERR_SOURCE_NOT_FOUND: &str = "PACK_SOURCE_NOT_FOUND";
+/// Chunk size must be a positive number of megabytes.
+pub const PACK_ERR_INVALID_CHUNK_SIZE: &str = "PACK_INVALID_CHUNK_SIZE: chunk size must be greater than 0 MB";
+/// The source folder contains no files to pack (after applying the exclude masks).
+pub const PACK_ERR_NO_SOURCE_FILES: &str = "PACK_NO_SOURCE_FILES: no files found in the source directory — nothing to pack";
+/// A directory walk error during packing: an incomplete release is worse than a
+/// refused one, so the pack aborts (items 75 and 84).
+pub const PACK_ERR_WALK_FAILED: &str = "PACK_WALK_FAILED";
+/// Every source file turned out to be unreadable — nothing was stored.
+pub const PACK_ERR_NOTHING_PACKED: &str = "PACK_NOTHING_PACKED";
+
+/// How many already-extracted file names are quoted in the log when unpacking
+/// fails. The archive can hold tens of thousands of entries, so the list is
+/// capped: it is a starting point for a manual cleanup, not a full inventory
+/// (the destination directory itself is logged next to it).
+pub const UNPACK_EXTRACTED_LOG_LIMIT: usize = 100;
+
+/// How many skipped (unsafe-named) archive entries are quoted in the log.
+/// Skipping is non-fatal, so this is a diagnostic hint only.
+pub const UNPACK_SKIPPED_LOG_LIMIT: usize = 50;

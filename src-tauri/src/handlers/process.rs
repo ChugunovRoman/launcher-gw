@@ -208,11 +208,35 @@ pub async fn run_game(
     .try_state::<Arc<Mutex<AppConfig>>>()
     .ok_or_else(|| log_launch_error(LaunchError::ConfigLocked("Config not initialized".to_string())))?;
 
-  // One game at a time: while the tracker holds a live process, refuse.
-  if tracker.status().await.running {
+  // One game at a time: atomically claim the tracker slot to prevent
+  // concurrent launches from double-click or parallel requests.
+  if !tracker.try_claim().await {
     return Err(log_launch_error(LaunchError::AlreadyRunning));
   }
 
+  // From here on the tracker holds a `launching: true` placeholder that the
+  // watcher deliberately never reaps (game_tracker.rs). Every failure path MUST
+  // release it: otherwise the claim outlives the failed launch attempt and every
+  // later "Play" answers AlreadyRunning until the launcher is restarted.
+  // Releasing it in exactly one place here is what keeps that guarantee true for
+  // future early returns as well (R10).
+  let result = run_game_claimed(&app, &tracker, &state, &keybind_manager, versionName, useMain).await;
+  if result.is_err() {
+    tracker.clear().await;
+  }
+  result
+}
+
+/// Body of `run_game`, executed with the tracker slot already claimed.
+/// Never call directly — the caller owns claiming and releasing the slot.
+async fn run_game_claimed(
+  app: &tauri::AppHandle,
+  tracker: &Arc<GameTracker>,
+  state: &Arc<Mutex<AppConfig>>,
+  keybind_manager: &Arc<KeybindManager>,
+  version_name: Option<String>,
+  use_main: Option<bool>,
+) -> Result<GameStatus, LaunchError> {
   // Snapshot launch-critical fields and drop the config lock right away:
   // the launch path does sync fs work (user.ltx) and process spawning —
   // holding the lock through all of that froze every other config command
@@ -220,7 +244,7 @@ pub async fn run_game(
   let (version, run_params_snapshot, profile_for_launch, provider_id_for_launch) = {
     let config_guard = state.lock().await;
 
-    let version = resolve_version_for_launch(&config_guard, versionName.as_deref(), useMain.unwrap_or(false))
+    let version = resolve_version_for_launch(&config_guard, version_name.as_deref(), use_main.unwrap_or(false))
       .await
       .map_err(|e| log_launch_error(LaunchError::VersionNotFound(e)))?;
 
@@ -374,15 +398,16 @@ pub async fn run_game(
 
   // Snapshot (start_time, exe) right after spawn — the identity of the tracked
   // process for all later liveness probes.
-  let snapshot = tauri::async_runtime::spawn_blocking(move || snapshot_process(pid))
-    .await
-    .map_err(|e| {
+  let snapshot = match tauri::async_runtime::spawn_blocking(move || snapshot_process(pid)).await {
+    Ok(s) => s,
+    Err(e) => {
       #[cfg(target_os = "windows")]
       if let Some(drive) = subst_drive {
         subst_workaround::remove(drive);
       }
-      log_launch_error(LaunchError::SpawnFailed(format!("snapshot task failed: {}", e)))
-    })?;
+      return Err(log_launch_error(LaunchError::SpawnFailed(format!("snapshot task failed: {}", e))));
+    }
+  };
 
   let Some((start_time, exe_snapshot)) = snapshot else {
     // Process died between spawn and snapshot — the engine failed to start.
@@ -399,6 +424,7 @@ pub async fn run_game(
     exe_path: exe_snapshot.map(|p| p.to_string_lossy().into_owned()),
     version_name: version.name.clone(),
     subst_drive,
+    launching: false,
   };
 
   tracker.set(tracked.clone()).await;

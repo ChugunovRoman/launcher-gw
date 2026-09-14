@@ -18,6 +18,35 @@ pub struct KeybindManager {
 }
 
 impl KeybindManager {
+  /// Validate a profile name against filesystem-unsafe characters and reserved
+  /// Windows device names.  Returns `Ok(trimmed_name)` or `Err(...)`.
+  fn validate_profile_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+      return Err(anyhow::anyhow!("Profile name must not be empty"));
+    }
+    // Forbidden characters on Windows (and problematic on Linux/macOS).
+    const FORBIDDEN: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+    if let Some(c) = trimmed.chars().find(|c| FORBIDDEN.contains(c)) {
+      return Err(anyhow::anyhow!("Profile name contains forbidden character '{}': {}", c, trimmed));
+    }
+    // Trailing dots/spaces are silently stripped by Windows APIs → reject.
+    if trimmed.ends_with('.') || trimmed.ends_with(' ') {
+      return Err(anyhow::anyhow!("Profile name must not end with a dot or space: '{}'", trimmed));
+    }
+    // Reserved Windows device names (case-insensitive).
+    let stem = trimmed.split_once('.').map_or(trimmed, |(s, _)| s);
+    const RESERVED: &[&str] = &[
+      "CON", "PRN", "AUX", "NUL",
+      "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+      "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r)) {
+      return Err(anyhow::anyhow!("Profile name is a reserved system name: '{}'", trimmed));
+    }
+    Ok(trimmed.to_string())
+  }
+
   pub fn new(app_handle: &tauri::AppHandle) -> Self {
     // A failing profiles dir must not crash startup — fall back to a temp dir
     // (profiles stay empty until the real dir becomes available).
@@ -77,9 +106,13 @@ impl KeybindManager {
   }
 
   pub async fn rename_profile(&self, old_name: &str, new_name: &str) -> Result<()> {
-    // Запрещаем пустые или недопустимые имена
-    if new_name.is_empty() || new_name.contains('/') || new_name.contains('\\') {
-      return Err(anyhow::anyhow!("Invalid profile name: {}", new_name));
+    let validated = Self::validate_profile_name(new_name)?;
+    // Build the file name with .ltx extension (create_profile_from does this,
+    // but rename_profile historically did not — leading to extensionless files
+    // that the loader silently ignores).
+    let mut file_name = validated.clone();
+    if !file_name.ends_with(".ltx") {
+      file_name.push_str(".ltx");
     }
 
     let mut profiles = self.map.lock().await;
@@ -89,35 +122,29 @@ impl KeybindManager {
       return Err(anyhow::anyhow!("Profile '{}' does not exist", old_name));
     }
 
-    // Проверяем, не занято ли новое имя
-    if profiles.contains_key(new_name) {
-      return Err(anyhow::anyhow!("Profile '{}' already exists", new_name));
+    // Проверяем, не занято ли новое имя (use validated name without extension)
+    if profiles.contains_key(validated.as_str()) {
+      return Err(anyhow::anyhow!("Profile '{}' already exists", validated));
     }
 
-    // Получаем старый конфиг и его путь
-    let mut config = profiles.remove(old_name).unwrap(); // безопасно, т.к. проверили выше
-    let old_path = config.get_file_path();
+    // Получаем старый конфиг и его путь (но НЕ удаляем из карты пока rename не пройдет)
+    let old_path = profiles.get(old_name).unwrap().get_file_path(); // safe: checked above
+    let new_path = self.path.join(&file_name);
 
-    // Формируем новый путь
-    let new_path = self.path.join(new_name);
-
-    // Переименовываем файл на диске
+    // Переименовываем файл на диске ПЕРВЫМ — при ошибке профиль остаётся в карте
     fs::rename(&old_path, &new_path).with_context(|| format!("Failed to rename profile file from {:?} to {:?}", old_path, new_path))?;
 
-    // Обновляем путь в конфиге
+    // Только после успешного rename обновляем карту
+    let mut config = profiles.remove(old_name).unwrap();
     config.set_file_path(new_path);
-
-    // Вставляем под новым ключом
-    profiles.insert(new_name.to_string(), config);
+    profiles.insert(validated, config);
 
     Ok(())
   }
 
   pub async fn create_profile_from(&self, new_name: &str, source_name: &str) -> Result<()> {
     // 1. Валидация имени нового профиля
-    if new_name.is_empty() || new_name.contains('/') || new_name.contains('\\') {
-      return Err(anyhow::anyhow!("Invalid profile name: {}", new_name));
-    }
+    let validated = Self::validate_profile_name(new_name)?;
 
     let mut profiles = self.map.lock().await;
 
@@ -127,16 +154,15 @@ impl KeybindManager {
       .ok_or_else(|| anyhow::anyhow!("Source profile '{}' does not exist", source_name))?;
 
     // 3. Проверяем, не занято ли новое имя
-    if profiles.contains_key(new_name) {
-      return Err(anyhow::anyhow!("Profile '{}' already exists", new_name));
+    if profiles.contains_key(validated.as_str()) {
+      return Err(anyhow::anyhow!("Profile '{}' already exists", validated));
     }
 
     // 4. Клонируем конфигурацию
     let mut new_config = source_config.clone();
 
     // 5. Формируем новый путь к файлу
-    // Добавляем расширение .ltx, если вы используете его в load_profiles
-    let mut file_name = new_name.to_string();
+    let mut file_name = validated.clone();
     if !file_name.ends_with(".ltx") {
       file_name.push_str(".ltx");
     }
@@ -146,10 +172,10 @@ impl KeybindManager {
     new_config.set_file_path(new_path);
     new_config
       .save()
-      .with_context(|| format!("Failed to save new profile '{}' to disk", new_name))?;
+      .with_context(|| format!("Failed to save new profile '{}' to disk", validated))?;
 
     // 7. Добавляем в карту памяти
-    profiles.insert(new_name.to_string(), new_config);
+    profiles.insert(validated, new_config);
 
     Ok(())
   }
@@ -213,7 +239,10 @@ impl KeybindManager {
       );
 
       let mut config = GameConfig::new(path);
-      config.load()?;
+      if let Err(e) = config.load() {
+        log::warn!("Skipping unreadable keybind profile '{}': {}", &name, e);
+        continue;
+      }
 
       self.map.lock().await.insert(name, config);
     }
@@ -399,6 +428,19 @@ impl KeybindManager {
 
   /// Экспорт: копирует файл профиля из внутренней папки в путь, выбранный пользователем
   pub async fn export_profile(&self, name: &str, destination_path: PathBuf) -> Result<()> {
+    // Validate: destination must have .ltx extension.
+    let ext = destination_path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+    if ext != "ltx" {
+      // An error code, not prose: the UI cannot localize a free-form message,
+      // and the `save()` dialog does not enforce the extension.
+      log::error!("export_profile: destination must have a .ltx extension, got: {:?}", destination_path);
+      anyhow::bail!("{}", crate::consts::ERR_EXPORT_NOT_LTX);
+    }
+
+    // Validate: reject system/temp directories as destinations.
+    crate::utils::paths::assert_creatable_directory(&destination_path.parent().unwrap_or(&destination_path))
+      .map_err(|e| anyhow::anyhow!("{}", e))?;
+
     let profiles = self.map.lock().await;
     let config = profiles.get(name).ok_or_else(|| anyhow::anyhow!("Profile '{}' not found", name))?;
 

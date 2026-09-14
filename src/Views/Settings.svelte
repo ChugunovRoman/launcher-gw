@@ -13,7 +13,7 @@
   import Spin from "../Components/Spin.svelte";
   import { RefreshCw } from "lucide-svelte";
   import { prepareVersionItem } from "../lib/main";
-  import { switchProvider, pingProvider } from "../lib/providers";
+  import { switchProvider, pingProvider, getBackendProviderSwitch, setBackendProviderSwitch } from "../lib/providers";
 
   let coping = $state(false);
   let coping2 = $state(false);
@@ -22,7 +22,11 @@
   let pingingProvider = $state<string | null>(null);
 
   async function selectInstallPath(e: Event) {
-    await choosePath((selected) => updateConfig("default_installed_path", selected));
+    // choosePath resolves to undefined when the dialog is cancelled; without
+    // this guard the code below still rewrote installed_path of EVERY version
+    // from the default, wiping per-version custom paths.
+    const picked = await choosePath((selected) => updateConfig("default_installed_path", selected));
+    if (!picked) return;
     await invoke<void>("set_default_install_path", { path: $appConfig?.default_installed_path });
     const s = await sep();
 
@@ -34,7 +38,8 @@
     });
   }
   async function selectDownloadPath(e: Event) {
-    await choosePath((selected) => updateConfig("default_download_path", selected));
+    const picked = await choosePath((selected) => updateConfig("default_download_path", selected));
+    if (!picked) return;
     await invoke<void>("set_default_download_path", { path: $appConfig?.default_download_path });
     const s = await sep();
 
@@ -74,16 +79,55 @@
 
   // React to provider radio changes — centralized switch via lib/providers.ts.
   // Skip the initial run to avoid refetching on Settings mount.
+  // Track the last value the effect acted on to prevent re-triggering from
+  // the rollback `radioApiProvider.set(saved)` (R6 fix).
+  // Also skip when the backend already switched (provider-fallback event, R7).
   let providerInitialized = false;
+  let previousProvider: string | undefined;
+  let lastEffectValue: string | undefined;
   $effect(() => {
     const provider = $radioApiProvider;
     if (!providerInitialized) {
       providerInitialized = true;
+      previousProvider = provider;
+      lastEffectValue = provider;
       return;
     }
+    // Skip if this value was already processed (e.g. rollback from catch).
+    if (provider === lastEffectValue) return;
+    // Skip if the backend initiated this switch (provider-fallback event).
+    // main.ts stores the expected provider id before radioApiProvider.set, so
+    // only that exact value is skipped — a stale expectation can no longer eat
+    // a real user switch (R7 / R11 fix).
+    if (provider === getBackendProviderSwitch()) {
+      setBackendProviderSwitch(null);
+      previousProvider = provider;
+      lastEffectValue = provider;
+      return;
+    }
+    lastEffectValue = provider;
+    // Clear error only at the start of a user-initiated switch, not on rollback.
     providerSwitchError = "";
-    switchProvider(provider).catch(() => {
+    const saved = previousProvider;
+    switchProvider(provider).then(() => {
+      previousProvider = provider;
+    }).catch(async () => {
       providerSwitchError = $_("app.settings.providerSwitchError");
+      // Roll back the radio to the last known-good provider.
+      if (saved) {
+        lastEffectValue = saved;
+        radioApiProvider.set(saved);
+        // set_current_api_provider already cleared the cache and persisted the
+        // new provider before the failure (which normally happens later, in
+        // loadVersions), so the radio alone is not enough: without this the UI
+        // shows one provider while the backend and config.json hold another.
+        try {
+          await invoke("set_current_api_provider", { provider: saved });
+        } catch (e) {
+          console.error("provider rollback failed:", e);
+          providerSwitchError = $_("app.settings.providerRollbackError");
+        }
+      }
     });
   });
 

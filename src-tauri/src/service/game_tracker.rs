@@ -38,6 +38,11 @@ pub struct TrackedGame {
   pub version_name: String,
   /// subst drive letter to unmount after the game exits.
   pub subst_drive: Option<char>,
+  /// `true` while the launcher is preparing user.ltx and spawning the engine.
+  /// The watcher must not probe a `pid: 0` placeholder — doing so clears the
+  /// claim within one second, defeating the double-launch guard (R5 fix).
+  #[serde(default)]
+  pub launching: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +84,29 @@ impl GameTracker {
       },
       None => GameStatus::idle(),
     }
+  }
+
+  /// Atomically check that no game is running and reserve the tracker slot.
+  /// Returns `true` if the claim succeeded (caller must later call `set` with
+  /// the real process, or `clear` on failure). Returns `false` if a game is
+  /// already tracked — the caller must not launch.
+  pub async fn try_claim(&self) -> bool {
+    let mut guard = self.state.lock().await;
+    if guard.is_some() {
+      return false;
+    }
+    // Insert a placeholder so concurrent callers see "running" immediately.
+    // `launching: true` tells the watcher to skip probing — pid 0 is not a
+    // real process; the watcher would immediately clear the claim otherwise.
+    *guard = Some(TrackedGame {
+      pid: 0,
+      version_name: String::new(),
+      start_time: 0,
+      exe_path: None,
+      subst_drive: None,
+      launching: true,
+    });
+    true
   }
 }
 
@@ -194,6 +222,13 @@ pub fn start_watcher(app: tauri::AppHandle, tracker: Arc<GameTracker>, config: A
         continue;
       };
 
+      // Skip probing while the launcher is still preparing the launch
+      // (user.ltx, subst, spawn). The placeholder has pid: 0 which would
+      // immediately fail the liveness check and clear the claim (R5 fix).
+      if game.launching {
+        continue;
+      }
+
       let probe_game = game.clone();
       let alive = tauri::async_runtime::spawn_blocking(move || probe(&probe_game))
         .await
@@ -240,6 +275,7 @@ mod tests {
       exe_path,
       version_name: "test".to_string(),
       subst_drive: None,
+      launching: false,
     }
   }
 

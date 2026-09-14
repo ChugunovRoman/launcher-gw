@@ -22,16 +22,88 @@ use crate::{
   service::index::*,
 };
 
+/// Global lock serializing index publish + commit operations. Prevents two
+/// parallel finals from racing and corrupting the remote index (422).
+static PUBLISH_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// Collect the release index JSON from live API data (no commit).
 /// Used for preview in the UI before the dev confirms the commit.
 pub async fn collect_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<String> {
+  ensure_previous_index_readable(api).await?;
   let index = collect_release_index(api).await?;
   let index = merge_existing_dev_managed_fields(api, index).await?;
   serde_json::to_string_pretty(&index).context("index: serialize")
 }
 
+/// The whole publish pipeline degrades SILENTLY when the previously published
+/// index cannot be read: `presets` and `users` are hand-edited fields that live
+/// only in that file and would be republished empty, the per-release carry-over
+/// has nothing to fall back on, and the anti-collapse guard is skipped.  A
+/// transient 503 on the raw CDN, an expired stale cache or a schema bump is
+/// enough to trigger all three at once, so refuse to continue instead.
+///
+/// The very first publish (no index.json yet) legitimately has nothing to read —
+/// use the forced re-publish for that one-off bootstrap.
+async fn ensure_previous_index_readable(api: &(dyn ApiProvider + Send + Sync)) -> Result<()> {
+  crate::service::index::load_index(api.id()).await.map(|_| ()).map_err(|e| {
+    anyhow::anyhow!(
+      "index: refusing to publish — the currently published index could not be read ({}). Publishing now would wipe the hand-edited presets/users and skip the safety checks. Retry when the index is reachable, or use the forced re-publish if there is no index yet.",
+      e
+    )
+  })
+}
+
 /// Commit a previously collected index JSON string to the provider's index repo.
+/// Commit index JSON to the provider's repo. Serialized by PUBLISH_LOCK so
+/// that two parallel commits (auto-publish + manual) cannot race.
 pub async fn commit_index_json(api: &(dyn ApiProvider + Send + Sync), json: &str) -> Result<()> {
+  let _guard = PUBLISH_LOCK.lock().await;
+  commit_index_json_inner(api, json, false).await
+}
+
+/// Inner implementation — called by both `commit_index_json` (under lock) and
+/// `publish_index` (which holds the lock itself).
+///
+/// `force` skips the "no release may disappear" guard. Without the parameter
+/// the guard fired even for `publish_index(force = true)`, which made the
+/// forced re-publish (the only way to drop a deliberately deleted release from
+/// the index) fail forever.
+async fn commit_index_json_inner(api: &(dyn ApiProvider + Send + Sync), json: &str, force: bool) -> Result<()> {
+  // The JSON can come straight from the hand-editable preview textarea.  A
+  // single typo published here breaks index loading for EVERY player (they
+  // fall back to the raw API and hit the anonymous rate limit), so validate
+  // before the commit rather than after the damage.
+  let parsed: ReleaseIndex = serde_json::from_str(json).context("index: refusing to commit malformed index JSON")?;
+  if parsed.schema > INDEX_SCHEMA_VERSION {
+    bail!(
+      "index: refusing to commit, schema {} is newer than this launcher supports ({})",
+      parsed.schema, INDEX_SCHEMA_VERSION
+    );
+  }
+
+  // Safety check: refuse to commit if any release from the previously published
+  // index would disappear (same guard as publish_index). Skipped on a forced
+  // re-publish — that path exists precisely to drop a deleted release.
+  if !force {
+    if let Ok(old_index) = crate::service::index::load_index(api.id()).await {
+      let new_names: std::collections::HashSet<String> =
+        parsed.releases.iter().map(|r| normalize_release_name(&r.name)).collect();
+      let lost: Vec<&str> = old_index
+        .releases
+        .iter()
+        .filter(|r| !crate::service::get_release::is_infrastructure_release(&r.name, &r.path))
+        .filter(|r| !new_names.contains(&normalize_release_name(&r.name)))
+        .map(|r| r.name.as_str())
+        .collect();
+      if !lost.is_empty() {
+        bail!(
+          "index safety: {:?} present in the previous index but missing in the edited JSON — refusing to commit",
+          lost
+        );
+      }
+    }
+  }
+
   let is_gitlab = api.is_suppot_subgroups();
   if is_gitlab {
     if GITLAB_INDEX_PROJECT_ID == 0 {
@@ -65,7 +137,7 @@ pub async fn commit_index_json(api: &(dyn ApiProvider + Send + Sync), json: &str
   // normally after TTL expiry.
   match crate::service::index::index_raw_url(api.id()) {
     Ok(url) => {
-      if let Err(e) = crate::utils::http_cache::store(&url, json.as_bytes()) {
+      if let Err(e) = crate::utils::http_cache::store(&url, json.as_bytes()).await {
         log::warn!("commit_index_json: failed to refresh local cache for '{}': {}", url, e);
       }
     }
@@ -81,6 +153,12 @@ pub async fn commit_index_json(api: &(dyn ApiProvider + Send + Sync), json: &str
 /// lookup on the raw name would miss exactly when it is needed most.
 fn normalize_release_name(name: &str) -> String {
   name.replace('-', " ").to_lowercase()
+}
+
+/// Last path segment of a download URL, without the query string — the file
+/// name a provider stores the asset under.
+fn url_file_name(url: &str) -> Option<&str> {
+  url.split(['?', '#']).next()?.rsplit('/').next().filter(|s| !s.is_empty())
 }
 
 /// Collect the release index from live API data (no network commit).
@@ -110,6 +188,26 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
 
   let bg_etag = fetch_bg_etag(&api.launcher_bg_url()).await;
 
+  // Server-side SHA-256 of the launcher binaries: the self-update replaces the
+  // RUNNING executable, so the player must be able to verify the bytes, not
+  // just their length. A provider that cannot report the digest is not fatal —
+  // the index then carries None and the launcher falls back to the size check.
+  let launcher_sha_by_name: HashMap<String, String> = match api
+    .get_release_assets_sha256(&launcher_project_id, &launcher_release.version)
+    .await
+  {
+    Ok(list) => list.into_iter().filter_map(|a| a.sha256.map(|sha| (a.name, sha))).collect(),
+    Err(e) => {
+      log::warn!(
+        "index: get_release_assets_sha256('{}', '{}') failed, launcher assets go without sha256: {}",
+        &launcher_project_id,
+        &launcher_release.version,
+        e
+      );
+      HashMap::new()
+    }
+  };
+
   let launcher_index = LauncherIndex {
     version: launcher_release.version.clone(),
     assets: launcher_release
@@ -120,6 +218,13 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
         platform: format!("{:?}", a.platform).to_lowercase(),
         size: a.size,
         url: a.download_link.clone(),
+        // GitHub names the asset after the file; GitLab names the release link
+        // ("Windows") while the package file keeps the real file name, so the
+        // last URL segment is tried as well.
+        sha256: launcher_sha_by_name
+          .get(&a.name)
+          .or_else(|| url_file_name(&a.download_link).and_then(|n| launcher_sha_by_name.get(n)))
+          .cloned(),
       })
       .collect(),
     bg_etag,
@@ -289,17 +394,27 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     let patches = order_patches_by_chain(patches);
 
     // Carry over the previously published chain when this run could not read
-    // it in full — but only if the old chain is actually longer, so a genuine
-    // new patch is never replaced by a stale list.
+    // it in full. Merge old and new patches by tag (union) so that a genuine
+    // new patch is never lost and stale entries are not kept.
     let patches = if patches_incomplete {
       match old_entries_by_name.get(&normalize_release_name(&release.name)) {
-        Some(old) if old.patches.len() > patches.len() => {
+        Some(old) => {
+          let mut by_tag: std::collections::HashMap<String, IndexPatch> = std::collections::HashMap::new();
+          for p in old.patches.iter().cloned() {
+            by_tag.insert(p.tag.clone(), p);
+          }
+          // New (freshly collected) patches take precedence over old ones.
+          for p in patches {
+            by_tag.insert(p.tag.clone(), p);
+          }
+          let mut merged: Vec<IndexPatch> = by_tag.into_values().collect();
+          merged = order_patches_by_chain(merged);
           log::warn!(
-            "index: patch collection for '{}' was incomplete, carrying over {} previously published patches",
+            "index: patch collection for '{}' was incomplete, merged with previously published ({} total)",
             &release.name,
-            old.patches.len()
+            merged.len()
           );
-          old.patches.clone()
+          merged
         }
         _ => patches,
       }
@@ -360,7 +475,11 @@ fn apply_dev_managed_fields(mut index: ReleaseIndex, existing: Option<ReleaseInd
 /// releases).  When `force` is true, the check is skipped — required after
 /// deleting a release, otherwise the old entry would block publishing forever.
 pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync), force: bool) -> Result<()> {
+  let _guard = PUBLISH_LOCK.lock().await;
   log::info!("Publishing release index (provider: {}, force={})...", api.id(), force);
+  if !force {
+    ensure_previous_index_readable(api).await?;
+  }
   let index = collect_release_index(api).await?;
 
   // Safety check: refuse to publish if any release of the previously published
@@ -374,6 +493,10 @@ pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync), force: bool) -
       let lost: Vec<&str> = old_index
         .releases
         .iter()
+        // An older index may still contain the infrastructure `index` repo
+        // (it used to leak into the release list).  Keeping it in the
+        // comparison would make every future publish fail forever.
+        .filter(|r| !crate::service::get_release::is_infrastructure_release(&r.name, &r.path))
         .filter(|r| !new_names.contains(&normalize_release_name(&r.name)))
         .map(|r| r.name.as_str())
         .collect();
@@ -388,7 +511,7 @@ pub async fn publish_index(api: &(dyn ApiProvider + Send + Sync), force: bool) -
 
   let index = merge_existing_dev_managed_fields(api, index).await?;
   let content = serde_json::to_string_pretty(&index).context("index: serialize")?;
-  commit_index_json(api, &content).await?;
+  commit_index_json_inner(api, &content, force).await?;
   log::info!("Release index published for '{}' ({} releases)", api.id(), index.releases.len());
   Ok(())
 }
@@ -475,17 +598,16 @@ fn order_patches_by_chain(patches: Vec<IndexPatch>) -> Vec<IndexPatch> {
 
   let tags: HashMap<&str, usize> = patches.iter().enumerate().map(|(i, p)| (p.tag.as_str(), i)).collect();
 
-  // Find the root: a patch whose base_patch is None or references a tag
+  // Find all roots: patches whose base_patch is None or references a tag
   // that is not in the set (e.g. base was the game release itself).
-  let mut root_idx: Option<usize> = None;
+  let mut root_indices: Vec<usize> = Vec::new();
   for (i, p) in patches.iter().enumerate() {
     let is_root = match p.base_patch.as_deref() {
       None => true,
       Some(base) => !tags.contains_key(base),
     };
     if is_root {
-      root_idx = Some(i);
-      break;
+      root_indices.push(i);
     }
   }
 
@@ -500,26 +622,29 @@ fn order_patches_by_chain(patches: Vec<IndexPatch>) -> Vec<IndexPatch> {
     }
   }
 
-  let Some(start) = root_idx else {
+  if root_indices.is_empty() {
     // No identifiable root (every patch references another in a cycle) —
     // leave the provider's order as-is rather than guessing.
     return patches;
-  };
+  }
 
   let mut ordered: Vec<IndexPatch> = Vec::with_capacity(patches.len());
   let mut used = vec![false; patches.len()];
-  let mut cursor = Some(start);
 
-  while let Some(idx) = cursor {
-    if used[idx] {
-      break; // cycle guard
+  // Walk each chain from its root; unlinked patches are appended at the end.
+  for start in root_indices {
+    let mut cursor = Some(start);
+    while let Some(idx) = cursor {
+      if used[idx] {
+        break; // cycle guard
+      }
+      used[idx] = true;
+      ordered.push(patches[idx].clone());
+      cursor = child_by_base.get(patches[idx].tag.as_str()).copied();
     }
-    used[idx] = true;
-    ordered.push(patches[idx].clone());
-    cursor = child_by_base.get(patches[idx].tag.as_str()).copied();
   }
 
-  // Append any patches that did not link into the resolved chain (broken
+  // Append any patches that did not link into a resolved chain (broken
   // base_patch references, duplicates, etc.) in their original order.
   for (i, p) in patches.iter().enumerate() {
     if !used[i] {

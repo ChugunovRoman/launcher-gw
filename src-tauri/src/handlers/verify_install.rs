@@ -8,11 +8,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, atomic::Ordering};
 
 use serde::Serialize;
 use tauri::Emitter;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::Mutex;
 
 use crate::configs::AppConfig::{AppConfig, FileProgress, VersionProgress};
 use crate::consts::{ERR_DOWNLOAD_ALREADY_RUNNING, ERR_USER_CANCELLED, ERR_VERIFY_ALREADY_RUNNING};
@@ -121,23 +121,18 @@ pub async fn verify_installed_version(
     skipped_no_hash: 0,
   };
 
-  let (cancel_tx, mut cancel_rx) = broadcast::channel::<()>(1);
+  let cancel = crate::handlers::start_download_version::CancelHandle::new();
   {
-    crate::utils::locks::lock(&channel_map).insert(verify_key.clone(), cancel_tx);
+    crate::utils::locks::lock(&channel_map).insert(verify_key.clone(), cancel.clone());
   }
   scopeguard::defer! {
     crate::utils::locks::lock(&channel_map).remove(&verify_key);
   };
 
-  // Hashing runs in spawn_blocking; this flag lets a cancel abort a long hash.
-  let cancel_flag = Arc::new(AtomicBool::new(false));
-  {
-    let flag = cancel_flag.clone();
-    tokio::spawn(async move {
-      let _ = cancel_rx.recv().await;
-      flag.store(true, Ordering::Relaxed);
-    });
-  }
+  // Hashing runs in spawn_blocking; the handle's flag lets a cancel abort a
+  // long hash.  It is the SAME flag the cancel command sets, so a cancel that
+  // arrives before any receiver exists is no longer lost.
+  let cancel_flag = cancel.flag.clone();
 
   let mut done_files: u32 = 0;
   let mut done_bytes: u64 = 0;
@@ -249,8 +244,9 @@ pub async fn verify_installed_version(
 #[tauri::command]
 pub async fn cancel_verify_installed_version(channel_map: tauri::State<'_, CancelMap>, versionName: String) -> Result<(), String> {
   let key = format!("verify:{}", &versionName);
-  if let Some(tx) = crate::utils::locks::lock(&channel_map).remove(&key) {
-    let _ = tx.send(());
+  let handle = crate::utils::locks::lock(&channel_map).get(&key).cloned();
+  if let Some(handle) = handle {
+    handle.cancel();
   }
   Ok(())
 }
@@ -276,12 +272,16 @@ pub async fn start_repair_version(
     return Err(ERR_DOWNLOAD_ALREADY_RUNNING.to_string());
   }
 
-  let (cancel_tx, _) = broadcast::channel::<()>(1);
+  let cancel = crate::handlers::start_download_version::CancelHandle::new();
+  let cancel_flag_for_guard = cancel.flag.clone();
   {
-    crate::utils::locks::lock(&channel_map).insert(versionName.clone(), cancel_tx.clone());
+    crate::utils::locks::lock(&channel_map).insert(versionName.clone(), cancel.clone());
   }
   scopeguard::defer! {
-    crate::utils::locks::lock(&channel_map).remove(&versionName);
+    let mut map = crate::utils::locks::lock(&channel_map);
+    if map.get(&versionName).is_some_and(|h| Arc::ptr_eq(&h.flag, &cancel_flag_for_guard)) {
+      map.remove(&versionName);
+    }
   };
 
   let (version_id, version_path, installed_path, release_manifest) = {
@@ -399,6 +399,10 @@ pub async fn start_repair_version(
     let _ = cfg.save();
   }
 
+  if cancel.is_cancelled() {
+    return Err(ERR_USER_CANCELLED.to_string());
+  }
+
   crate::service::download_worker::run_version_pipeline(
     &app,
     &app_config.inner().clone(),
@@ -408,7 +412,7 @@ pub async fn start_repair_version(
     &version,
     files_to_download,
     Vec::new(),
-    cancel_tx,
+    cancel,
   )
   .await
 }

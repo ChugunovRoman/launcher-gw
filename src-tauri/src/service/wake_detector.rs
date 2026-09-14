@@ -41,10 +41,12 @@ impl WakeDetector {
           log::info!("🖥️ Система вышла из сна! Пропущено ~{:.1} сек", elapsed_system);
 
           detected = true;
+          elapsed_time = 0.0;
         }
         if detected {
           if elapsed_time >= timeout {
             detected = false;
+            elapsed_time = 0.0;
 
             // Вызываем коллбэк
             (self.callback)();

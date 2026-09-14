@@ -27,7 +27,7 @@
     patchNotesData,
     fetchLocalVersions,
   } from "../store/main";
-  import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion } from "../store/upload";
+  import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
   import { normalizeLaunchError, warnIfTempPath } from "../lib/main";
   import { COFF_FROM_COMPRESSED_SIZE, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
@@ -89,8 +89,8 @@
   async function handleCheckPatches(version: Version) {
     const name = version.name;
     checkingPatch = name;
+    patchErrors = new Map(patchErrors);
     patchErrors.delete(name);
-    patchErrors = patchErrors;
 
     try {
       const result = await invoke<PatchCheckResult>("get_version_patches", { versionName: name });
@@ -108,8 +108,8 @@
   async function handleInstallPatch(version: Version, patchName: string) {
     installingPatch = { version: version.name, patch: patchName };
     const name = version.name;
+    patchErrors = new Map(patchErrors);
     patchErrors.delete(name);
-    patchErrors = patchErrors;
 
     // Reset progress state synchronously on click so the UI shows a fresh
     // 0% download bar immediately. Without this, $patchInstallProgress keeps
@@ -163,6 +163,8 @@
         return $_("app.download.errors.copyFailed");
       case "VERIFY_FAILED":
         return $_("app.download.errors.verifyFailed");
+      case "BAD_MANIFEST":
+        return $_("app.download.errors.badManifest");
       default:
         return $_("app.download.errors.network");
     }
@@ -327,6 +329,8 @@
         versionName: version.name,
       });
     } catch (error: any) {
+      // Re-read version from store to get fresh wasCanceled flag after async gap.
+      const updatedVersion = $versions.find((v) => v.name === version.name);
       const msg = typeof error === "string" ? error : String(error?.message ?? error);
       if (msg.includes("DOWNLOAD_FAILED")) {
         // Some files failed permanently — the version stays errored with a
@@ -340,7 +344,7 @@
         // A download for this version is already running (e.g. this Retry
         // click raced with an in-flight one) — leave the current progress
         // state alone instead of resetting it to "Start".
-      } else if (msg.includes("USER_CANCELLED") && !version.wasCanceled) {
+      } else if (msg.includes("USER_CANCELLED") && !updatedVersion?.wasCanceled) {
         updateVersionProgress(version.name, () => ({
           inProgress: false,
           isStoped: true,
@@ -570,7 +574,7 @@
     if ($gameStatus.running) return;
 
     try {
-      await invoke<GameStatus>("run_game", { versionName: version.name, useMain: false });
+      await invoke<GameStatus>("run_game", { versionName: version.name, useMain: version.name === $mainVersion?.name });
     } catch (e) {
       launchError.set(normalizeLaunchError(e));
       showDlgLaunchError.set(true);

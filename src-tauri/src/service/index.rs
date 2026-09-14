@@ -39,6 +39,11 @@ pub struct IndexLauncherAsset {
   pub platform: String,
   pub size: u64,
   pub url: String,
+  /// Expected SHA-256 of the launcher binary, copied from the release
+  /// metadata by the index writer. None in old indexes → the launcher
+  /// verifies the downloaded size only.
+  #[serde(default)]
+  pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,7 +169,9 @@ pub async fn load_index_with_ttl(provider_id: &str, ttl: Duration) -> Result<Rel
 
   let index: ReleaseIndex = serde_json::from_slice(&cached.bytes)?;
 
-  if index.schema != INDEX_SCHEMA_VERSION {
+  // Only reject indices with a NEWER schema that we cannot parse.
+  // Older schemas are read as-is — all new fields carry serde(default).
+  if index.schema > INDEX_SCHEMA_VERSION {
     bail!(
       "Release index schema {} is not supported (expected {}). \
              Please update the launcher.",
@@ -219,6 +226,22 @@ mod tests {
     assert_eq!(parsed.users.len(), 1);
     let user = parsed.users.get("6e0ead30-48de-4421-99db-cc8b381ad0b3").unwrap();
     assert_eq!(user.flags, vec!["allowPackMod".to_string()]);
+  }
+
+  #[test]
+  fn launcher_asset_sha256_is_optional_and_round_trips() {
+    // Old index (published before the hash was added): the asset must still
+    // parse, with `sha256: None` so the updater falls back to the size check.
+    let old = r#"{"name":"Launcher.exe","platform":"windows","size":123,"url":"https://x/Launcher.exe"}"#;
+    let parsed: IndexLauncherAsset = serde_json::from_str(old).unwrap();
+    assert_eq!(parsed.sha256, None);
+
+    let new = r#"{"name":"Launcher.exe","platform":"windows","size":123,"url":"https://x/Launcher.exe","sha256":"ABCDEF"}"#;
+    let parsed: IndexLauncherAsset = serde_json::from_str(new).unwrap();
+    assert_eq!(parsed.sha256.as_deref(), Some("ABCDEF"));
+
+    let json = serde_json::to_string(&parsed).unwrap();
+    assert!(json.contains("\"sha256\":\"ABCDEF\""), "sha256 must be published: {}", json);
   }
 
   #[test]

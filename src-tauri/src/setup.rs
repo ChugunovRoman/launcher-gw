@@ -67,12 +67,39 @@ pub fn setup_panic_logger(logger: Arc<std::sync::Mutex<Logger>>) {
 pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   log::info!("Start app setup");
 
-  let config = AppConfig::load_or_create(app.handle())?;
-  http_cache::init(app.handle())?;
+  let (config, mut config_load_error) = match AppConfig::load_or_create(app.handle()) {
+    Ok(cfg) => (cfg, None),
+    Err(e) => {
+      log::error!("AppConfig::load_or_create failed, falling back to in-memory defaults: {}", e);
+      let mut defaults = AppConfig::default();
+      defaults.first_run = false;
+      defaults.path = String::new(); // signals "not persisted"
+      (defaults, Some(e.to_string()))
+    }
+  };
+  // NOT `?`: `http_cache::init` resolves the same AppConfig directory as
+  // `load_or_create` above, so it fails in exactly the same situations.
+  // Returning Err here aborted `tauri_setup` before every `app.manage(...)`
+  // below, leaving a window in which all commands answer "Config not
+  // initialized" and nothing is reported to the user.
+  if let Err(e) = http_cache::init(app.handle()) {
+    log::error!("http_cache::init failed, continuing without the HTTP disk cache: {}", e);
+    let msg = format!("http_cache::init failed: {}", e);
+    config_load_error = Some(match config_load_error {
+      Some(prev) => format!("{}; {}", prev, msg),
+      None => msg,
+    });
+  }
 
   // Capture the saved provider selection and uuid before the config is moved into the Arc.
   let saved_provider_id = config.selected_provider_id.clone();
   let client_uuid = config.client_uuid.clone();
+
+  // Emit a non-fatal event so the frontend can warn the user that the config
+  // could not be loaded and is running from in-memory defaults.
+  if let Some(err_msg) = config_load_error {
+    let _ = app.handle().emit("config-load-error", &err_msg);
+  }
 
   let config_arc = Arc::new(Mutex::new(config));
   let config_arc_clone = config_arc.clone();
@@ -284,6 +311,19 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
           None => best.clone().unwrap_or_else(|| "github".to_string()),
         };
         let _ = svc.api_client.set_current_provider(&provider_id);
+
+        // Persist the actually active provider so the UI and next restart
+        // both see the real server, not the stale saved one.
+        {
+          let mut cfg = svc.config.lock().await;
+          if cfg.selected_provider_id.as_ref() != Some(&provider_id) {
+            cfg.selected_provider_id = Some(provider_id.clone());
+            if let Err(e) = cfg.save() {
+              log::warn!("Failed to save fallback provider selection: {}", e);
+            }
+            let _ = app_handle_bg_b.emit("provider-fallback", &provider_id);
+          }
+        }
       }
 
       // Update startup_state: providers done.
@@ -303,6 +343,22 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
       } else {
         None
       };
+
+      // 1b. Apply the stored provider tokens FIRST.  Steps 2 and 3 below both
+      // branch on `get_token().is_empty()`, and get_releases/refresh_releases
+      // merge API-only releases only when a token is present.  Applying them
+      // later (as part of step 4) meant a dev with a saved PAT always started
+      // in anonymous mode: load_manifest skipped, no API merge, and the
+      // anonymous GitHub rate limit (60/h) used instead of 5000/h.
+      if providers_error.is_none() {
+        let tokens = { config_arc_clone_b.lock().await.tokens.clone() };
+        if !tokens.is_empty() {
+          let svc = service_clone.lock().await;
+          if let Err(e) = svc.set_tokens(tokens).await {
+            log::warn!("set_tokens (startup) failed: {}", e);
+          }
+        }
+      }
 
       // 2. load_manifest (conditional, same guard as before).
       if providers_error.is_none() {
@@ -380,9 +436,14 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
             if is_legacy_token(stored) {
               match decode_token(stored) {
                 Ok(plain) => {
-                  *stored = encode_token(&plain);
-                  migrated = true;
-                  log::info!("Migrated stored token of provider '{}' to DPAPI storage", id);
+                  match encode_token(&plain) {
+                    Ok(encoded) => {
+                      *stored = encoded;
+                      migrated = true;
+                      log::info!("Migrated stored token of provider '{}' to DPAPI storage", id);
+                    }
+                    Err(e) => log::warn!("Token migration to DPAPI skipped for '{}': {}", id, e),
+                  }
                 }
                 Err(e) => log::warn!("Token migration skipped for '{}': {}", id, e),
               }
@@ -491,14 +552,20 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn restart_app(app_handle: &tauri::AppHandle) {
-  // Flush downloads/uploads before dying so progress is not lost.
-  tauri::async_runtime::block_on(crate::handlers::window::graceful_shutdown(app_handle));
+  // block_on panics when called from inside the tokio runtime (which is where
+  // the wake detector callback runs).  Spawn a dedicated OS thread so the
+  // blocking shutdown + restart sequence executes outside the async executor.
+  let handle = app_handle.clone();
+  std::thread::spawn(move || {
+    // Flush downloads/uploads before dying so progress is not lost.
+    tauri::async_runtime::block_on(crate::handlers::window::graceful_shutdown(&handle));
 
-  let _ = app_handle.webview_windows().iter().for_each(|(_, window)| {
-    let _ = window.close();
+    let _ = handle.webview_windows().iter().for_each(|(_, window)| {
+      let _ = window.close();
+    });
+
+    // Spawns the replacement behind the restart-lock handshake and exits.
+    // No self_replace happened on the wake path, so no original_exe override.
+    crate::utils::restart::restart_launcher(&handle, None);
   });
-
-  // Spawns the replacement behind the restart-lock handshake and exits.
-  // No self_replace happened on the wake path, so no original_exe override.
-  crate::utils::restart::restart_launcher(app_handle, None);
 }

@@ -58,6 +58,13 @@ fn get_platform_from_name(name: &str) -> ReleasePlatform {
 /// a stub (aggregate sizes only) and the download queue rows show
 /// "0 B / 0 B" for every file that is not currently being downloaded.
 fn manifest_from_index_entry(entry: &ReleaseIndexEntry) -> Option<ReleaseManifest> {
+  // When both aggregate sizes are zero the manifest was never fetched during
+  // publishing — return None so the caller falls back to downloading the
+  // manifest from its raw URL.
+  if entry.total_size == 0 && entry.total_files_count == 0 {
+    return None;
+  }
+
   let files: Vec<crate::handlers::dto::ReleaseManifestFile> = entry
     .assets
     .iter()
@@ -85,7 +92,7 @@ fn manifest_from_index_entry(entry: &ReleaseIndexEntry) -> Option<ReleaseManifes
 /// release list through the API path; a previously published index may also
 /// still contain it.  Filtered here so BOTH views (Releases and Versions) and
 /// every consumer of the list see the same clean set.
-fn is_infrastructure_release(name: &str, path: &str) -> bool {
+pub(crate) fn is_infrastructure_release(name: &str, path: &str) -> bool {
   name.eq_ignore_ascii_case(INDEX_REPO_NAME) || path.eq_ignore_ascii_case(INDEX_REPO_NAME)
 }
 

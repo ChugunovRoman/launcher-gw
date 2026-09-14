@@ -125,13 +125,15 @@ pub struct FileProgress {
   pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum LangType {
+  #[default]
   Rus = 0,
   Eng,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum RenderType {
+  #[default]
   RendererR2 = 0,
   RendererR25,
   RendererR3,
@@ -145,6 +147,20 @@ pub enum ScopeType {
   Scopes2dStatic = 0,
   Scopes3d,
   Scopes2dRenderTarget,
+}
+
+/// Deserialize a value that may be unknown to THIS launcher build (e.g. the
+/// user downgraded after a new enum variant was added, or hand-edited the
+/// file).  Falling back to the type default keeps the rest of the config —
+/// a hard error here made `load_or_create` back up and reset EVERYTHING,
+/// losing installed versions, tokens and download progress.
+fn de_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+  D: serde::Deserializer<'de>,
+  T: serde::de::DeserializeOwned + Default,
+{
+  let value = serde_json::Value::deserialize(deserializer)?;
+  Ok(serde_json::from_value::<T>(value).unwrap_or_default())
 }
 
 fn default_true() -> bool {
@@ -191,7 +207,9 @@ pub struct RunParams {
   pub debug_spawn: bool,
   #[serde(default)]
   pub vid_mode: String,
+  #[serde(default, deserialize_with = "de_or_default")]
   pub render: RenderType,
+  #[serde(default, deserialize_with = "de_or_default")]
   pub lang: LangType,
   #[serde(default)]
   pub fov: f64,
@@ -207,7 +225,7 @@ pub struct RunParams {
   pub show_ids: bool,
   #[serde(default)]
   pub font_legacy: bool,
-  #[serde(default)]
+  #[serde(default, deserialize_with = "de_or_default")]
   pub scope_type: ScopeType,
   #[serde(default)]
   pub selected_preset_id: String,
@@ -608,6 +626,22 @@ impl AppConfig {
     config.install_path = Self::get_path();
     config.path = path;
 
+    // Refresh available resolutions on every startup — the user may have
+    // switched monitors or changed display settings since the last run.
+    match get_available_resolutions() {
+      Ok(modes) if !modes.is_empty() => {
+        // Keep the user's saved resolutions if they are still available.
+        // Both values must be reconciled: `run_params.vid_mode` is the one
+        // actually written to the game config on launch, so leaving it pointing
+        // at a resolution the new monitor does not support made the game start
+        // with an invalid mode (or the settings list show a value it does not
+        // contain).
+        reconcile_vid_modes(&modes, &mut config.vid_mode_latest, &mut config.run_params.vid_mode);
+        config.vid_modes = modes;
+      }
+      _ => { /* keep the existing list if resolution probe fails */ }
+    }
+
     // Migration: latest_pid was a bare pid that Windows pid reuse turned into
     // false "In game" state. It is no longer read anywhere; reset stale values.
     if config.latest_pid != -1 {
@@ -624,7 +658,13 @@ impl AppConfig {
       }
     }
 
-    config.save().context("Failed to save merged config")?;
+    // Best-effort: the config is already complete in memory, so a failed write
+    // (read-only file, full disk, antivirus lock) must NOT abort startup — it
+    // used to bubble out of tauri_setup and panic before the window appeared,
+    // leaving the user with a launcher that simply does nothing.
+    if let Err(e) = config.save() {
+      log::error!("Failed to save merged config (continuing with the in-memory copy): {:?}", e);
+    }
 
     Ok(config)
   }
@@ -683,6 +723,26 @@ where
   }
 }
 
+/// Reconcile the saved resolutions with the list currently reported by the OS.
+///
+/// Called after a monitor switch / display-settings change: any saved value
+/// that is no longer offered by the hardware is replaced with the first
+/// available mode. `modes` is expected to be non-empty; an empty list leaves
+/// both values untouched (better a stale value than an empty one).
+fn reconcile_vid_modes(modes: &[String], vid_mode_latest: &mut String, vid_mode: &mut String) {
+  let Some(first) = modes.first() else { return };
+
+  if !modes.iter().any(|m| m == vid_mode_latest) {
+    log::warn!("vid_mode_latest '{}' is not available anymore, falling back to '{}'", vid_mode_latest, first);
+    *vid_mode_latest = first.clone();
+  }
+
+  if !modes.iter().any(|m| m == vid_mode) {
+    log::warn!("run_params.vid_mode '{}' is not available anymore, falling back to '{}'", vid_mode, first);
+    *vid_mode = first.clone();
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -730,5 +790,55 @@ mod tests {
     assert_eq!(rp.alife_switch_distance, ALIFE_DEFAULT_SWITCH_DISTANCE);
     // Until the first explicit save the overrides stay inactive.
     assert!(!rp.alife_overrides_initialized);
+  }
+
+  #[test]
+  fn reconcile_vid_modes_replaces_both_values_when_monitor_changed() {
+    // Saved values come from the old monitor, none of them is offered anymore.
+    let modes = vec!["1920x1080 (60Hz)".to_string(), "1280x720 (60Hz)".to_string()];
+    let mut latest = "3440x1440 (100Hz)".to_string();
+    let mut current = "2560x1080 (60Hz)".to_string();
+
+    reconcile_vid_modes(&modes, &mut latest, &mut current);
+
+    assert_eq!(latest, "1920x1080 (60Hz)");
+    // The regression: run_params.vid_mode used to keep the unsupported value.
+    assert_eq!(current, "1920x1080 (60Hz)");
+  }
+
+  #[test]
+  fn reconcile_vid_modes_keeps_values_that_are_still_available() {
+    let modes = vec!["1920x1080 (60Hz)".to_string(), "1280x720 (60Hz)".to_string()];
+    let mut latest = "1920x1080 (60Hz)".to_string();
+    let mut current = "1280x720 (60Hz)".to_string();
+
+    reconcile_vid_modes(&modes, &mut latest, &mut current);
+
+    assert_eq!(latest, "1920x1080 (60Hz)");
+    assert_eq!(current, "1280x720 (60Hz)");
+  }
+
+  #[test]
+  fn reconcile_vid_modes_fixes_only_the_missing_value() {
+    let modes = vec!["1920x1080 (60Hz)".to_string(), "1280x720 (60Hz)".to_string()];
+    let mut latest = "1280x720 (60Hz)".to_string();
+    let mut current = "800x600 (60Hz)".to_string();
+
+    reconcile_vid_modes(&modes, &mut latest, &mut current);
+
+    assert_eq!(latest, "1280x720 (60Hz)");
+    assert_eq!(current, "1920x1080 (60Hz)");
+  }
+
+  #[test]
+  fn reconcile_vid_modes_empty_list_keeps_saved_values() {
+    let modes: Vec<String> = vec![];
+    let mut latest = "1920x1080 (60Hz)".to_string();
+    let mut current = "1280x720 (60Hz)".to_string();
+
+    reconcile_vid_modes(&modes, &mut latest, &mut current);
+
+    assert_eq!(latest, "1920x1080 (60Hz)");
+    assert_eq!(current, "1280x720 (60Hz)");
   }
 }

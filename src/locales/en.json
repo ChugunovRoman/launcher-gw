@@ -37,6 +37,7 @@
       "cannotApplyProfile": "Failed to apply profile. File appdata/user.ltx not found.",
       "applyProfileOk": "Profile 'PROFILE' has been successfully applied",
       "removeVersion": "Are you sure you want to delete the version ",
+      "removeVersionFailed": "Failed to delete the version: ",
       "removeProfile": "Remove profile ",
       "add": "Add",
       "yes": "Yes",
@@ -47,7 +48,9 @@
       "launchErrorTitle": "Game launch error",
       "tempPathWarning": "The selected path is inside a Windows temp folder (Temp). The game may be deleted after a PC restart or a temp-files cleanup. Choose a permanent folder instead.",
       "rarTempWarning": "The selected path is inside a WinRAR temp folder (rar$...). Closing the archive window deletes that folder along with the game. Extract the launcher to a permanent folder and pick the path again.",
-      "launcherInTempDir": "The launcher is running from a temp folder (e.g. straight from the WinRAR archive window). Closing the archive deletes that folder along with the downloaded game. Install the launcher to a permanent folder and move the game there."
+      "launcherInTempDir": "The launcher is running from a temp folder (e.g. straight from the WinRAR archive window). Closing the archive deletes that folder along with the downloaded game. Install the launcher to a permanent folder and move the game there.",
+      "keyNotSupported": "This key is not supported by the game engine and cannot be bound.",
+      "configLoadError": "Warning: settings could not be loaded from disk. Running with default settings. Changes will not persist after restart. Reason: "
     },
     "launchError": {
       "already_running": "The game is already running. Close the current game session before launching again.",
@@ -67,6 +70,7 @@
         "newVersionFsgamePathExists": "The file fsgame.ltx was not found. Please specify the path manually.",
         "newVersionUserltxPathExists": "The file user.ltx was not found. Please specify the path manually.",
         "renameDefaultError": "The default profile cannot be renamed.",
+        "invalidProfileName": "Invalid profile name. Must not be empty, must not contain \\ / : * ? \" < > |, and must not be a reserved system name.",
         "badPath": "Warning: The folder path contains spaces or Cyrillic characters. This may cause errors. It is recommended to use only Latin letters and avoid spaces."
       }
     },
@@ -84,7 +88,8 @@
       "measuring": "measuring...",
       "servers": "Current server for downloading game files:",
       "retryPing": "Retry ping",
-      "providerSwitchError": "Failed to switch server. Check your connection."
+      "providerSwitchError": "Failed to switch server. Check your connection.",
+      "providerRollbackError": "Failed to switch server, and rolling the change back failed too. Restart the launcher."
     },
     "servers": {
       "github": "Server 1",
@@ -114,6 +119,16 @@
       "rename": "Rename"
     },
     "keys": {
+      "errors": {
+        "addProfile": "Failed to create the profile.",
+        "renameProfile": "Failed to rename the profile.",
+        "selectProfile": "Failed to save the selected profile.",
+        "applyToOther": "Failed to apply the profile to the selected mod.",
+        "import": "Failed to import the profile.",
+        "export": "Failed to export the profile.",
+        "exportNotLtx": "The export file name must end with .ltx.",
+        "saveProfiles": "Failed to save the keybinding profiles."
+      },
       "header": {
         "action": "Action",
         "key": "Key",
@@ -260,6 +275,7 @@
     },
     "unpack": {
       "unpacking": "Unpacking",
+      "failed": "Unpacking failed",
       "start": "Unpack",
       "source": {
         "placeholder": "Path to archive folder",
@@ -272,6 +288,8 @@
     },
     "pack": {
       "packing": "Packing",
+      "failed": "Packing failed",
+      "skippedFiles": "Skipped {count} unreadable file(s) — the pack is incomplete, see the log for the list",
       "start": "Pack",
       "addFiles": "Adding files...",
       "compressing": "Packaging...",
@@ -298,7 +316,12 @@
       "hide": "Hide",
       "show": "Show",
       "save": "Save",
-      "current": "Current token"
+      "delete": "Delete",
+      "saveFailed": "Failed to save token: ",
+      "current": "Current token",
+      "errors": {
+        "invalidToken": "The token contains characters that cannot be sent in a request (a line break or a non-Latin character). Paste the token again without extra characters."
+      }
     },
     "releases": {
       "add": "Add new release",
@@ -385,6 +408,16 @@
       "stageDelete": "Deleting files",
       "checkFailed": "Failed to check for updates"
     },
+    "runParams": {
+      "apply": {
+        "noVersion": "Settings saved, but not applied: no installed game version is selected.",
+        "alifeNoFile": "Settings saved. A-Life values were not applied: alife.ltx is missing in the selected version.",
+        "alifeNoSection": "Settings saved. A-Life values were not applied: the [alife] section is missing in alife.ltx.",
+        "alifeDisabled": "Settings saved. alife.ltx was left untouched: applying the preset is switched off.",
+        "alifeFailed": "Settings saved. A-Life values could not be written to alife.ltx — see the log.",
+        "error": "Failed to save the settings."
+      }
+    },
     "params": {
       "screen": "Screen resolution:",
       "vsync": "V-Sync",
@@ -462,7 +495,8 @@
         "network": "Network error: file could not be downloaded",
         "unpackFailed": "Failed to unpack the archive",
         "copyFailed": "Failed to copy the file into the install folder",
-        "verifyFailed": "Failed to read the file for verification"
+        "verifyFailed": "Failed to read the file for verification",
+        "badManifest": "Invalid manifest entry: the file can only be fixed by a new release manifest"
       }
     },
     "verify": {

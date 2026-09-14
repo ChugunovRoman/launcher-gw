@@ -4,9 +4,15 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Keep at most this many launcher sessions in the log file.
 const MAX_LOG_SESSIONS: usize = 50;
+/// Maximum size in bytes for a single log session. When exceeded, further
+/// writes for that session are dropped (after a single truncation marker) to
+/// prevent the log from growing without bound during a long-running launcher
+/// instance.
+const MAX_SESSION_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
 const SESSION_SEPARATOR: &str = "========== Launcher started:";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -53,6 +59,11 @@ pub struct Logger {
   /// None — no writable log file found; console-only logging.
   log_file_path: Option<PathBuf>,
   min_level: LogLevel,
+  /// Bytes written to the current session; shared across clones.
+  session_bytes: Arc<AtomicU64>,
+  /// Set once the session size limit has been reported in the file, so the
+  /// truncation marker is written exactly once.
+  truncation_marked: Arc<AtomicBool>,
 }
 
 impl Logger {
@@ -88,7 +99,12 @@ impl Logger {
       Self::write_session_header(path);
     }
 
-    Logger { log_file_path: chosen, min_level }
+    Logger {
+      log_file_path: chosen,
+      min_level,
+      session_bytes: Arc::new(AtomicU64::new(0)),
+      truncation_marked: Arc::new(AtomicBool::new(false)),
+    }
   }
 
   /// Remove the oldest session(s) when the log file exceeds MAX_LOG_SESSIONS.
@@ -106,8 +122,10 @@ impl Logger {
       return;
     }
 
-    // Drop the oldest session: keep from the 2nd separator onwards.
-    let trim_from = positions[1];
+    // Drop oldest sessions: keep the last (MAX_LOG_SESSIONS - 1) so that
+    // after appending the new header the total is exactly MAX_LOG_SESSIONS.
+    let keep = MAX_LOG_SESSIONS - 1;
+    let trim_from = positions[positions.len() - keep];
     let trimmed = &content[trim_from..];
 
     // Atomic replace: write to a temp file then rename.
@@ -122,7 +140,7 @@ impl Logger {
   fn write_session_header(path: &Path) {
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let header = format!("\n{} {} ==========\n", SESSION_SEPARATOR, timestamp);
-    if let Ok(mut file) = OpenOptions::new().append(true).open(path) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
       let _ = write!(file, "{}", header);
     }
   }
@@ -151,11 +169,34 @@ impl Logger {
       return;
     };
 
+    // Enforce per-session size limit to prevent unbounded growth.
+    let line_bytes = line.len() as u64;
+    let current = self.session_bytes.fetch_add(line_bytes, Ordering::Relaxed);
+    if current > MAX_SESSION_BYTES {
+      // Write a marker on the first overflow only: a log that just stops in
+      // the middle of a session (easy to hit with LogLevel::Debug) is
+      // otherwise indistinguishable from a crash or a hang.
+      if self.truncation_marked.swap(true, Ordering::Relaxed) {
+        return;
+      }
+
+      let marker = format!(
+        "[{}] WARN - log truncated: session limit of {} bytes reached, further entries are dropped\n",
+        timestamp, MAX_SESSION_BYTES
+      );
+      eprint!("{}", &marker);
+      if let Ok(mut file) = OpenOptions::new().create(true).write(true).append(true).open(log_file_path) {
+        let _ = write!(file, "{}", marker);
+      }
+
+      return;
+    }
+
     // Открываем, пишем, закрываем — как вы просили
     // A locked/read-only log file must degrade to stderr instead of
     // panicking inside log::Log (which would poison the logger mutex and
     // kill every subsequent log call).
-    let mut file = match OpenOptions::new().write(true).append(true).open(log_file_path) {
+    let mut file = match OpenOptions::new().create(true).write(true).append(true).open(log_file_path) {
       Ok(file) => file,
       Err(e) => {
         eprintln!("Failed to open log file {:?}: {}", log_file_path, e);
@@ -209,14 +250,19 @@ impl log::Log for TauriLogger {
     if !self.enabled(record.metadata()) {
       return;
     }
-    if let Ok(logger) = self.inner.lock() {
-      let msg = format!("{} - {}", record.target(), record.args());
-      match record.level() {
+    let msg = format!("{} - {}", record.target(), record.args());
+    // `try_lock`, never `lock`: the panic hook logs through this very
+    // non-reentrant std Mutex, so a panic raised while the guard is held (or
+    // a poisoned mutex left behind by an earlier one) would hang the process
+    // instead of reporting the panic. Degrade to stderr instead.
+    match self.inner.try_lock() {
+      Ok(logger) => match record.level() {
         Level::Error => logger.error(&msg),
         Level::Warn => logger.warn(&msg),
         Level::Info => logger.info(&msg),
         _ => logger.debug(&msg),
-      }
+      },
+      Err(_) => eprintln!("[{}] {}", record.level(), msg),
     }
   }
 

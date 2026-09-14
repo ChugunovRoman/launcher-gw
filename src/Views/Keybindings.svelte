@@ -24,17 +24,47 @@
   import Bg from "../Components/Bg.svelte";
   import Checkbox from "../Components/Checkbox.svelte";
   import { sortOptions, transformToKeymapArray, persistProfileSelection } from "../lib/profiles";
+  import { appConfig } from "../store/main";
 
   let nameExist = $state(false);
   let renameDefaultError = $state(false);
+  let invalidNameError = $state(false);
   let saving = $state(false);
   let saving2 = $state(false);
   let selectedProfileName = $state("");
+  /// Last failed profile operation, shown next to the profile controls.
+  /// Before this, every failure ended in a bare `console.error` the user never saw.
+  let opError = $state("");
+
+  /// Error codes returned by the keybind commands (src-tauri/src/consts.rs).
+  const ERR_EXPORT_NOT_LTX = "EXPORT_NOT_LTX";
+
+  function keybindErrorText(e: unknown, fallbackKey: string): string {
+    if (`${e}`.includes(ERR_EXPORT_NOT_LTX)) return $_("app.keys.errors.exportNotLtx");
+
+    return $_(fallbackKey);
+  }
+
+  const FORBIDDEN_NAME_RE = /[\\/:*?"<>|]/;
+  const RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)/i;
+
+  function isValidProfileName(name: string): boolean {
+    const trimmed = name.trim();
+    if (!trimmed || FORBIDDEN_NAME_RE.test(trimmed) || RESERVED_NAMES.test(trimmed.split('.')[0])) return false;
+    if (trimmed.endsWith('.') || trimmed.endsWith(' ')) return false;
+    return true;
+  }
 
   async function addProfileHandler() {
     nameExist = false;
+    invalidNameError = false;
+    opError = "";
 
     if (!$selectedProfile) return;
+    if (!isValidProfileName(selectedProfileName)) {
+      invalidNameError = true;
+      return;
+    }
     if ($profiles.find((p) => p.label === selectedProfileName || p.value === selectedProfileName)) {
       nameExist = true;
       return;
@@ -45,6 +75,8 @@
       await invoke<void>("add_profile", { name, basedOnProfile: $selectedProfile });
     } catch (e) {
       console.error("add_profile failed:", e);
+      opError = keybindErrorText(e, "app.keys.errors.addProfile");
+
       return;
     }
 
@@ -56,16 +88,40 @@
     selectedProfile.set(name);
     updateCurrentBindsMap();
     sortOptions();
-    await persistProfileSelection(name, $applyKeyProfile);
+    await persistSelection(name);
   }
 
-  function handleCheckApply() {
-    if ($selectedProfile) {
-      persistProfileSelection($selectedProfile, $applyKeyProfile);
+  /// persistProfileSelection with the error surfaced: an unhandled rejection
+  /// left the config and the UI disagreeing about the selected profile.
+  async function persistSelection(name: string): Promise<boolean> {
+    try {
+      await persistProfileSelection(name, $applyKeyProfile);
+
+      return true;
+    } catch (e) {
+      console.error("persistProfileSelection failed:", e);
+      opError = $_("app.keys.errors.selectProfile");
+
+      return false;
+    }
+  }
+
+  async function handleCheckApply() {
+    if (!$selectedProfile) return;
+
+    opError = "";
+    // The backend saves nothing when applying the profile fails, so the
+    // checkbox must go back to the value the config still holds — reading it
+    // from the config store instead of negating the current one keeps the
+    // rollback correct no matter when the binding updated the store.
+    if (!(await persistSelection($selectedProfile))) {
+      applyKeyProfile.set($appConfig.apply_key_profile ?? false);
     }
   }
   async function renameHandler() {
     nameExist = false;
+    invalidNameError = false;
+    opError = "";
 
     const oldName = $selectedProfile!;
     if (oldName === DEFAULT_BIND_LTX) {
@@ -73,6 +129,10 @@
       setTimeout(() => {
         renameDefaultError = false;
       }, 5000);
+      return;
+    }
+    if (!isValidProfileName(selectedProfileName)) {
+      invalidNameError = true;
       return;
     }
     if ($profiles.find((p) => p.label === selectedProfileName || p.value === selectedProfileName)) {
@@ -85,6 +145,8 @@
       await invoke<void>("rename_profile", { oldName, newName: name });
     } catch (e) {
       console.error("rename_profile failed:", e);
+      opError = keybindErrorText(e, "app.keys.errors.renameProfile");
+
       return;
     }
 
@@ -99,7 +161,7 @@
     selectedProfile.set(name);
     updateCurrentBindsMap();
     sortOptions();
-    await persistProfileSelection(name, $applyKeyProfile);
+    await persistSelection(name);
   }
 
   async function handleSave() {
@@ -123,11 +185,17 @@
       });
     }
 
+    opError = "";
     try {
       await invoke("save_key_profiles", { profiles: payload });
       console.log("All profiles saved successfully");
     } catch (err) {
+      // The "Saved" animation used to play here too: the profiles stayed
+      // unwritten (or unapplied) while the button reported success.
       console.error("Failed to save profiles:", err);
+      opError = keybindErrorText(err, "app.keys.errors.saveProfiles");
+
+      return;
     }
 
     saving = true;
@@ -136,24 +204,35 @@
     setTimeout(() => (saving2 = false), 1500);
   }
   async function handleApplyToOther() {
+    opError = "";
     const path = await open({ multiple: false, directory: true });
 
     if (!path || Array.isArray(path)) return;
 
     const userltxPath = await join(path, "appdata", "user.ltx");
 
-    // Проверяем существование
-    const fileExists = await invoke("check_file_exists", { path: userltxPath });
-    if (!fileExists) {
-      showDlgApplyProfile.set(true);
+    // Both invokes can reject (missing permissions, a broken user.ltx); without
+    // a catch the failure was an unhandled rejection and the user saw nothing.
+    try {
+      // Проверяем существование
+      const fileExists = await invoke("check_file_exists", { path: userltxPath });
+      if (!fileExists) {
+        showDlgApplyProfile.set(true);
+        return;
+      }
+
+      await invoke<void>("apply_profile_to_ltx", { profileName: $selectedProfile, ltxPath: userltxPath });
+    } catch (e) {
+      console.error("apply_profile_to_ltx failed:", e);
+      opError = keybindErrorText(e, "app.keys.errors.applyToOther");
+
       return;
     }
-
-    await invoke<void>("apply_profile_to_ltx", { profileName: $selectedProfile, ltxPath: userltxPath });
 
     showDlgApplyProfileOk.set(true);
   }
   async function handleImport() {
+    opError = "";
     try {
       // 1. Открываем диалог выбора файла
       const path = await open({
@@ -183,9 +262,11 @@
       return newProfile;
     } catch (err) {
       console.error("Ошибка при импорте:", err);
+      opError = keybindErrorText(err, "app.keys.errors.import");
     }
   }
   async function handleExport() {
+    opError = "";
     try {
       // 1. Открываем диалог сохранения файла
       const path = await save({
@@ -205,10 +286,12 @@
       console.log("Экспорт завершен успешно");
     } catch (err) {
       console.error("Ошибка при экспорте:", err);
+      opError = keybindErrorText(err, "app.keys.errors.export");
     }
   }
   async function handleSelectProfile(name: string) {
-    await persistProfileSelection(name, $applyKeyProfile);
+    opError = "";
+    await persistSelection(name);
   }
   async function handleRemove(option: Option) {
     removeProfileName.set(option.value);
@@ -217,6 +300,7 @@
 
   // Состояние для редактирования: [имя_действия, индекс_кнопки (0 или 1)]
   let editingTarget = $state<{ action: string; index: number } | null>(null);
+  let unsupportedKeyHint = $state(false);
 
   // Функция для захвата клавиши
   function handleGlobalInput(event: KeyboardEvent | MouseEvent) {
@@ -238,13 +322,51 @@
 
     if (event instanceof KeyboardEvent) {
       // event.code возвращает KeyQ, Digit1, Space и т.д. независимо от языка
-      pressedKey = KEYS_MAP[event.code] || event.code;
+      pressedKey = KEYS_MAP[event.code] || "";
+      if (!pressedKey) {
+        // Key not supported by the engine — ignore and inform the user.
+        unsupportedKeyHint = true;
+        setTimeout(() => (unsupportedKeyHint = false), 3000);
+        editingTarget = null;
+        return;
+      }
     } else if (event instanceof MouseEvent) {
       // Кодируем кнопки мыши (0: Left, 1: Middle, 2: Right)
-      pressedKey = KEYS_MAP[`Mouse${event.button}`] || `Mouse${event.button}`;
+      pressedKey = KEYS_MAP[`Mouse${event.button}`] || "";
+      if (!pressedKey) {
+        unsupportedKeyHint = true;
+        setTimeout(() => (unsupportedKeyHint = false), 3000);
+        editingTarget = null;
+        return;
+      }
     }
 
     if (pressedKey) {
+      // Detect key conflicts: if the pressed key is already bound to ANY
+      // slot (main or alt) of ANY action, remove it from there first.
+      const currentMap = $profileKeyMap.get($selectedProfile ?? "");
+      if (currentMap) {
+        for (const binding of currentMap) {
+          // Check the same action's other slot (e.g. setting main key that
+          // matches the alt key of the same action).
+          if (binding.action === editingTarget.action) {
+            const otherSlot = editingTarget.index === 0 ? 1 : 0;
+            const otherKey = otherSlot === 0 ? binding.key : binding.altkey;
+            if (otherKey === pressedKey) {
+              updateBinding(binding.action, otherSlot, NO_KEY);
+            }
+            continue;
+          }
+          // Check both slots of other actions.
+          if (binding.key === pressedKey) {
+            updateBinding(binding.action, 0, NO_KEY);
+          }
+          if (binding.altkey === pressedKey) {
+            updateBinding(binding.action, 1, NO_KEY);
+          }
+        }
+      }
+
       updateBinding(editingTarget.action, editingTarget.index, pressedKey);
       editingTarget = null;
     }
@@ -311,6 +433,15 @@
     {/if}
     {#if renameDefaultError}
       <span class="input-label-2">{$_("app.input.checks.renameDefaultError")}</span>
+    {/if}
+    {#if invalidNameError}
+      <span class="input-label-2">{$_("app.input.checks.invalidProfileName")}</span>
+    {/if}
+    {#if unsupportedKeyHint}
+      <span class="input-label-2 warn-hint">{$_("app.dlg.keyNotSupported")}</span>
+    {/if}
+    {#if opError}
+      <span class="input-label-2">{opError}</span>
     {/if}
   </Bg>
 
@@ -440,6 +571,10 @@
     display: block;
     margin-bottom: 0.5rem;
     color: #f55858;
+  }
+
+  .warn-hint {
+    color: #f5a623;
   }
 
   .launch-args-input {

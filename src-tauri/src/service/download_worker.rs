@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::Emitter;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::configs::AppConfig::{AppConfig, FileProgress, VersionProgress};
 use crate::consts::{
@@ -131,7 +131,28 @@ pub struct DownloadWorkerShared {
   pub install_path: PathBuf,
   pub total_file_count: u32,
   pub downloaded_cnt: Arc<std::sync::atomic::AtomicU32>,
-  pub cancel_tx: broadcast::Sender<()>,
+  pub cancel: crate::handlers::start_download_version::CancelHandle,
+  /// Timestamp of the last config save; used to debounce writes.
+  pub last_save: std::sync::Mutex<std::time::Instant>,
+}
+
+/// Minimum interval between config saves. Forced saves (end of pipeline,
+/// cancel, terminal error) bypass this check.
+const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
+
+/// Save config with debouncing: skip if less than SAVE_DEBOUNCE has elapsed
+/// since the last save. Use `force = true` for mandatory saves (end of
+/// pipeline, cancel, terminal error) that must never be skipped.
+async fn debounced_save(shared: &Arc<DownloadWorkerShared>, force: bool) {
+  if !force {
+    let elapsed = shared.last_save.lock().unwrap().elapsed();
+    if elapsed < SAVE_DEBOUNCE {
+      return;
+    }
+  }
+  let cfg = shared.app_config.lock().await;
+  let _ = cfg.save();
+  *shared.last_save.lock().unwrap() = std::time::Instant::now();
 }
 
 /// Exponential backoff between retries: 2s, 4s, 8s, … capped at 15s.
@@ -172,10 +193,13 @@ async fn mark_file_error(shared: &DownloadWorkerShared, file_name: &str, code: &
 /// Persist the `.part` byte count into `FileProgress.size` so the resume point
 /// survives an abrupt kill. Called after interruptions and failed attempts.
 pub async fn persist_file_size(config: &Arc<Mutex<AppConfig>>, version_name: &str, file_name: &str, part_path: &str) {
-  let size = match std::fs::read_to_string(part_path) {
-    Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
-    Err(_) => 0,
-  };
+  let part_path_owned = part_path.to_owned();
+  let size = tokio::task::spawn_blocking(move || {
+    match std::fs::read_to_string(&part_path_owned) {
+      Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
+      Err(_) => 0,
+    }
+  }).await.unwrap_or(0);
 
   let mut config_guard = config.lock().await;
   if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
@@ -228,13 +252,16 @@ pub async fn run_download_workers(
     let shared = shared.clone();
     let tx_unzip_c = tx_unzip.clone();
     let rx_queue_c = rx_queue.clone();
-    let mut stop_rx = shared.cancel_tx.subscribe();    let handle = tokio::spawn(async move {
+    let mut stop_rx = shared.cancel.subscribe();
+    let handle = tokio::spawn(async move {
       // Per-file retry counters travel INSIDE the FileProgress task struct, so
       // they survive re-queuing and are persisted to the config.
       let mut current_task: Option<FileProgress> = None;
 
       loop {
-        if stop_rx.try_recv().is_ok() {
+        // The flag, not the channel: a cancel sent before this worker
+        // subscribed is invisible to `try_recv` but still set on the flag.
+        if shared.cancel.is_cancelled() {
           if let Some(task) = &current_task {
             let part = format!("{}.part", crate::utils::paths::safe_download_join(&shared.download_dir, &task.name).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
             persist_file_size(&shared.app_config, &shared.version_name, &task.name, &part).await;
@@ -260,15 +287,19 @@ pub async fn run_download_workers(
           Ok(p) => p,
           Err(e) => {
             log::error!("safe_download_join failed: {}", e);
+            mark_file_error(&shared, &task.name, FILE_ERR_COPY_FAILED, e.to_string()).await;
             continue;
           }
         };
         let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
 
-        // Read existing progress for the Range header.
-        let seek_pos = std::fs::read_to_string(&part_path).ok().and_then(|s| s.trim().parse::<u64>().ok());
+        // Read existing progress for the Range header (sync I/O → spawn_blocking).
+        let part_path_clone = part_path.clone();
+        let seek_pos = tokio::task::spawn_blocking(move || {
+          std::fs::read_to_string(&part_path_clone).ok().and_then(|s| s.trim().parse::<u64>().ok())
+        }).await.unwrap_or(None);
 
-        let mut local_cancel = shared.cancel_tx.subscribe();
+        let mut local_cancel = shared.cancel.subscribe();
         let res = shared
           .service_files
           .download_blob_to_file(
@@ -310,8 +341,8 @@ pub async fn run_download_workers(
                       fp.last_error = None;
                     }
                   }
-                  let _ = cfg.save();
                 }
+                debounced_save(&shared, false).await;
 
                 // Dispatch post-processing by file kind (zip → unpack, raw → copy).
                 // Built BEFORE the counters below so a bad `target` is reported
@@ -338,7 +369,9 @@ pub async fn run_download_workers(
                 }
 
                 if current >= shared.total_file_count {
-                  let _ = shared.cancel_tx.send(());
+                  // Just leave: the queue sender was dropped before the workers
+                  // started, so the others end on their own.  Signalling cancel
+                  // here would now abort the post-process queue as well.
                   break;
                 }
               }
@@ -370,8 +403,8 @@ pub async fn run_download_workers(
                       fp.is_downloaded = false;
                     }
                   }
-                  let _ = cfg.save();
                 }
+                debounced_save(&shared, false).await;
 
                 if task.verify_retries <= MAX_VERIFY_RETRIES {
                   log::warn!(
@@ -398,8 +431,8 @@ pub async fn run_download_workers(
                       fp.is_downloaded = false;
                     }
                   }
-                  let _ = cfg.save();
                 }
+                debounced_save(&shared, false).await;
                 if task.verify_retries <= MAX_VERIFY_RETRIES {
                   tokio::time::sleep(backoff_delay(task.verify_retries)).await;
                   current_task = Some(task);
@@ -426,8 +459,8 @@ pub async fn run_download_workers(
                   fp.net_retries = task.net_retries;
                 }
               }
-              let _ = cfg.save();
             }
+            debounced_save(&shared, false).await;
             if task.net_retries > MAX_DOWNLOAD_RETRIES {
               log::error!("Download of '{}' failed after {} attempts: short read (server closed the connection early)", task.name, MAX_DOWNLOAD_RETRIES);
               mark_file_error(&shared, &task.name, FILE_ERR_NETWORK, "short read: server closed the connection early".to_string()).await;
@@ -448,8 +481,8 @@ pub async fn run_download_workers(
                   fp.net_retries = task.net_retries;
                 }
               }
-              let _ = cfg.save();
             }
+            debounced_save(&shared, false).await;
             if task.net_retries > MAX_DOWNLOAD_RETRIES {
               log::error!("Download of '{}' failed after {} attempts: {}", task.name, MAX_DOWNLOAD_RETRIES, e);
               mark_file_error(&shared, &task.name, FILE_ERR_NETWORK, e.to_string()).await;
@@ -534,16 +567,24 @@ pub fn spawn_postprocess_manager(
   service_unpack: Arc<ServiceUnpacker>,
   version_name: String,
   mut rx_unzip: mpsc::Receiver<PostProcessTask>,
+  cancel: crate::handlers::start_download_version::CancelHandle,
 ) -> tokio::task::JoinHandle<()> {
   tokio::spawn(async move {
     while let Some(task) = rx_unzip.recv().await {
+      // Stop unpacking once the user cancelled: the frontend deletes the
+      // install dir right after a cancel, and a manager that kept draining the
+      // queue would either fight that deletion or re-create the directory with
+      // a half-extracted archive.
+      if cancel.is_cancelled() {
+        log::info!("Post-process queue aborted by cancel");
+        break;
+      }
       match task {
         PostProcessTask::Unzip(data) => {
           let file_name = data.file_name.clone();
           let archive_path = data.archive_path.clone();
           let v_name = version_name.clone();
           let svc = service_unpack.clone();
-          let app_inner = app.clone();
           let v_name_thread = v_name.clone();
 
           // Unpacking is CPU-intensive → spawn_blocking returning whether it
@@ -553,13 +594,13 @@ pub fn spawn_postprocess_manager(
             if let Err(e) = &res {
               log::error!("Unpack of '{}' failed: {}", &data.file_name, e);
             }
-            let _ = app_inner.emit("file-unzipped", (&v_name_thread, data.archive_path.to_str()));
             res.is_ok()
           })
           .await
           .unwrap_or(false);
 
           if unpack_ok {
+            let _ = app.emit("file-unzipped", (&v_name, archive_path.to_str()));
             let mut config_guard = app_config.lock().await;
             if let Some(ver) = config_guard.progress_download.get_mut(&v_name) {
               if let Some(file_progress) = ver.files.get_mut(&file_name) {
@@ -723,7 +764,7 @@ pub async fn run_version_pipeline(
   version: &VersionProgress,
   files_to_download: Vec<FileProgress>,
   files_to_postprocess: Vec<FileProgress>,
-  cancel_tx: broadcast::Sender<()>,
+  cancel: crate::handlers::start_download_version::CancelHandle,
 ) -> Result<(), String> {
   // Completion counter base: files already downloaded/unpacked in earlier
   // runs are included in downloaded_files_cnt by the caller's scan.
@@ -740,10 +781,12 @@ pub async fn run_version_pipeline(
     install_path: PathBuf::from(&version.installed_path),
     total_file_count,
     downloaded_cnt: downloaded_cnt.clone(),
-    cancel_tx: cancel_tx.clone(),
+    cancel: cancel.clone(),
+    last_save: std::sync::Mutex::new(std::time::Instant::now()),
   });
 
-  let (tx_queue, rx_queue) = mpsc::channel::<FileProgress>(total_file_count as usize + 100);
+  // tokio's channel capacity must be > 0; an empty release would panic here.
+  let (tx_queue, rx_queue) = mpsc::channel::<FileProgress>((total_file_count as usize).saturating_add(100).max(1));
   for file in files_to_download {
     let _ = tx_queue.send(file).await;
   }
@@ -751,8 +794,8 @@ pub async fn run_version_pipeline(
   // queue drains and no sender remains (the local retry path does not re-send).
   drop(tx_queue);
 
-  let (tx_unzip, rx_unzip) = mpsc::channel::<PostProcessTask>(total_file_count as usize);
-  let unzip_manager = spawn_postprocess_manager(app.clone(), app_config.clone(), service_unpack.clone(), version.name.clone(), rx_unzip);
+  let (tx_unzip, rx_unzip) = mpsc::channel::<PostProcessTask>((total_file_count as usize).max(1));
+  let unzip_manager = spawn_postprocess_manager(app.clone(), app_config.clone(), service_unpack.clone(), version.name.clone(), rx_unzip, cancel.clone());
 
   // Files that were downloaded earlier (e.g. resume): queue their
   // post-processing before the workers start.
@@ -761,6 +804,7 @@ pub async fn run_version_pipeline(
       Ok(p) => p,
       Err(e) => {
         log::error!("safe_download_join failed: {}", e);
+        mark_file_error_direct(app, app_config, &version.name, &file.name, FILE_ERR_COPY_FAILED, e.to_string()).await;
         continue;
       }
     };

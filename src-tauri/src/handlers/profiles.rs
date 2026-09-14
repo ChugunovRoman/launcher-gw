@@ -106,18 +106,31 @@ pub async fn set_apply_profile(
   apply: bool,
 ) -> Result<(), String> {
   log::debug!("set_apply_profile, profileName: {}, apply: {}", &profileName, &apply);
-  let cfg_snapshot = {
+  // Apply FIRST, on a throw-away clone of the config, and only persist when it
+  // worked. The old order saved the selection before applying it, so a failed
+  // apply left the launcher with a profile the player never got: the error was
+  // shown, the checkbox stayed on, and the next game start used that profile.
+  let cfg_candidate = {
+    let cfg_guard = app_config.lock().await;
+    let mut candidate = cfg_guard.clone();
+    if !profileName.is_empty() {
+      candidate.selected_profile = Some(profileName.clone());
+    }
+    candidate.apply_key_profile = Some(apply);
+    candidate
+  };
+
+  if apply {
+    crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg_candidate, &keybind_manager, &profileName).await?;
+  }
+
+  {
     let mut cfg_guard = app_config.lock().await;
     if !profileName.is_empty() {
       cfg_guard.selected_profile = Some(profileName.clone());
     }
     cfg_guard.apply_key_profile = Some(apply);
     cfg_guard.save().map_err(|e| e.to_string())?;
-    cfg_guard.clone()
-  };
-
-  if apply {
-    crate::handlers::user_ltx::apply_selected_profile_to_version_ltx(&cfg_snapshot, &keybind_manager, &profileName).await?;
   }
 
   Ok(())

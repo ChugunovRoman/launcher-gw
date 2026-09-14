@@ -12,6 +12,29 @@ use crate::{
   utils::resources::game_exe,
 };
 
+/// What actually happened to an ltx file the launcher tried to patch.
+///
+/// `Ok(())` used to cover both "written" and "silently skipped" (no active
+/// version, missing file, missing section, feature switched off), so the UI
+/// reported success while nothing had been written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApplyOutcome {
+  /// The file was patched and saved.
+  Applied,
+  /// No active version is selected — there is no file path to patch.
+  SkippedNoVersion,
+  /// The target file does not exist (it is never created from scratch).
+  SkippedNoFile,
+  /// The target section is missing in the file, so nothing could be set.
+  SkippedNoSection,
+  /// Writing is turned off by an option (`apply_preset_on_launch`).
+  SkippedDisabled,
+  /// The write was attempted and failed; the error text went to the log.
+  /// Used only where a failure is non-fatal for the calling command.
+  Failed,
+}
+
 #[tauri::command]
 pub async fn userltx_set_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
   // Reads only AppConfig — no Service lock, so this never waits behind the
@@ -139,36 +162,60 @@ fn find_version_by_name<'a>(
     .or_else(|| versions.iter().find(|v| (v.name == name || v.path == name) && !v.installed_path.is_empty()))
 }
 
-async fn load_presets(provider_id: Option<&str>) -> Vec<IndexPreset> {
+use std::sync::OnceLock;
+static CACHED_PRESETS: OnceLock<tokio::sync::Mutex<Vec<IndexPreset>>> = OnceLock::new();
+
+/// Load presets from the index. Returns `Ok(presets)` on success, or
+/// `Err` when the index cannot be loaded AND there is no cached fallback.
+/// When a cached list exists from a previous successful load, it is returned
+/// as `Ok(cached)` with a warning.
+async fn load_presets(provider_id: Option<&str>) -> Result<Vec<IndexPreset>, String> {
   let provider_id = provider_id.unwrap_or(GITHUB_PID);
   match crate::service::index::load_index(provider_id).await {
-    Ok(index) => index.presets,
+    Ok(index) => {
+      // Cache the successfully loaded presets for fallback on next error.
+      let cell = CACHED_PRESETS.get_or_init(|| tokio::sync::Mutex::new(Vec::new()));
+      let mut guard = cell.lock().await;
+      *guard = index.presets.clone();
+      Ok(index.presets)
+    }
     Err(e) => {
       log::warn!("load_presets: cannot load index for '{}': {}", provider_id, e);
-      Vec::new()
+      // Return cached presets if a previous load succeeded; otherwise propagate
+      // the error. The OnceLock is initialized ONLY in the success branch above,
+      // so `get().is_some()` already means "the cache was filled at least once".
+      // Checking `!cached.is_empty()` instead (the old code) skipped the
+      // fallback for an index that legitimately has zero presets.
+      if let Some(cell) = CACHED_PRESETS.get() {
+        let cached = cell.lock().await.clone();
+        log::warn!("load_presets: serving {} cached preset(s) after index error", cached.len());
+        return Ok(cached);
+      }
+      Err(format!("Failed to load presets: {}", e))
     }
   }
 }
 
 /// Find the selected preset in the index. `None` — applying is disabled,
 /// no preset is selected, the index is unavailable or the preset id is unknown.
-async fn load_selected_preset(run_params: &RunParams, provider_id: Option<&str>) -> Option<IndexPreset> {
+async fn load_selected_preset(run_params: &RunParams, provider_id: Option<&str>) -> Result<Option<IndexPreset>, String> {
   if !run_params.apply_preset_on_launch || run_params.selected_preset_id.is_empty() {
-    return None;
+    return Ok(None);
   }
 
-  let presets = load_presets(provider_id).await;
-  presets.into_iter().find(|p| p.id == run_params.selected_preset_id)
+  let presets = load_presets(provider_id).await?;
+  Ok(presets.into_iter().find(|p| p.id == run_params.selected_preset_id))
 }
 
-async fn apply_selected_preset(ltx: &mut GameConfig, run_params: &RunParams, provider_id: Option<&str>) {
-  let Some(preset) = load_selected_preset(run_params, provider_id).await else {
-    return;
+async fn apply_selected_preset(ltx: &mut GameConfig, run_params: &RunParams, provider_id: Option<&str>) -> Result<(), String> {
+  let Some(preset) = load_selected_preset(run_params, provider_id).await? else {
+    return Ok(());
   };
 
   for (key, value) in &preset.options {
     ltx.set(key.clone(), value.clone());
   }
+  Ok(())
 }
 
 /// Patch launcher-managed run_params cvars into an ltx file (preserves other keys).
@@ -180,7 +227,13 @@ pub async fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams, pr
   let mut ltx = GameConfig::new(ltx_path);
   ltx.load().map_err(|e| e.to_string())?;
 
-  apply_selected_preset(&mut ltx, run_params, provider_id).await;
+  // Preset errors must not block writing run_params: an offline cold start with
+  // an unreachable index used to abort here, leaving user.ltx/tmp.ltx completely
+  // unpatched (settings "saved" but not applied) and the game unlaunchable.
+  // Same handling as the alife path below.
+  if let Err(e) = apply_selected_preset(&mut ltx, run_params, provider_id).await {
+    log::warn!("apply_run_params_to_ltx: preset load failed (continuing without): {}", e);
+  }
 
   ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
   ltx.set("renderer".to_string(), render_to_ltx(run_params.render.clone()));
@@ -208,16 +261,16 @@ pub async fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams, pr
   ltx.save().map_err(|e| e.to_string())
 }
 
-pub async fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<(), String> {
+pub async fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<ApplyOutcome, String> {
   let Some((user_path, tmp_path)) = resolve_ltx_paths(config) else {
     log::warn!("apply_run_params_to_version_ltx: no active version path; skip user.ltx");
-    return Ok(());
+    return Ok(ApplyOutcome::SkippedNoVersion);
   };
 
   apply_run_params_to_ltx(&user_path, &config.run_params, config.selected_provider_id.as_deref()).await?;
   apply_run_params_to_ltx(&tmp_path, &config.run_params, config.selected_provider_id.as_deref()).await?;
   log::info!("Patched run_params into {:?} and {:?}", user_path, tmp_path);
-  Ok(())
+  Ok(ApplyOutcome::Applied)
 }
 
 /// Write the selected preset's alife settings and the user's alife overrides
@@ -234,19 +287,26 @@ pub async fn apply_run_params_to_version_ltx(config: &AppConfig) -> Result<(), S
 /// The file is NOT created when missing: the engine reads some keys of the
 /// [alife] section via `r_float`/`r_u32` with an assert, and a file holding
 /// only the preset keys would crash the game at startup.
-pub async fn apply_alife_settings_to_ltx(alife_path: &Path, run_params: &RunParams, provider_id: Option<&str>) -> Result<(), String> {
+pub async fn apply_alife_settings_to_ltx(alife_path: &Path, run_params: &RunParams, provider_id: Option<&str>) -> Result<ApplyOutcome, String> {
   if !run_params.apply_preset_on_launch {
     log::info!("alife.ltx: запись отключена опцией apply_preset_on_launch, пропуск: {:?}", alife_path);
-    return Ok(());
+    return Ok(ApplyOutcome::SkippedDisabled);
   }
 
   let Some(mut ltx) = AlifeConfig::load(alife_path).map_err(|e| e.to_string())? else {
     log::warn!("apply_alife_settings_to_ltx: файл не найден, пропуск: {:?}", alife_path);
-    return Ok(());
+    return Ok(ApplyOutcome::SkippedNoFile);
   };
 
   // The preset must outlive preset_entries: it borrows the map's keys/values.
-  let selected_preset = load_selected_preset(run_params, provider_id).await;
+  // Alife errors must not block the game launch — log and continue without preset.
+  let selected_preset = match load_selected_preset(run_params, provider_id).await {
+    Ok(p) => p,
+    Err(e) => {
+      log::warn!("apply_alife_settings: preset load failed (continuing without): {}", e);
+      None
+    }
+  };
   let preset_entries: Vec<(&str, &str)> = selected_preset
     .as_ref()
     .map(|preset| preset.alife.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
@@ -258,7 +318,7 @@ pub async fn apply_alife_settings_to_ltx(alife_path: &Path, run_params: &RunPara
 
   if !write_alife_entries(&mut ltx, &preset_entries, overrides) {
     log::warn!("apply_alife_settings_to_ltx: нет секции [{}] в {:?}", ALIFE_SECTION, alife_path);
-    return Ok(());
+    return Ok(ApplyOutcome::SkippedNoSection);
   }
 
   ltx.save().map_err(|e| e.to_string())?;
@@ -279,7 +339,7 @@ pub async fn apply_alife_settings_to_ltx(alife_path: &Path, run_params: &RunPara
       alife_path
     );
   }
-  Ok(())
+  Ok(ApplyOutcome::Applied)
 }
 
 /// Overrides to write: empty until the user saves the settings once — a config
@@ -314,10 +374,10 @@ fn write_alife_entries(ltx: &mut AlifeConfig, preset_entries: &[(&str, &str)], o
 }
 
 /// Same as above, but the path is resolved from the active version in the config.
-pub async fn apply_alife_settings_to_version_ltx(config: &AppConfig) -> Result<(), String> {
+pub async fn apply_alife_settings_to_version_ltx(config: &AppConfig) -> Result<ApplyOutcome, String> {
   let Some(alife_path) = resolve_alife_ltx_path(config) else {
     log::warn!("apply_alife_settings_to_version_ltx: активная версия не определена; пропуск alife.ltx");
-    return Ok(());
+    return Ok(ApplyOutcome::SkippedNoVersion);
   };
 
   apply_alife_settings_to_ltx(&alife_path, &config.run_params, config.selected_provider_id.as_deref()).await
@@ -360,10 +420,14 @@ pub async fn prepare_ltx_for_launch(
   Ok(())
 }
 
-pub async fn apply_selected_profile_to_version_ltx(config: &AppConfig, keybind_manager: &KeybindManager, profile_name: &str) -> Result<(), String> {
+pub async fn apply_selected_profile_to_version_ltx(
+  config: &AppConfig,
+  keybind_manager: &KeybindManager,
+  profile_name: &str,
+) -> Result<ApplyOutcome, String> {
   let Some((user_path, _)) = resolve_ltx_paths(config) else {
     log::warn!("apply_selected_profile_to_version_ltx: no active version path; skip");
-    return Ok(());
+    return Ok(ApplyOutcome::SkippedNoVersion);
   };
 
   let profiles = keybind_manager.get_profiles().await;
@@ -381,7 +445,7 @@ pub async fn apply_selected_profile_to_version_ltx(config: &AppConfig, keybind_m
   target.save().map_err(|e| format!("Ошибка сохранения {}: {}", user_path.display(), e))?;
 
   log::info!("Applied profile '{}' to {:?}", profile_name, user_path);
-  Ok(())
+  Ok(ApplyOutcome::Applied)
 }
 
 fn lang_to_ltx(lng: crate::configs::AppConfig::LangType) -> String {

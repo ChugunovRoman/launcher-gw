@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -245,21 +245,37 @@ fn patch_dir_root() -> Result<PathBuf> {
 ///
 /// `exclude_patterns` are glob patterns (relative to `source_dir`) for files
 /// that should be skipped during collection (e.g. caches, logs, build artifacts).
+/// Builds the exclusion `GlobSet` for patch collection.
+///
+/// Matching is case-insensitive, exactly like the packer
+/// (`handlers/compress.rs`): on Windows `Logs/` and `logs/` are the same
+/// directory, and case-sensitive masks let logs and user dirs into the patch
+/// (item 71). Returns `None` when there is nothing to exclude.
+fn build_exclude_set(exclude_patterns: &[String]) -> Result<Option<GlobSet>> {
+  if exclude_patterns.is_empty() {
+    return Ok(None);
+  }
+
+  let mut builder = GlobSetBuilder::new();
+  for pat in exclude_patterns {
+    builder.add(
+      GlobBuilder::new(pat)
+        .case_insensitive(true)
+        .build()
+        .with_context(|| format!("invalid exclude pattern: '{}'", pat))?,
+    );
+  }
+
+  Ok(Some(builder.build().context("failed to build exclude glob set")?))
+}
+
 pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Result<PatchCollectResult> {
   if !source_dir.is_dir() {
     bail!("source dir does not exist: {:?}", source_dir);
   }
 
   // Build a GlobSet for fast matching of excluded paths.
-  let exclude_set = if exclude_patterns.is_empty() {
-    None
-  } else {
-    let mut builder = GlobSetBuilder::new();
-    for pat in &exclude_patterns {
-      builder.add(Glob::new(pat).with_context(|| format!("invalid exclude pattern: '{}'", pat))?);
-    }
-    Some(builder.build().context("failed to build exclude glob set")?)
-  };
+  let exclude_set = build_exclude_set(&exclude_patterns)?;
 
   let patch_dir = patch_dir_root()?.join(format!("gw-patch-{}", Uuid::new_v4()));
 
@@ -448,4 +464,30 @@ fn collect_repo(
   }
 
   report
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Item 71: exclusion masks must ignore letter case, otherwise `Logs/` and
+  /// `_APPDATA_/` slip into the collected patch.
+  #[test]
+  fn exclude_masks_are_case_insensitive() {
+    let set = build_exclude_set(&["appdata/**".to_owned(), "**/*.log".to_owned()])
+      .expect("glob set builds")
+      .expect("non-empty pattern list yields a set");
+
+    assert!(set.is_match(Path::new("appdata/logs/x.txt")));
+    assert!(set.is_match(Path::new("AppData/logs/x.txt")));
+    assert!(set.is_match(Path::new("APPDATA/logs/x.txt")));
+    assert!(set.is_match(Path::new("bin/openxray.log")));
+    assert!(set.is_match(Path::new("bin/OpenXRay.LOG")));
+    assert!(!set.is_match(Path::new("gamedata/configs/x.ltx")));
+  }
+
+  #[test]
+  fn empty_exclude_list_yields_no_set() {
+    assert!(build_exclude_set(&[]).expect("ok").is_none());
+  }
 }

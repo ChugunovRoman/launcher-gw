@@ -19,10 +19,14 @@ export function transformToKeymapArray(keybinds: Record<string, KeybindingMapDat
   });
 }
 
+/// Persist the selected profile. The backend applies the profile first and
+/// saves the config only when that worked, so the local mirror is updated
+/// after the call too — otherwise a failed apply left the UI showing a
+/// selection the launcher had not accepted.
 export async function persistProfileSelection(profileName: string, apply: boolean) {
+  await invoke<void>("set_apply_profile", { profileName, apply });
   updateConfig("selected_profile", profileName);
   updateConfig("apply_key_profile", apply);
-  await invoke<void>("set_apply_profile", { profileName, apply });
 }
 
 export async function initProfilesListeners() {
@@ -58,7 +62,9 @@ export function applyKeyProfiles(payload: ProfileItem[]) {
   if (name) {
     selectedProfile.set(name);
     if (name !== cfg.selected_profile) {
-      persistProfileSelection(name, apply);
+      // Fire-and-forget by design (applyKeyProfiles is sync and also runs from
+      // an event listener), but the rejection must not be swallowed silently.
+      persistProfileSelection(name, apply).catch((e) => console.error("persistProfileSelection failed:", e));
     }
   }
   applyKeyProfile.set(apply);

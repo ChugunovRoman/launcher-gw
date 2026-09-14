@@ -230,7 +230,7 @@ pub(crate) async fn check_patches_available(
   // Try static index first (0 API calls).
   let provider_id = api_client.current_provider().ok()?.id();
   if let Ok(index) = crate::service::index::load_index(provider_id).await {
-    if let Some(entry) = index.releases.iter().find(|r| r.path == version_name) {
+    if let Some(entry) = index.releases.iter().find(|r| r.path == version_name || r.name == version_name) {
       let total = entry.patches.len();
       log::info!("Auto-check '{}': {} patches from index ({} installed)", version_name, total, installed_count);
       return Some(total.saturating_sub(installed_count));
@@ -340,7 +340,7 @@ pub(crate) async fn get_version_patches_impl(
 
   // Try the static release index first (0 API calls).
   if let Ok(index) = crate::service::index::load_index(provider_id).await {
-    if let Some(entry) = index.releases.iter().find(|r| r.path == version_name) {
+    if let Some(entry) = index.releases.iter().find(|r| r.path == version_name || r.name == version_name) {
       log::info!("get_version_patches '{}': loaded {} patches from index", version_name, entry.patches.len());
       let mut found_next = false;
       let mut patches: Vec<PatchInfo> = Vec::new();

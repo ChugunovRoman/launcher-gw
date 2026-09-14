@@ -107,12 +107,33 @@ impl ApiClient {
 
   pub async fn set_tokens(&self, tokens: HashMap<String, String>) -> Result<()> {
     for (id, token) in tokens {
-      let provider = self.get_provider(&id)?;
+      // One unknown/stale provider id in the config must not stop the rest:
+      // aborting here left BOTH providers without their tokens (HashMap order
+      // is arbitrary) and the launcher silently ran anonymous.
+      let provider = match self.get_provider(&id) {
+        Ok(p) => p,
+        Err(e) => {
+          log::warn!("set_tokens: skipping unknown provider '{}': {}", &id, e);
+          continue;
+        }
+      };
+
+      // A decode failure must NOT fall back to the stored string: that string
+      // is the DPAPI ciphertext ("dpapi1:AQAAA…").  Sending it as a bearer
+      // token makes every request fail with 401 (the launcher looks broken
+      // instead of merely unauthenticated) and leaks the encrypted blob to the
+      // provider.  Decoding fails on a config copied to another machine/user
+      // account, so degrade to anonymous instead.
       let decoded_value = match decode_token(&token) {
         Ok(decoded) => decoded,
-        Err(_) => token.clone(),
+        Err(e) => {
+          log::warn!("set_tokens: cannot decode the stored token for '{}' ({}), continuing without it", &id, e);
+          String::new()
+        }
       };
-      provider.set_token(decoded_value)?;
+      if let Err(e) = provider.set_token(decoded_value) {
+        log::warn!("set_tokens: cannot apply token for '{}': {}", &id, e);
+      }
     }
 
     Ok(())

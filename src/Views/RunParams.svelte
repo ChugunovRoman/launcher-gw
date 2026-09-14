@@ -30,6 +30,35 @@
 
   let saving = $state(false);
   let saving2 = $state(false);
+  /// Result of the last save: empty while everything was written, otherwise a
+  /// localized line saying what the launcher could NOT apply. The command used
+  /// to answer plain success even when nothing had been patched.
+  let applyStatus = $state("");
+
+  /// Mirrors handlers::user_ltx::ApplyOutcome (serde camelCase).
+  type ApplyOutcome = "applied" | "skippedNoVersion" | "skippedNoFile" | "skippedNoSection" | "skippedDisabled" | "failed";
+  type RunParamsApplyStatus = { userLtx: ApplyOutcome; alifeLtx: ApplyOutcome };
+
+  function applyStatusText(status: RunParamsApplyStatus): string {
+    // user.ltx is only ever skipped when no installed version is active —
+    // then nothing at all was patched, so this message wins.
+    if (status.userLtx !== "applied") return $_("app.runParams.apply.noVersion");
+
+    switch (status.alifeLtx) {
+      case "applied":
+        return "";
+      case "skippedNoVersion":
+        return $_("app.runParams.apply.noVersion");
+      case "skippedNoFile":
+        return $_("app.runParams.apply.alifeNoFile");
+      case "skippedNoSection":
+        return $_("app.runParams.apply.alifeNoSection");
+      case "skippedDisabled":
+        return $_("app.runParams.apply.alifeDisabled");
+      default:
+        return $_("app.runParams.apply.alifeFailed");
+    }
+  }
 
   // Состояния формы
   let fov = $state(50);
@@ -134,9 +163,12 @@
       alife_overrides_initialized: true,
     };
     try {
-      await invoke<void>("update_run_params", { runParams });
+      const status = await invoke<RunParamsApplyStatus>("update_run_params", { runParams });
+      applyStatus = applyStatusText(status);
     } catch (e) {
       console.error("update_run_params failed:", e);
+      applyStatus = $_("app.runParams.apply.error");
+
       return;
     }
     saving = true;
@@ -165,7 +197,7 @@
         selectedLang = langMap.getValue(config.run_params.lang as LangType)!;
         selectedRenderer = renderersMap.getValue(config.run_params.render as RenderType)!;
         fov = config.run_params.fov;
-        hudFov = Math.floor(config.run_params.hud_fov * 100);
+        hudFov = Math.round(config.run_params.hud_fov * 100);
         godMode = config.run_params.god_mode;
         unlimitedAmmo = config.run_params.unlimited_ammo;
         showFps = config.run_params.show_fps;
@@ -530,6 +562,9 @@
   </Scroll>
 
   <!-- Кнопка сохранения -->
+  {#if applyStatus}
+    <span class="apply-status">{applyStatus}</span>
+  {/if}
   <span role="button" tabindex="0" onclick={handleSave} class="save-btn" class:save-btn__saving={saving} class:long_t={saving2}>
     {#if saving}
       {$_("app.save.2")}
@@ -735,6 +770,17 @@
 
   .flags-section {
     margin-bottom: 2rem;
+  }
+
+  /* Sits right above the save button (which is absolutely positioned too),
+     so the line never pushes the layout or lands under the button. */
+  .apply-status {
+    position: absolute;
+    bottom: 100px;
+    right: 140px;
+    max-width: 60vw;
+    text-align: right;
+    color: #f5a623;
   }
 
   .save-btn {

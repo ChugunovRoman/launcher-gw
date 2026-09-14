@@ -7,6 +7,7 @@
   // the input is used exclusively to enter a NEW token.
   let tokenMasks: Record<string, string> = $state({});
   let saving: Record<string, boolean> = $state({});
+  let errors: Record<string, string> = $state({});
 
   function updateToken(id: string, newValue: string) {
     tokens.update((m) => {
@@ -16,12 +17,29 @@
     });
   }
 
+  /// Error codes returned by set_token_for_provider (src-tauri/src/consts.rs).
+  const ERR_INVALID_TOKEN = "INVALID_TOKEN";
+
+  function tokenErrorText(e: unknown): string {
+    const text = `${e}`;
+    if (text.includes(ERR_INVALID_TOKEN)) return $_("app.tokens.errors.invalidToken");
+
+    return text;
+  }
+
   async function refreshMasks() {
     try {
       const tokensMap = await invoke<Dict<string>>("get_tokens");
-      for (const [id, mask] of Object.entries(tokensMap)) {
-        tokenMasks[id] = mask || "";
+      // Rebuild from scratch: the backend drops the whole entry for an empty
+      // token, and a merge kept showing the mask of a token already deleted.
+      const next: Record<string, string> = {};
+      for (const id of Object.keys(tokenMasks)) {
+        next[id] = "";
       }
+      for (const [id, mask] of Object.entries(tokensMap)) {
+        next[id] = mask || "";
+      }
+      tokenMasks = next;
     } catch (e) {
       console.error("Failed to load token masks:", e);
     }
@@ -32,6 +50,7 @@
     if (!value) return;
 
     saving[id] = true;
+    errors[id] = "";
     try {
       await invoke("set_token_for_provider", {
         token: value,
@@ -40,7 +59,26 @@
       updateToken(id, "");
       await refreshMasks();
     } catch (e) {
+      errors[id] = tokenErrorText(e);
       console.error(`Failed to save token for ${id}:`, e);
+    } finally {
+      saving[id] = false;
+    }
+  }
+
+  async function deleteToken(id: string) {
+    saving[id] = true;
+    errors[id] = "";
+    try {
+      await invoke("set_token_for_provider", {
+        token: "",
+        providerId: id,
+      });
+      updateToken(id, "");
+      await refreshMasks();
+    } catch (e) {
+      errors[id] = tokenErrorText(e);
+      console.error(`Failed to delete token for ${id}:`, e);
     } finally {
       saving[id] = false;
     }
@@ -78,6 +116,9 @@
       {#if tokenMasks[id]}
         <div class="current-token">{$_("app.tokens.current")}: {tokenMasks[id]}</div>
       {/if}
+      {#if errors[id]}
+        <div class="token-error">{$_("app.tokens.saveFailed")}{errors[id]}</div>
+      {/if}
       <div class="input-row">
         <input
           type="password"
@@ -89,6 +130,11 @@
         <button type="button" onclick={() => saveToken(id)} class="choose-btn" disabled={!token || saving[id]}>
           {$_("app.tokens.save")}
         </button>
+        {#if tokenMasks[id]}
+          <button type="button" onclick={() => deleteToken(id)} class="choose-btn delete-btn" disabled={saving[id]}>
+            {$_("app.tokens.delete")}
+          </button>
+        {/if}
       </div>
     </div>
   {/each}
@@ -120,6 +166,12 @@
     margin-bottom: 0.5rem;
     color: #bbb;
     font-size: 0.9rem;
+  }
+
+  .token-error {
+    margin-bottom: 0.5rem;
+    color: #ff6b6b;
+    font-size: 0.85rem;
   }
 
   .input-row {
@@ -158,5 +210,13 @@
   .choose-btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .delete-btn {
+    background-color: rgba(200, 60, 60, 0.8);
+  }
+
+  .delete-btn:hover:not(:disabled) {
+    background-color: rgba(200, 60, 60, 1);
   }
 </style>
