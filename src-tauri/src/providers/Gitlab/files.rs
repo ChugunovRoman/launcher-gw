@@ -42,14 +42,26 @@ pub async fn __get_blob_by_url_stream(s: &Gitlab, url: &str, seek: &Option<u64>)
   // Only ask for a Range when there is a real resume offset.
   let resume_from = seek.filter(|bytes| *bytes > 0);
 
+  // Lift the client's 120 s TOTAL deadline for this request: it covers the
+  // response body, so it cut every game-file download off at two minutes no
+  // matter how healthy the connection was. Stalls are caught by the client's
+  // read timeout (gap between chunks); this ceiling is only a backstop.
+  let download_timeout = std::time::Duration::from_secs(crate::consts::DOWNLOAD_TOTAL_TIMEOUT_SECS);
+
   let response = match resume_from {
     Some(bytes) => s
       .get(url)
+      .timeout(download_timeout)
       .header("Range", format!("bytes={}-", bytes))
       .send()
       .await
       .context("Failed to send blob download request")?,
-    None => s.get(url).send().await.context("Failed to send blob download request")?,
+    None => s
+      .get(url)
+      .timeout(download_timeout)
+      .send()
+      .await
+      .context("Failed to send blob download request")?,
   };
 
   crate::utils::paths::assert_download_url_allowed(response.url().as_str())?;

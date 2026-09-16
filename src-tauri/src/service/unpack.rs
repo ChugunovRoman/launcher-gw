@@ -86,9 +86,21 @@ impl ServiceUnpacker {
       return Ok(());
     }
 
+    // ~2 Hz throttle, same policy as the download progress in `ServiceFiles`:
+    // the frontend rebuilds its whole progress state on every event, and a
+    // dataN.zip with tens of thousands of entries fired one event per entry,
+    // which froze the UI for the length of the extraction. The guaranteed
+    // final 100% call still happens below.
+    const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    let mut last_emit = std::time::Instant::now();
+
     for i in 0..total_files {
-      // Вызываем callback перед обработкой файла
-      (self.callback)(release_name, file_name, i, total_files);
+      // Первый вызов — сразу (иначе прогресс стоит на нуле до 500 мс),
+      // дальше не чаще PROGRESS_EMIT_INTERVAL.
+      if i == 0 || last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
+        (self.callback)(release_name, file_name, i, total_files);
+        last_emit = std::time::Instant::now();
+      }
 
       let mut file = archive.by_index(i)?;
 

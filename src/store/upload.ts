@@ -59,10 +59,18 @@ export function restoreDownloadState(version: Version): Version {
   const saved = get(downloadStates).get(version.name);
   if (!saved) return version;
   // Only restore JS-only download fields (not Rust fields like id, path, etc.).
+  const inProgress = saved.inProgress || version.inProgress;
   return {
     ...version,
-    inProgress: saved.inProgress || version.inProgress,
-    isStoped: saved.isStoped || version.isStoped,
+    inProgress,
+    // A RUNNING download must never come back paused. prepareVersionItem marks
+    // every version with saved progress on disk as `isStoped`, and merging with
+    // `||` could only ever set the flag, never clear it — so reloading the list
+    // mid-download (switching providers, deleting another version) left the
+    // version with inProgress AND isStoped set, the UI took the "Continue"
+    // branch and both Pause and Stop disappeared with nothing left to stop the
+    // download (and Continue only threw DOWNLOAD_ALREADY_RUNNING).
+    isStoped: inProgress ? false : (saved.isStoped || version.isStoped),
     wasCanceled: saved.wasCanceled || version.wasCanceled,
     downloadCurrentFile: saved.downloadCurrentFile || version.downloadCurrentFile,
     downloadProgress: saved.downloadProgress || version.downloadProgress,

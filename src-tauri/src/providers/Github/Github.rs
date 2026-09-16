@@ -53,8 +53,13 @@ impl Github {
       // Without timeouts a silently dropping network (captive portal,
       // firewall) leaves the request pending forever, and the startup
       // task holds the Service lock while it waits.
-      .connect_timeout(std::time::Duration::from_secs(15))
-      .timeout(std::time::Duration::from_secs(120))
+      .connect_timeout(std::time::Duration::from_secs(crate::consts::HTTP_CONNECT_TIMEOUT_SECS))
+      .timeout(std::time::Duration::from_secs(crate::consts::HTTP_REQUEST_TIMEOUT_SECS))
+      // `timeout` above is a TOTAL deadline that includes the response body,
+      // which is wrong for a multi-GB download; the per-request override in
+      // `__get_blob_by_url_stream` lifts it. This one bounds a dead connection
+      // instead: it caps the gap BETWEEN reads and resets on every chunk.
+      .read_timeout(std::time::Duration::from_secs(crate::consts::HTTP_READ_TIMEOUT_SECS))
       .build()?;
 
     Ok(Self {

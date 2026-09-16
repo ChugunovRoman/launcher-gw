@@ -121,6 +121,11 @@ pub const PULL_FILES_SIZE: u8 = 1;
 // Download/upload integrity retry limits (per file, not per worker).
 /// Network errors: connection resets, HTTP failures, interrupted streams.
 pub const MAX_DOWNLOAD_RETRIES: u32 = 5;
+/// Hard ceiling on download attempts for ONE file per session. `MAX_DOWNLOAD_RETRIES`
+/// counts only CONSECUTIVE fruitless attempts and resets whenever an attempt moved
+/// the resume point forward — which is what an unstable connection needs, but on its
+/// own it lets a server that hands over a byte and drops retry forever.
+pub const MAX_DOWNLOAD_ATTEMPTS_PER_FILE: u32 = 60;
 /// Size/hash mismatches of a completed download.
 pub const MAX_VERIFY_RETRIES: u32 = 3;
 /// Asset hash mismatches detected on the server after an upload.
@@ -195,7 +200,21 @@ pub const CACHE_TTL_BACKGROUND_SECS: u64 = 86400; // 24 hours
 /// TCP/TLS connect timeout.
 pub const HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
 /// Whole-request timeout (connect + headers + body).
+///
+/// Applies to API calls only. In reqwest this is a TOTAL deadline that covers
+/// the response body, so it must never reach a game-file download: a 2 GB
+/// archive needs more than 17 MB/s to finish inside 120 s, and on any normal
+/// connection every attempt died at exactly two minutes, forever.
 pub const HTTP_REQUEST_TIMEOUT_SECS: u64 = 120;
+/// Stall timeout: the longest gap allowed BETWEEN two reads. Unlike the total
+/// deadline above it resets on every received chunk, so it bounds a dead
+/// connection without putting a ceiling on how long a large file may take.
+pub const HTTP_READ_TIMEOUT_SECS: u64 = 30;
+/// Upper bound for a single game-file download, as a backstop against a server
+/// that trickles bytes just fast enough to keep the read timeout happy.
+/// Deliberately generous: a slow connection must be able to finish a multi-GB
+/// archive in one attempt.
+pub const DOWNLOAD_TOTAL_TIMEOUT_SECS: u64 = 6 * 60 * 60;
 
 /// How many bytes of a response body are quoted in a "failed to parse JSON"
 /// error. Enough to recognise an HTML captive-portal page or an API error

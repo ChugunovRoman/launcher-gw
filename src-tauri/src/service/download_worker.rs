@@ -20,8 +20,8 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::configs::AppConfig::{AppConfig, FileProgress, VersionProgress};
 use crate::consts::{
-  FILE_ERR_COPY_FAILED, FILE_ERR_HASH_MISMATCH, FILE_ERR_NETWORK, FILE_ERR_SIZE_MISMATCH, FILE_ERR_UNPACK_FAILED, FILE_ERR_VERIFY_FAILED, MAX_DOWNLOAD_RETRIES, MAX_VERIFY_RETRIES,
-  PULL_FILES_SIZE, ERR_DOWNLOAD_FAILED, ERR_USER_CANCELLED,
+  FILE_ERR_BAD_MANIFEST, FILE_ERR_COPY_FAILED, FILE_ERR_HASH_MISMATCH, FILE_ERR_NETWORK, FILE_ERR_SIZE_MISMATCH, FILE_ERR_UNPACK_FAILED, FILE_ERR_VERIFY_FAILED, MAX_DOWNLOAD_RETRIES,
+  MAX_VERIFY_RETRIES, MAX_DOWNLOAD_ATTEMPTS_PER_FILE, PULL_FILES_SIZE, ERR_DOWNLOAD_FAILED, ERR_USER_CANCELLED,
 };
 use crate::handlers::dto::{DownloadProgress, DownloadStatus, FileErrorPayload, PostProcessTask};
 use crate::providers::ApiClient::ApiClient::ApiClient;
@@ -41,6 +41,12 @@ pub enum VerifyResult {
 /// Verify a finished download: cheap size check first, then SHA-256 by
 /// re-reading the file (see utils::hash for why re-reading, not streaming).
 pub async fn verify_downloaded_file(path: &Path, expected_size: u64, expected_sha256: Option<&str>) -> anyhow::Result<VerifyResult> {
+  // A zero-length entry is a manifest defect, not a file: without this guard an
+  // empty (or never written) file matches `expected_size` and is accepted as
+  // downloaded, and the install silently ends up missing that payload.
+  if expected_size == 0 {
+    anyhow::bail!("manifest declares zero size for {:?}", path);
+  }
   let meta = tokio::fs::metadata(path).await?;
   if meta.len() != expected_size {
     return Ok(VerifyResult::SizeMismatch { expected: expected_size, actual: meta.len() });
@@ -72,6 +78,11 @@ pub async fn verify_downloaded_file_emit(
   downloaded_cnt: u32,
   total_cnt: u32,
 ) -> anyhow::Result<VerifyResult> {
+  // See `verify_downloaded_file`: size 0 is a broken manifest entry.
+  if expected_size == 0 {
+    anyhow::bail!("manifest declares zero size for '{}'", file_name);
+  }
+
   if expected_sha256.is_some() {
     let _ = app.emit(
       "download-version",
@@ -136,19 +147,19 @@ pub struct DownloadWorkerShared {
   pub last_save: std::sync::Mutex<std::time::Instant>,
 }
 
-/// Minimum interval between config saves. Forced saves (end of pipeline,
-/// cancel, terminal error) bypass this check.
+/// Minimum interval between config saves.
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 
 /// Save config with debouncing: skip if less than SAVE_DEBOUNCE has elapsed
-/// since the last save. Use `force = true` for mandatory saves (end of
-/// pipeline, cancel, terminal error) that must never be skipped.
-async fn debounced_save(shared: &Arc<DownloadWorkerShared>, force: bool) {
-  if !force {
-    let elapsed = shared.last_save.lock().unwrap().elapsed();
-    if elapsed < SAVE_DEBOUNCE {
-      return;
-    }
+/// since the last save. Only counter bookkeeping goes through here — the saves
+/// that MUST reach the disk (terminal file error, file marked downloaded,
+/// resume point, end of pipeline) call `AppConfig::save()` directly through
+/// `mark_file_error` / `update_config_and_emit` / `persist_file_size` /
+/// `finalize_download`, so no bypass flag is needed.
+async fn debounced_save(shared: &Arc<DownloadWorkerShared>) {
+  let elapsed = shared.last_save.lock().unwrap().elapsed();
+  if elapsed < SAVE_DEBOUNCE {
+    return;
   }
   let cfg = shared.app_config.lock().await;
   let _ = cfg.save();
@@ -190,16 +201,39 @@ async fn mark_file_error(shared: &DownloadWorkerShared, file_name: &str, code: &
   mark_file_error_direct(&shared.app, &shared.app_config, &shared.version_name, file_name, code, message).await;
 }
 
+/// Read the resume offset recorded in a `.part` sidecar (0 when it is missing
+/// or unreadable). Sync I/O, hence `spawn_blocking`.
+async fn read_part_offset(part_path: &str) -> u64 {
+  let part_path_owned = part_path.to_owned();
+  tokio::task::spawn_blocking(move || {
+    std::fs::read_to_string(&part_path_owned)
+      .ok()
+      .and_then(|s| s.trim().parse::<u64>().ok())
+      .unwrap_or(0)
+  })
+  .await
+  .unwrap_or(0)
+}
+
+/// `net_retries` after a failed network attempt. The limit counts CONSECUTIVE
+/// fruitless attempts: an attempt that appended at least one byte resets the
+/// counter, otherwise five hiccups spread over a multi-gigabyte file (each one
+/// having moved the download hundreds of megabytes forward) would kill it.
+fn next_net_retries(current: u32, offset_before: u64, offset_after: u64) -> u32 {
+  if offset_after > offset_before { 0 } else { current + 1 }
+}
+
 /// Persist the `.part` byte count into `FileProgress.size` so the resume point
 /// survives an abrupt kill. Called after interruptions and failed attempts.
+/// `part_path` must be a real path: callers that could not build one must NOT
+/// call this, or the unreadable path would overwrite `size` with 0 and throw
+/// the resume point away.
 pub async fn persist_file_size(config: &Arc<Mutex<AppConfig>>, version_name: &str, file_name: &str, part_path: &str) {
-  let part_path_owned = part_path.to_owned();
-  let size = tokio::task::spawn_blocking(move || {
-    match std::fs::read_to_string(&part_path_owned) {
-      Ok(s) => s.trim().parse::<u64>().unwrap_or(0),
-      Err(_) => 0,
-    }
-  }).await.unwrap_or(0);
+  if part_path.is_empty() || part_path == ".part" {
+    log::warn!("persist_file_size: refusing to persist size for '{}' — no valid .part path", file_name);
+    return;
+  }
+  let size = read_part_offset(part_path).await;
 
   let mut config_guard = config.lock().await;
   if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
@@ -236,6 +270,44 @@ async fn update_config_and_emit(app: &tauri::AppHandle, config: &Arc<Mutex<AppCo
   );
 }
 
+/// Undo the "file done" bookkeeping after post-processing failed terminally.
+/// The counter is bumped as soon as the payload is on disk, so without this the
+/// UI reports "40 / 40 files" right next to a download error.
+async fn rollback_downloaded_count(
+  app: &tauri::AppHandle,
+  config: &Arc<Mutex<AppConfig>>,
+  downloaded_cnt: &Arc<std::sync::atomic::AtomicU32>,
+  version_name: &str,
+  file_name: &str,
+  total: u32,
+) {
+  let current = downloaded_cnt
+    .fetch_update(std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst, |v| v.checked_sub(1))
+    .map(|prev| prev.saturating_sub(1))
+    .unwrap_or(0);
+
+  {
+    let mut config_guard = config.lock().await;
+    if let Some(ver) = config_guard.progress_download.get_mut(version_name) {
+      ver.downloaded_files_cnt = current;
+    }
+    let _ = config_guard.save();
+  }
+
+  let progress = if total > 0 { (current as f32 / total as f32) * 100.0 } else { 0.0 };
+  let _ = app.emit(
+    "download-version",
+    DownloadProgress {
+      version_name: version_name.to_string(),
+      status: DownloadStatus::DownloadFiles,
+      file: file_name.to_string(),
+      progress,
+      downloaded_files_cnt: current,
+      total_file_count: total,
+    },
+  );
+}
+
 /// Spawn PULL_FILES_SIZE download workers over the shared queue. Returns when
 /// every worker exits (queue drained, cancelled, or all files done). Retries
 /// are held locally by the worker (single worker today), so the queue channel
@@ -257,14 +329,28 @@ pub async fn run_download_workers(
       // Per-file retry counters travel INSIDE the FileProgress task struct, so
       // they survive re-queuing and are persisted to the config.
       let mut current_task: Option<FileProgress> = None;
+      // Hard ceiling on attempts for ONE file within this session. `net_retries`
+      // counts consecutive fruitless attempts and resets on any progress, which
+      // is what a flaky connection needs — but a server trickling a byte and
+      // dropping would then reset the budget forever. This counter never
+      // resets while the same file is being retried.
+      let mut attempts_this_file: u32 = 0;
 
       loop {
         // The flag, not the channel: a cancel sent before this worker
         // subscribed is invisible to `try_recv` but still set on the flag.
         if shared.cancel.is_cancelled() {
           if let Some(task) = &current_task {
-            let part = format!("{}.part", crate::utils::paths::safe_download_join(&shared.download_dir, &task.name).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
-            persist_file_size(&shared.app_config, &shared.version_name, &task.name, &part).await;
+            // Only persist when the `.part` path really resolves: a failed join
+            // used to degrade into the relative path ".part", which reads back
+            // as 0 bytes and wipes the stored resume point.
+            match crate::utils::paths::safe_download_join(&shared.download_dir, &task.name) {
+              Ok(p) => {
+                let part = format!("{}.part", p.to_string_lossy());
+                persist_file_size(&shared.app_config, &shared.version_name, &task.name, &part).await;
+              }
+              Err(e) => log::warn!("Cancel: cannot build .part path for '{}', size not persisted: {}", &task.name, e),
+            }
           }
           break;
         }
@@ -272,6 +358,8 @@ pub async fn run_download_workers(
         let mut task = match current_task.take() {
           Some(t) => t,
           None => {
+            // A brand-new file: reset the per-file attempt ceiling below.
+            attempts_this_file = 0;
             let mut rx_lock = rx_queue_c.lock().await;
             tokio::select! {
               _ = stop_rx.recv() => break,
@@ -283,6 +371,15 @@ pub async fn run_download_workers(
           }
         };
 
+        // A manifest entry without a size can never verify (see
+        // `verify_downloaded_file`), so fail it terminally instead of burning
+        // the retry budget on it.
+        if task.total_size == 0 {
+          log::error!("Manifest entry '{}' declares zero size", &task.name);
+          mark_file_error(&shared, &task.name, FILE_ERR_BAD_MANIFEST, "manifest declares zero size".to_string()).await;
+          continue;
+        }
+
         let file_path = match crate::utils::paths::safe_download_join(&shared.download_dir, &task.name) {
           Ok(p) => p,
           Err(e) => {
@@ -291,13 +388,22 @@ pub async fn run_download_workers(
             continue;
           }
         };
-        let part_path = format!("{}.part", file_path.to_str().unwrap_or(""));
+        // A non-UTF-8 path would degrade into the relative ".part" here and
+        // later wipe the resume point, so treat it as a bad manifest entry.
+        let part_path = match file_path.to_str() {
+          Some(p) => format!("{}.part", p),
+          None => {
+            log::error!("Download path for '{}' is not valid UTF-8", &task.name);
+            mark_file_error(&shared, &task.name, FILE_ERR_BAD_MANIFEST, "download path is not valid UTF-8".to_string()).await;
+            continue;
+          }
+        };
 
-        // Read existing progress for the Range header (sync I/O → spawn_blocking).
-        let part_path_clone = part_path.clone();
-        let seek_pos = tokio::task::spawn_blocking(move || {
-          std::fs::read_to_string(&part_path_clone).ok().and_then(|s| s.trim().parse::<u64>().ok())
-        }).await.unwrap_or(None);
+        attempts_this_file = attempts_this_file.saturating_add(1);
+
+        // Read existing progress for the Range header.
+        let offset_before = read_part_offset(&part_path).await;
+        let seek_pos = if offset_before > 0 { Some(offset_before) } else { None };
 
         let mut local_cancel = shared.cancel.subscribe();
         let res = shared
@@ -332,6 +438,16 @@ pub async fn run_download_workers(
               Ok(VerifyResult::Ok) | Ok(VerifyResult::Skipped) => {
                 task.net_retries = 0;
                 task.verify_retries = 0;
+
+                // The file is complete: drop the resume sidecar right here.
+                // It used to survive the whole pipeline, and the archive is
+                // deleted after unpacking — so the next resume found a
+                // sidecar with no payload next to it, read that as "a partial
+                // download whose file vanished" and re-downloaded a version
+                // that was already installed, while the UI kept showing it as
+                // done.
+                let _ = tokio::fs::remove_file(&part_path).await;
+
                 {
                   let mut cfg = shared.app_config.lock().await;
                   if let Some(ver) = cfg.progress_download.get_mut(&shared.version_name) {
@@ -342,7 +458,7 @@ pub async fn run_download_workers(
                     }
                   }
                 }
-                debounced_save(&shared, false).await;
+                debounced_save(&shared).await;
 
                 // Dispatch post-processing by file kind (zip → unpack, raw → copy).
                 // Built BEFORE the counters below so a bad `target` is reported
@@ -365,10 +481,17 @@ pub async fn run_download_workers(
                     // "downloaded" flag update_config_and_emit just wrote.
                     log::error!("Invalid raw target for '{}': {}", &task.name, &e);
                     mark_file_error(&shared, &task.name, FILE_ERR_COPY_FAILED, e).await;
+                    // …and the file is not done after all: give the counter its
+                    // slot back, otherwise the UI shows "40/40" next to the
+                    // download error.
+                    rollback_downloaded_count(&shared.app, &shared.app_config, &shared.downloaded_cnt, &shared.version_name, &task.name, shared.total_file_count).await;
                   }
                 }
 
-                if current >= shared.total_file_count {
+                // Re-read the counter: the post-process dispatch above may have
+                // rolled it back, and a stale `current` would end the worker
+                // while files are still queued.
+                if shared.downloaded_cnt.load(std::sync::atomic::Ordering::SeqCst) >= shared.total_file_count {
                   // Just leave: the queue sender was dropped before the workers
                   // started, so the others end on their own.  Signalling cancel
                   // here would now abort the post-process queue as well.
@@ -404,7 +527,7 @@ pub async fn run_download_workers(
                     }
                   }
                 }
-                debounced_save(&shared, false).await;
+                debounced_save(&shared).await;
 
                 if task.verify_retries <= MAX_VERIFY_RETRIES {
                   log::warn!(
@@ -432,7 +555,7 @@ pub async fn run_download_workers(
                     }
                   }
                 }
-                debounced_save(&shared, false).await;
+                debounced_save(&shared).await;
                 if task.verify_retries <= MAX_VERIFY_RETRIES {
                   tokio::time::sleep(backoff_delay(task.verify_retries)).await;
                   current_task = Some(task);
@@ -447,11 +570,23 @@ pub async fn run_download_workers(
             persist_file_size(&shared.app_config, &shared.version_name, &task.name, &part_path).await;
             break;
           }
+          Ok(DownloadOutcome::RestartRequired) => {
+            // The partial file and its sidecar were inconsistent and have been
+            // dropped. Re-queue WITHOUT counting a network failure: nothing
+            // went wrong on the wire, and the next attempt asks for the whole
+            // file from byte 0.
+            log::warn!("Re-queuing '{}' from byte 0: resume state was inconsistent", &task.name);
+            current_task = Some(task);
+          }
           Ok(DownloadOutcome::ShortRead) => {
             // The stream ended early WITHOUT a cancel signal — a real network
             // error, not a pause. Route it through the same net_retries/backoff
             // path as an Err() below instead of breaking the worker.
-            task.net_retries += 1;
+            let offset_after = read_part_offset(&part_path).await;
+            if offset_after > offset_before {
+              log::info!("Short read for '{}' after {} new bytes, retry budget reset", task.name, offset_after - offset_before);
+            }
+            task.net_retries = next_net_retries(task.net_retries, offset_before, offset_after);
             {
               let mut cfg = shared.app_config.lock().await;
               if let Some(ver) = cfg.progress_download.get_mut(&shared.version_name) {
@@ -460,8 +595,8 @@ pub async fn run_download_workers(
                 }
               }
             }
-            debounced_save(&shared, false).await;
-            if task.net_retries > MAX_DOWNLOAD_RETRIES {
+            debounced_save(&shared).await;
+            if task.net_retries > MAX_DOWNLOAD_RETRIES || attempts_this_file > MAX_DOWNLOAD_ATTEMPTS_PER_FILE {
               log::error!("Download of '{}' failed after {} attempts: short read (server closed the connection early)", task.name, MAX_DOWNLOAD_RETRIES);
               mark_file_error(&shared, &task.name, FILE_ERR_NETWORK, "short read: server closed the connection early".to_string()).await;
               // The queue continues with the remaining files.
@@ -473,7 +608,14 @@ pub async fn run_download_workers(
             }
           }
           Err(e) => {
-            task.net_retries += 1;
+            // Same consecutive-failure accounting as the ShortRead arm above:
+            // an attempt that moved the resume point forward does not count
+            // against MAX_DOWNLOAD_RETRIES.
+            let offset_after = read_part_offset(&part_path).await;
+            if offset_after > offset_before {
+              log::info!("Download of '{}' failed after {} new bytes, retry budget reset", task.name, offset_after - offset_before);
+            }
+            task.net_retries = next_net_retries(task.net_retries, offset_before, offset_after);
             {
               let mut cfg = shared.app_config.lock().await;
               if let Some(ver) = cfg.progress_download.get_mut(&shared.version_name) {
@@ -482,8 +624,8 @@ pub async fn run_download_workers(
                 }
               }
             }
-            debounced_save(&shared, false).await;
-            if task.net_retries > MAX_DOWNLOAD_RETRIES {
+            debounced_save(&shared).await;
+            if task.net_retries > MAX_DOWNLOAD_RETRIES || attempts_this_file > MAX_DOWNLOAD_ATTEMPTS_PER_FILE {
               log::error!("Download of '{}' failed after {} attempts: {}", task.name, MAX_DOWNLOAD_RETRIES, e);
               mark_file_error(&shared, &task.name, FILE_ERR_NETWORK, e.to_string()).await;
               // The queue continues with the remaining files.
@@ -537,30 +679,49 @@ fn post_process_task(file: &FileProgress, archive_path: &Path, install_path: &Pa
   }
 }
 
-/// Sync body of the raw-file move: rename on the same volume, copy+remove
-/// otherwise, with a post-copy size check.
-fn copy_raw_file_sync(src: &Path, dest: &Path) -> std::io::Result<()> {
+/// Sync body of the raw-file placement. The download-dir copy is deliberately
+/// LEFT IN PLACE: the caller records `is_unpacked` in the config first and only
+/// then deletes the source, so a kill in between re-copies a file that is still
+/// there instead of re-downloading it (same ordering as the zip branch, which
+/// only removes the archive after the flag is persisted).
+///
+/// Same volume → a hard link costs nothing and keeps the source name alive;
+/// everything else falls back to a real copy with a post-copy size check.
+fn place_raw_file_sync(src: &Path, dest: &Path) -> std::io::Result<()> {
   if let Some(parent) = dest.parent() {
     std::fs::create_dir_all(parent)?;
   }
-  match std::fs::rename(src, dest) {
-    Ok(()) => Ok(()),
-    Err(_) => {
-      std::fs::copy(src, dest)?;
-      let src_len = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
-      let dst_len = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(u64::MAX);
-      if src_len != dst_len {
-        return Err(std::io::Error::other(format!("copy size mismatch: {} -> {}", src_len, dst_len)));
-      }
-      std::fs::remove_file(src)?;
-      Ok(())
+
+  // Both hard_link and a read-only destination would make the write fail, so
+  // clear the way first (an install being repaired already has the file).
+  if let Ok(meta) = std::fs::metadata(dest) {
+    let mut perms = meta.permissions();
+    if perms.readonly() {
+      perms.set_readonly(false);
+      let _ = std::fs::set_permissions(dest, perms);
     }
+    let _ = std::fs::remove_file(dest);
   }
+
+  if std::fs::hard_link(src, dest).is_ok() {
+    return Ok(());
+  }
+
+  std::fs::copy(src, dest)?;
+  let src_len = std::fs::metadata(src).map(|m| m.len()).unwrap_or(0);
+  let dst_len = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(u64::MAX);
+  if src_len != dst_len {
+    return Err(std::io::Error::other(format!("copy size mismatch: {} -> {}", src_len, dst_len)));
+  }
+  Ok(())
 }
 
 /// The post-process manager: consumes Unzip/Copy tasks in order. Replaces the
 /// hand-copied unzip-manager loops of the start/continue commands; reports
 /// unpack/copy failures to the UI instead of only logging them (plan P4/2.5).
+/// `downloaded_cnt`/`total_file_count` are the version-level counters: a
+/// terminal post-process failure gives the file's slot back (the download
+/// worker counts a file as done as soon as its payload is verified on disk).
 pub fn spawn_postprocess_manager(
   app: tauri::AppHandle,
   app_config: Arc<Mutex<AppConfig>>,
@@ -568,6 +729,8 @@ pub fn spawn_postprocess_manager(
   version_name: String,
   mut rx_unzip: mpsc::Receiver<PostProcessTask>,
   cancel: crate::handlers::start_download_version::CancelHandle,
+  downloaded_cnt: Arc<std::sync::atomic::AtomicU32>,
+  total_file_count: u32,
 ) -> tokio::task::JoinHandle<()> {
   tokio::spawn(async move {
     while let Some(task) = rx_unzip.recv().await {
@@ -632,6 +795,7 @@ pub fn spawn_postprocess_manager(
                 message: format!("unpack failed, archive kept at {}", archive_path.display()),
               },
             );
+            rollback_downloaded_count(&app, &app_config, &downloaded_cnt, &v_name, &file_name, total_file_count).await;
           }
         }
         PostProcessTask::Copy(data) => {
@@ -640,11 +804,16 @@ pub fn spawn_postprocess_manager(
           let dest = data.destination_path.clone();
           let v_name = version_name.clone();
 
-          let copy_res = tokio::task::spawn_blocking(move || copy_raw_file_sync(&src, &dest)).await.unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+          let src_c = src.clone();
+          let copy_res = tokio::task::spawn_blocking(move || place_raw_file_sync(&src_c, &dest)).await.unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
 
           match copy_res {
             Ok(()) => {
               // `is_unpacked` semantics: "post-processed" (unzipped OR copied).
+              // Persisted BEFORE the download-dir copy is dropped, exactly like
+              // the zip branch deletes the archive only after the flag is saved:
+              // a kill in between then finds the source still in place and just
+              // re-copies it, instead of re-downloading the whole file.
               {
                 let mut config_guard = app_config.lock().await;
                 if let Some(ver) = config_guard.progress_download.get_mut(&v_name) {
@@ -654,6 +823,7 @@ pub fn spawn_postprocess_manager(
                 }
                 let _ = config_guard.save();
               }
+              let _ = std::fs::remove_file(&src);
               // The frontend treats this event as "file is ready".
               let _ = app.emit("file-unzipped", (&v_name, data.archive_path.to_str()));
             }
@@ -677,6 +847,7 @@ pub fn spawn_postprocess_manager(
                   message: e.to_string(),
                 },
               );
+              rollback_downloaded_count(&app, &app_config, &downloaded_cnt, &v_name, &file_name, total_file_count).await;
             }
           }
         }
@@ -699,17 +870,40 @@ pub async fn finalize_download(
   downloaded_total: u32,
   total_file_count: u32,
   unzip_manager: tokio::task::JoinHandle<()>,
+  cancel: &crate::handlers::start_download_version::CancelHandle,
 ) -> Result<(), String> {
   let _ = unzip_manager.await;
 
-  let (has_errors, downloaded_files_cnt) = {
+  // `downloaded_total` counts files that finished DOWNLOADING. Post-processing
+  // runs behind them, and the post-process manager bails out on cancel — so
+  // when the player hits Pause while the last archives are still unpacking,
+  // every file is "downloaded" and nothing looks wrong here. Declaring the
+  // version installed at that point makes the frontend register it and delete
+  // the download folder, leaving a game with half its gamedata missing and no
+  // way to resume. Completion therefore means: not cancelled, and every file
+  // actually post-processed.
+  let (has_errors, downloaded_files_cnt, all_unpacked, tracked) = {
     let cfg = app_config.lock().await;
     match cfg.progress_download.get(version_name) {
-      Some(ver) => (ver.files.values().any(|f| f.last_error.is_some()), ver.downloaded_files_cnt),
-      None => (false, downloaded_total),
+      Some(ver) => (
+        ver.files.values().any(|f| f.last_error.is_some()),
+        ver.downloaded_files_cnt,
+        // `Manifest` entries are metadata, not payload — they are never
+        // post-processed, so requiring a flag on them would hang the version.
+        !ver.files.is_empty()
+          && ver
+            .files
+            .values()
+            .filter(|f| f.kind != crate::handlers::dto::ManifestFileKind::Manifest)
+            .all(|f| f.is_unpacked),
+        true,
+      ),
+      // No progress entry left (e.g. the frontend cleared it): nothing we can
+      // claim to have finished.
+      None => (false, downloaded_total, false, false),
     }
   };
-  let fully_downloaded = downloaded_total >= total_file_count;
+  let fully_downloaded = tracked && !cancel.is_cancelled() && downloaded_total >= total_file_count && all_unpacked;
 
   if has_errors {
     log::warn!(
@@ -795,7 +989,16 @@ pub async fn run_version_pipeline(
   drop(tx_queue);
 
   let (tx_unzip, rx_unzip) = mpsc::channel::<PostProcessTask>((total_file_count as usize).max(1));
-  let unzip_manager = spawn_postprocess_manager(app.clone(), app_config.clone(), service_unpack.clone(), version.name.clone(), rx_unzip, cancel.clone());
+  let unzip_manager = spawn_postprocess_manager(
+    app.clone(),
+    app_config.clone(),
+    service_unpack.clone(),
+    version.name.clone(),
+    rx_unzip,
+    cancel.clone(),
+    downloaded_cnt.clone(),
+    total_file_count,
+  );
 
   // Files that were downloaded earlier (e.g. resume): queue their
   // post-processing before the workers start.
@@ -825,5 +1028,133 @@ pub async fn run_version_pipeline(
   drop(tx_unzip);
 
   let downloaded_total = downloaded_cnt.load(std::sync::atomic::Ordering::SeqCst);
-  finalize_download(app, app_config, &version.name, downloaded_total, total_file_count, unzip_manager).await
+  finalize_download(app, app_config, &version.name, downloaded_total, total_file_count, unzip_manager, &cancel).await
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn temp_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("gw_dl_worker_{}_{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  // --- net_retries accounting (audit item 1) ---------------------------------
+
+  #[test]
+  fn net_retries_grow_only_while_nothing_is_downloaded() {
+    // Five fruitless attempts in a row exhaust the budget…
+    let mut retries = 0;
+    for expected in 1..=(MAX_DOWNLOAD_RETRIES + 1) {
+      retries = next_net_retries(retries, 1_000, 1_000);
+      assert_eq!(retries, expected);
+    }
+    assert!(retries > MAX_DOWNLOAD_RETRIES, "budget must be exhausted by consecutive failures");
+  }
+
+  #[test]
+  fn net_retries_reset_when_the_attempt_moved_the_resume_point() {
+    // A 2 GiB file that drops the connection every few hundred megabytes must
+    // never hit the terminal NETWORK error: every attempt that appended bytes
+    // starts the count from scratch.
+    let mut retries = 0;
+    let mut offset: u64 = 0;
+    for _ in 0..50 {
+      let after = offset + 300 * 1024 * 1024;
+      retries = next_net_retries(retries, offset, after);
+      assert_eq!(retries, 0);
+      assert!(retries <= MAX_DOWNLOAD_RETRIES);
+      offset = after;
+    }
+  }
+
+  #[test]
+  fn net_retries_reset_even_for_a_single_new_byte() {
+    assert_eq!(next_net_retries(MAX_DOWNLOAD_RETRIES, 100, 101), 0);
+    // A stalled attempt (or one that restarted from zero) still counts.
+    assert_eq!(next_net_retries(3, 100, 100), 4);
+    assert_eq!(next_net_retries(3, 100, 0), 4);
+  }
+
+  #[tokio::test]
+  async fn read_part_offset_reads_the_sidecar_and_defaults_to_zero() {
+    let dir = temp_dir("part");
+    let part = dir.join("f.zip.part");
+    assert_eq!(read_part_offset(part.to_str().unwrap()).await, 0);
+    std::fs::write(&part, b"12345\n").unwrap();
+    assert_eq!(read_part_offset(part.to_str().unwrap()).await, 12345);
+    std::fs::write(&part, b"garbage").unwrap();
+    assert_eq!(read_part_offset(part.to_str().unwrap()).await, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  // --- verify (audit item 3) -------------------------------------------------
+
+  #[tokio::test]
+  async fn verify_rejects_a_zero_size_manifest_entry() {
+    let dir = temp_dir("verify_zero");
+    let file = dir.join("empty.bin");
+    std::fs::write(&file, b"").unwrap();
+
+    // An empty file used to "match" an expected size of 0 and be counted as
+    // downloaded; a zero-size entry is a broken manifest instead.
+    let res = verify_downloaded_file(&file, 0, None).await;
+    assert!(res.is_err(), "expected_size == 0 must not verify, got {:?}", res.ok());
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[tokio::test]
+  async fn verify_still_accepts_a_real_file_without_sha256() {
+    let dir = temp_dir("verify_ok");
+    let file = dir.join("payload.bin");
+    std::fs::write(&file, b"0123456789").unwrap();
+
+    match verify_downloaded_file(&file, 10, None).await.unwrap() {
+      VerifyResult::Skipped => {}
+      other => panic!("expected Skipped, got {:?}", other),
+    }
+    match verify_downloaded_file(&file, 11, None).await.unwrap() {
+      VerifyResult::SizeMismatch { expected: 11, actual: 10 } => {}
+      other => panic!("expected SizeMismatch, got {:?}", other),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  // --- raw file placement (audit item 4) -------------------------------------
+
+  #[test]
+  fn place_raw_file_keeps_the_source_until_the_caller_drops_it() {
+    let dir = temp_dir("raw");
+    let src = dir.join("download/patch.exe");
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    std::fs::write(&src, b"payload").unwrap();
+    let dest = dir.join("install/bin/patch.exe");
+
+    place_raw_file_sync(&src, &dest).unwrap();
+
+    // The source must survive the call: `is_unpacked = true` is persisted first
+    // and only then is the download-dir copy removed, so a kill in between
+    // re-copies instead of re-downloading.
+    assert!(src.exists(), "source must still be there after placement");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"payload");
+
+    // Overwriting an existing destination keeps working (repair/reinstall).
+    std::fs::write(&src, b"payload2").unwrap();
+    place_raw_file_sync(&src, &dest).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"payload2");
+    assert!(src.exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  // `persist_file_size` (audit item 2) is not unit-tested: building an
+  // `AppConfig` pulls in the tauri runtime, which cannot be constructed off the
+  // main thread. Its guard is the `part_path.is_empty() || part_path == ".part"`
+  // early return plus the call sites, which no longer build a path they could
+  // not resolve.
 }

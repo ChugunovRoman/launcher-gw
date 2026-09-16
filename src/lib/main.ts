@@ -162,7 +162,9 @@ export function prepareVersionItem(appConfig: AppConfig, version: Version, sep: 
     downloadedFilesCnt = progress.downloaded_files_cnt;
     totalFileCount = progress.total_file_count;
     isStoped = true;
-    downloadProgress = (downloadedFilesCnt / totalFileCount) * 100.0;
+    // A release with no assets gives total_file_count = 0 — without the guard
+    // the card and the progress bar width both rendered "NaN%".
+    downloadProgress = totalFileCount > 0 ? (downloadedFilesCnt / totalFileCount) * 100.0 : 0.0;
     status = DownloadStatus.Pause;
     // Files with a terminal error keep the version in the Error state after a
     // restart, so the UI offers "Retry" (continue re-downloads failed files).

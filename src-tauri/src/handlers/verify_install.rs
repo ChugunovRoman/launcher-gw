@@ -43,14 +43,28 @@ struct VerifyInstalledProgress {
   total_bytes: u64,
 }
 
+/// One reference entry together with the manifest it came from.
+///
+/// The source matters for "Repair": a file whose hash comes from a patch
+/// manifest must be re-downloaded from THAT patch's assets. Taking the release
+/// copy instead means the file is verified against the patch hash — a
+/// guaranteed HASH_MISMATCH on every one of the three attempts, and the file
+/// can never be repaired.
+#[derive(Debug, Clone)]
+struct FileReference {
+  file: ReleaseManifestFile,
+  /// Patch tag whose manifest supplied this entry; `None` = release manifest.
+  patch: Option<String>,
+}
+
 /// Hash reference for the installed files: release manifest overlaid with the
 /// manifests of the installed patches in install order (a file replaced by a
 /// later patch is verified against THAT patch's entry).
-fn build_file_reference(release_manifest: Option<&ReleaseManifest>, installed_path: &Path) -> HashMap<String, ReleaseManifestFile> {
-  let mut map: HashMap<String, ReleaseManifestFile> = HashMap::new();
+fn build_file_reference(release_manifest: Option<&ReleaseManifest>, installed_path: &Path) -> HashMap<String, FileReference> {
+  let mut map: HashMap<String, FileReference> = HashMap::new();
   if let Some(m) = release_manifest {
     for f in &m.files {
-      map.insert(f.name.clone(), f.clone());
+      map.insert(f.name.clone(), FileReference { file: f.clone(), patch: None });
     }
   }
   for patch in crate::utils::patch_markers::read_installed_patches(installed_path) {
@@ -63,7 +77,7 @@ fn build_file_reference(release_manifest: Option<&ReleaseManifest>, installed_pa
       continue;
     };
     for f in &m.files {
-      map.insert(f.name.clone(), f.clone());
+      map.insert(f.name.clone(), FileReference { file: f.clone(), patch: Some(patch.name.clone()) });
     }
   }
   map
@@ -108,7 +122,7 @@ pub async fn verify_installed_version(
   };
 
   let reference = build_file_reference(release_manifest.as_ref(), Path::new(&installed_path));
-  let raw_files: Vec<&ReleaseManifestFile> = reference.values().filter(|f| f.kind == ManifestFileKind::Raw).collect();
+  let raw_files: Vec<&ReleaseManifestFile> = reference.values().map(|r| &r.file).filter(|f| f.kind == ManifestFileKind::Raw).collect();
   let total_files = raw_files.len() as u32;
   let total_bytes: u64 = raw_files.iter().map(|f| f.size).sum();
 
@@ -144,7 +158,15 @@ pub async fn verify_installed_version(
 
     let rel = file.target.as_deref().filter(|t| !t.is_empty()).unwrap_or(&file.name).replace('\\', "/");
     if crate::utils::paths::assert_relative_target(&rel).is_err() {
-      log::warn!("verify: skipping entry with invalid target '{}'", &rel);
+      // Such an entry cannot be checked at all — but silently skipping it left
+      // the progress short of 100% and the file invisible in the report, so
+      // the player read a broken install as a clean one. Count it and list it
+      // among the broken files instead.
+      log::warn!("verify: entry with invalid target '{}' cannot be checked", &rel);
+      report.checked += 1;
+      report.missing.push(if rel != file.name { format!("{} ({})", &file.name, &rel) } else { file.name.clone() });
+      done_files += 1;
+      done_bytes += file.size;
       continue;
     }
     let path = Path::new(&installed_path).join(&rel);
@@ -294,8 +316,13 @@ pub async fn start_repair_version(
     (v.id, v.path.clone(), v.installed_path.clone(), v.manifest.clone())
   };
 
-  // Download links: release assets first, patch assets from the index
-  // afterwards (a file replaced by a patch lives in the updates repo).
+  // The reference (kind/target/sha256) may come from a patch manifest.
+  let reference = build_file_reference(release_manifest.as_ref(), Path::new(&installed_path));
+
+  // Download links are kept per source: the release assets on one side, every
+  // patch's assets on the other. The link MUST match the manifest the hash
+  // came from — a file replaced by a patch lives in the updates repo, and the
+  // release copy would fail the patch hash on every attempt.
   let release = {
     let service_guard = service.lock().await;
     service_guard
@@ -303,26 +330,45 @@ pub async fn start_repair_version(
       .await
       .map_err(|e| format!("Failed to get main release files: {}", e))?
   };
-  let mut links: HashMap<String, String> = release.assets.into_iter().map(|a| (a.name, a.download_link)).collect();
+  let release_links: HashMap<String, String> = release.assets.into_iter().map(|a| (a.name, a.download_link)).collect();
 
   let api_client = {
     let service_guard = service.lock().await;
     service_guard.api_client.clone()
   };
+  // `patch_links[tag][file]` — the asset of that exact patch; `any_patch_links`
+  // is the last-patch-wins fallback for a tag the index no longer lists.
+  let mut patch_links: HashMap<String, HashMap<String, String>> = HashMap::new();
+  let mut any_patch_links: HashMap<String, String> = HashMap::new();
   if let Ok(api) = api_client.current_provider() {
     if let Ok(index) = crate::service::index::load_index(api.id()).await {
       if let Some(entry) = index.releases.iter().find(|r| r.name == versionName || r.path == versionName) {
         for patch in &entry.patches {
+          let per_patch = patch_links.entry(patch.tag.clone()).or_default();
           for asset in &patch.assets {
-            links.entry(asset.name.clone()).or_insert_with(|| asset.url.clone());
+            per_patch.insert(asset.name.clone(), asset.url.clone());
+            any_patch_links.insert(asset.name.clone(), asset.url.clone());
           }
         }
       }
     }
   }
 
-  // The reference (kind/target/sha256) may come from a patch manifest.
-  let reference = build_file_reference(release_manifest.as_ref(), Path::new(&installed_path));
+  // Pick the link that belongs to the manifest the reference entry came from.
+  let resolve_link = |name: &str, source: Option<&str>| -> Option<String> {
+    let Some(tag) = source else {
+      return release_links.get(name).cloned();
+    };
+    if let Some(url) = patch_links.get(tag).and_then(|m| m.get(name)) {
+      return Some(url.clone());
+    }
+    if let Some(url) = any_patch_links.get(name) {
+      log::warn!("repair: patch '{}' is not in the index, taking '{}' from a later patch", tag, name);
+      return Some(url.clone());
+    }
+    log::warn!("repair: no patch asset for '{}' (patch '{}'), falling back to the release copy", name, tag);
+    release_links.get(name).cloned()
+  };
 
   // Temp download dir next to the install dir; removed by the usual
   // download-unpack-version cleanup after the repair finishes.
@@ -348,10 +394,14 @@ pub async fn start_repair_version(
   };
 
   for name in &files {
-    let Some(link) = links.get(name) else {
+    let reference_entry = reference.get(name);
+    let Some(link) = resolve_link(name, reference_entry.and_then(|r| r.patch.as_deref())) else {
       return Err(format!("No download link found for file '{}'", name));
     };
-    let entry = reference.get(name);
+    if let Some(tag) = reference_entry.and_then(|r| r.patch.as_deref()) {
+      log::info!("repair: '{}' is verified against patch '{}' — downloading the patched copy", name, tag);
+    }
+    let entry = reference_entry.map(|r| &r.file);
     let total_size = entry.map(|e| e.size).unwrap_or(0);
     let mut fp = FileProgress {
       id: name.clone(),
@@ -371,7 +421,7 @@ pub async fn start_repair_version(
     if fp.total_size == 0 {
       // Fall back to a HEAD request when the manifest entry is missing.
       if let Ok(api) = api_client.current_provider() {
-        if let Ok(size) = api.get_file_content_size(link).await {
+        if let Ok(size) = api.get_file_content_size(&link).await {
           fp.total_size = size;
         }
       }

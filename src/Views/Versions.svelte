@@ -1147,8 +1147,12 @@
                         {version.downloadedFilesCnt}/{version.totalFileCount} -
 
                         {$_("app.download.status.speed")}
-                        {version.speedValue}
-                        {version.sfxValue}
+                        <!-- The stored speed is the last non-zero reading (see download.ts):
+                             it must only be shown while the download is actually running,
+                             otherwise a paused/failed version keeps displaying the speed it
+                             had at the moment it stopped. -->
+                        {version.inProgress ? version.speedValue : formatSpeedBytesPerSec(0)[0]}
+                        {version.inProgress ? version.sfxValue : formatSpeedBytesPerSec(0)[1]}
                       {/if}
                     </span>
                   </div>
@@ -1164,7 +1168,13 @@
                       class="download-btn icon-btn continue-btn">
                       <Play size={12} />
                     </button>
-                  {:else if version.inProgress && version.status === DownloadStatus.DownloadFiles}
+                  {:else if version.inProgress}
+                    <!-- Tied to the download being ACTIVE, not to one status: the backend
+                         flips the version into Verifying/Unpacking after every finished
+                         file (40 times on a release of 40 archives), which made Pause and
+                         Stop blink and vanish from under the cursor, and it sits in Init
+                         while the release request is in flight — with no button at all to
+                         abort a download that had already started. -->
                     <button type="button" onclick={(e) => handlePauseDownload(e, version.name)} class="download-btn icon-btn continue-btn">
                       <Pause size={12} />
                     </button>

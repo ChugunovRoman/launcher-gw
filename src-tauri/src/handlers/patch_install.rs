@@ -107,6 +107,11 @@ async fn download_patch_asset_verified(
         log::warn!("Patch download of '{}' failed (attempt {}/{}): {}", asset_name, net_retries, crate::consts::MAX_DOWNLOAD_RETRIES, e);
         tokio::time::sleep(Duration::from_millis(500)).await;
       }
+      Ok(DownloadOutcome::RestartRequired) => {
+        // Inconsistent resume state; the partial file was dropped. Retry
+        // without spending a network attempt — the next one starts from zero.
+        log::warn!("Re-downloading patch asset '{}' from byte 0: resume state was inconsistent", asset_name);
+      }
       Ok(DownloadOutcome::ShortRead) => {
         // The stream ended early WITHOUT a cancel signal — a real network
         // error, not a pause. Retry like a network error instead of bailing

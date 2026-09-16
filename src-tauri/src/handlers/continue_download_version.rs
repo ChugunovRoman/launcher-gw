@@ -11,6 +11,74 @@ use std::{cmp::Reverse, path::{Path, PathBuf}, sync::Arc};
 use tauri::Emitter;
 use tokio::sync::Mutex;
 
+/// Where a resumed file should continue from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resume {
+  /// Start from scratch.
+  FromScratch,
+  /// Continue from this many bytes, no change to the file on disk.
+  At(u64),
+  /// Continue from this many bytes, but cut the file back to it first: the
+  /// payload holds more bytes than the sidecar recorded, and their quality is
+  /// unknown.
+  TruncateTo(u64),
+  /// Nothing to do — the file is already installed.
+  Done(u64),
+}
+
+impl Resume {
+  pub fn size(self) -> u64 {
+    match self {
+      Resume::FromScratch => 0,
+      Resume::At(n) | Resume::TruncateTo(n) | Resume::Done(n) => n,
+    }
+  }
+}
+
+/// Decide the resume point from the state on disk and the saved progress.
+///
+/// Extracted from the triage loop because this decision has now been wrong
+/// twice, and the failure is invisible from the outside: the UI keeps showing
+/// the file as done while gigabytes are re-downloaded.
+///
+/// Order matters. `is_unpacked` is checked FIRST and regardless of what lies on
+/// disk: it is only ever set after a verified archive was successfully
+/// extracted, so the content is already in the install directory and the
+/// archive is disposable. Anything still sitting in the download folder — a
+/// leftover `.part` sidecar, or a partial archive from an earlier spurious
+/// re-download — must not drag the file back into the queue. (A player whose
+/// game files were deleted by hand is served by "Verify integrity", not by the
+/// resume path.)
+pub fn resolve_resume(
+  part_size: Option<u64>,
+  file_len: u64,
+  is_downloaded: bool,
+  is_unpacked: bool,
+  total_size: u64,
+) -> Resume {
+  if is_unpacked {
+    return Resume::Done(total_size);
+  }
+  match part_size {
+    // Sidecar exists but the file is gone → start over.
+    Some(_) if file_len == 0 => Resume::FromScratch,
+    // Crash lost bytes after the sidecar write → trust the file.
+    Some(part) if file_len < part => Resume::At(file_len),
+    Some(part) if file_len > part => Resume::TruncateTo(part),
+    Some(part) => Resume::At(part),
+    None if file_len > 0 && is_downloaded => Resume::At(file_len),
+    // No sidecar, not yet marked downloaded — but the payload on disk is
+    // exactly the expected size.  The sidecar is deleted as soon as the last
+    // chunk lands, while `is_downloaded` is written only AFTER the sha256 of
+    // the whole file was computed (tens of seconds for a 2 GB archive, shown
+    // as "Verifying").  Closing the launcher inside that window must not throw
+    // the finished payload away: resume at its end and let the hash check
+    // decide — a bogus file is caught there and re-downloaded anyway.
+    None if total_size > 0 && file_len == total_size => Resume::At(file_len),
+    None => Resume::FromScratch,
+  }
+}
+
 /// Delete a stale payload together with its `.part` sidecar (D5).
 ///
 /// The resume offset the worker uses lives ONLY in the sidecar
@@ -136,7 +204,18 @@ async fn reconcile_with_release(
       }
 
       // File exists in both — check if size or sha changed.
-      let size_changed = existing.total_size != asset.size;
+      //
+      // `asset.size == 0` means "unknown", not "empty": a HEAD that answered
+      // 403 or a redirect leaves it at zero (Gitlab/launcher.rs, and the API
+      // fallback when the static index is unavailable). Treating that as a
+      // size change wiped gigabytes of finished progress and then set
+      // total_size to 0, which turns every later verification into a permanent
+      // SIZE_MISMATCH — unrecoverable short of a full re-download.
+      let size_known = asset.size > 0;
+      if !size_known {
+        log::warn!("{}: asset '{}' reports size 0 — treating it as unknown, keeping saved progress", log_tag, &asset.name);
+      }
+      let size_changed = size_known && existing.total_size != asset.size;
       let sha_changed = manifest.and_then(|m| {
         m.files.iter().find(|f| f.name == asset.name).and_then(|f| f.sha256.as_deref())
       }).is_some_and(|sha| existing.sha256.as_deref() != Some(sha));
@@ -148,7 +227,9 @@ async fn reconcile_with_release(
 
       if size_changed || sha_changed {
         log::info!("{}: file '{}' changed (size: {}, sha: {}), resetting progress", log_tag, &asset.name, size_changed, sha_changed);
-        existing.total_size = asset.size;
+        if size_known {
+          existing.total_size = asset.size;
+        }
         existing.is_downloaded = false;
         existing.is_unpacked = false;
         existing.size = 0;
@@ -309,13 +390,14 @@ pub async fn continue_download_version(
   // re-verify (P5/2.3): the sha256 hash is computed OUTSIDE the config lock
   // below — hashing a multi-GB part while holding the global config mutex
   // would stall every other command that reads the config (bug fix).
+  // The metadata used for the check (size/sha) and for the follow-up queue
+  // entry is NOT stored here: it is read from the reconciled `version.files`
+  // right before the check, because everything collected in the first pass
+  // predates the talk with the server (D3).
   struct PendingVerify {
     name: String,
     file_path: PathBuf,
     part_path: PathBuf,
-    total_size: u64,
-    sha256: Option<String>,
-    file_progress: FileProgress,
   }
   let mut pending_verify: Vec<PendingVerify> = vec![];
 
@@ -405,31 +487,31 @@ pub async fn continue_download_version(
           Err(_) => 0,
         };
 
-        let current_size = if let Some(part) = part_size {
-          if file_len == 0 {
-            // Sidecar exists but the file is gone → start over.
-            0
-          } else if file_len < part {
-            // Crash lost bytes after the sidecar write → trust the file.
-            file_len
-          } else if file_len > part {
-            // Extra bytes of unknown quality past the recorded point → cut
-            // the file back so the Range resume stays consistent.
+        let resume = resolve_resume(
+          part_size,
+          file_len,
+          file_progress.is_downloaded,
+          file_progress.is_unpacked,
+          file_progress.total_size,
+        );
+        match resume {
+          Resume::TruncateTo(part) => {
+            // Extra bytes of unknown quality past the recorded point → cut the
+            // file back so the Range resume stays consistent.
             if let Ok(f) = tokio::fs::OpenOptions::new().write(true).open(&file_path).await {
               let _ = f.set_len(part).await;
             }
-            part
-          } else {
-            part
           }
-        } else if file_len > 0 && file_progress.is_downloaded {
-          file_len
-        } else if file_len == 0 && file_progress.is_unpacked {
-          // Already post-processed: the archive was removed after unpack.
-          file_progress.total_size
-        } else {
-          0
-        };
+          Resume::Done(_) if file_len > 0 => {
+            // Installed already, yet an archive is still in the download
+            // folder: either the post-unpack delete failed, or an earlier
+            // build re-downloaded a file it should not have. Reclaim the space.
+            log::info!("Discarding a leftover archive of already installed '{}'", &file_progress.name);
+            remove_stale_payload(Path::new(&version_data.download_path), &file_progress.name).await;
+          }
+          _ => {}
+        }
+        let current_size = resume.size();
 
         file_progress.size = current_size;
 
@@ -439,7 +521,17 @@ pub async fn continue_download_version(
         // file and write the remainder after a hole of zero bytes — a
         // correctly sized but silently corrupt archive whenever the manifest
         // carries no sha256 to catch it.
-        if current_size > 0 {
+        // `file_len > 0` guard: a sidecar only means anything next to a real
+        // partial file. Writing one for an unpacked file (whose archive is
+        // gone) would recreate the very state this triage just recovered from.
+        // `current_size < total_size` guard: a fully downloaded archive waiting
+        // to be unpacked needs no sidecar either — unpacking deletes the
+        // archive but not the sidecar, which puts us right back into the
+        // "sidecar without a payload" state that caused the field bug.
+        // `total_size == 0` means "size unknown", so the comparison is skipped
+        // there and the partial progress keeps its sidecar.
+        let size_known = file_progress.total_size > 0;
+        if current_size > 0 && file_len > 0 && (!size_known || current_size < file_progress.total_size) {
           let _ = tokio::fs::write(&file_part_path, current_size.to_string()).await;
         } else {
           let _ = tokio::fs::remove_file(&file_part_path).await;
@@ -469,6 +561,13 @@ pub async fn continue_download_version(
                   unpacked: file_progress.is_unpacked,
                   size: Some(current_size),
                 });
+                // D10: without this the version stays in "download failed"
+                // forever while no file in the list carries an error — the
+                // player cannot tell what is broken.
+                bad_manifest_files.push((
+                  file_progress.name.clone(),
+                  format!("invalid target {:?}", &file_progress.target),
+                ));
                 continue;
               }
               if file_len > 0 {
@@ -496,6 +595,12 @@ pub async fn continue_download_version(
               // time. Leave the version in error state with a visible reason (R8 fix).
               log::error!("File '{}' has terminal BAD_MANIFEST error, not retrying", &file_progress.name);
               file_progress.last_error = Some(err);
+              // D10: the file must also reach the error event, otherwise the
+              // version is stuck in "download failed" with nothing marked.
+              bad_manifest_files.push((
+                file_progress.name.clone(),
+                format!("invalid manifest entry for '{}'", &file_progress.name),
+              ));
             }
             _ => {
               file_progress.is_downloaded = false;
@@ -511,7 +616,10 @@ pub async fn continue_download_version(
           continue;
         }
 
-        if current_size >= file_progress.total_size && file_progress.total_size > 0 {
+        // `Resume::Done` is checked explicitly: an already installed file whose
+        // size is unknown (total_size 0) gives `Done(0)`, and the size
+        // comparison alone would push it back into the download queue.
+        if matches!(resume, Resume::Done(_)) || (current_size >= file_progress.total_size && size_known) {
           file_progress.is_downloaded = true;
           files_dwn_cnt += 1;
 
@@ -525,9 +633,6 @@ pub async fn continue_download_version(
               name: file_progress.name.clone(),
               file_path: file_path.clone(),
               part_path: file_part_path.clone(),
-              total_size: file_progress.total_size,
-              sha256: file_progress.sha256.clone(),
-              file_progress: file_progress.clone(),
             });
           }
         } else {
@@ -543,6 +648,10 @@ pub async fn continue_download_version(
       }
 
       version_data.downloaded_files_cnt = files_dwn_cnt;
+      // Recount the total as well: when the reconciliation below fails (an
+      // offline resume) this pass is the only thing that refreshes it, and a
+      // stale — or saved-as-zero — value makes the UI show NaN%.
+      version_data.total_file_count = version_data.files.len() as u32;
       version_data.clone()
     };
 
@@ -555,6 +664,13 @@ pub async fn continue_download_version(
   // Phase A.5: reconcile saved progress with the current server manifest.
   // After a release is re-published, new files must be added, disappeared
   // files removed, and files whose size/sha changed must be re-downloaded.
+  //
+  // Snapshot of the post-process queue taken BEFORE reconciliation: every name
+  // the reconciliation adds to it is a file freed from a terminal
+  // BAD_MANIFEST, whose archive may have been lying on disk for weeks — it is
+  // routed into the deferred hash check below instead of straight into
+  // unpacking.
+  let postprocess_before: std::collections::HashSet<String> = files_to_postprocess.iter().map(|f| f.name.clone()).collect();
   {
     let svc = service.lock().await;
     if let Err(e) = reconcile_manifest(&svc, &mut version, &mut files_to_download, &mut files_to_postprocess, "continue_download").await {
@@ -572,6 +688,35 @@ pub async fn continue_download_version(
   pending_verify.retain(|pv| {
     version.files.get(&pv.name).is_some_and(|vf| vf.is_downloaded && !vf.is_unpacked)
   });
+  // A file unblocked by a corrected manifest goes through the same deferred
+  // hash check as any other resumed archive — it was downloaded in an earlier
+  // session and nothing has looked at it since.
+  {
+    let download_dir = PathBuf::from(&version.download_path);
+    let mut unblocked: Vec<FileProgress> = vec![];
+    files_to_postprocess.retain(|task| {
+      if postprocess_before.contains(&task.name) {
+        true
+      } else {
+        unblocked.push(task.clone());
+        false
+      }
+    });
+    for fp in unblocked {
+      if pending_verify.iter().any(|pv| pv.name == fp.name) {
+        continue;
+      }
+      let (Ok(file_path), Ok(part_path)) = (
+        crate::utils::paths::safe_download_join(&download_dir, &fp.name),
+        crate::utils::paths::safe_download_join(&download_dir, &format!("{}.part", &fp.name)),
+      ) else {
+        log::warn!("Unblocked file '{}' still has an unsafe name, skipping the re-verify", &fp.name);
+        continue;
+      };
+      log::info!("File '{}' was unblocked by a corrected manifest — re-verifying its archive", &fp.name);
+      pending_verify.push(PendingVerify { name: fp.name.clone(), file_path, part_path });
+    }
+  }
   // Persist reconciled state so a subsequent resume sees the updated file list.
   {
     let mut cfg_guard = app_config.lock().await;
@@ -589,20 +734,28 @@ pub async fn continue_download_version(
       log::info!("continue_download_version: cancelled during resume verification");
       return Err(consts::ERR_USER_CANCELLED.to_string());
     }
-    let verify = crate::service::download_worker::verify_downloaded_file(&pv.file_path, pv.total_size, pv.sha256.as_deref()).await;
+    // D3 (second half): the task that ends up in a queue must carry the
+    // RECONCILED metadata. The first pass built its clone before the server
+    // was asked, so its download link can already be dead — a re-published
+    // release keeps sizes and hashes but hands out new asset ids, and such a
+    // task fails on the network three times in a row.
+    let Some(task) = version.files.get(&pv.name).cloned() else {
+      continue;
+    };
+    let verify = crate::service::download_worker::verify_downloaded_file(&pv.file_path, task.total_size, task.sha256.as_deref()).await;
     match verify {
       Ok(VerifyResult::Ok) | Ok(VerifyResult::Skipped) => {
-        files_to_postprocess.push(pv.file_progress);
+        queue_once(&mut files_to_postprocess, &task);
       }
       Ok(VerifyResult::SizeMismatch { .. }) | Ok(VerifyResult::HashMismatch { .. }) => {
         log::warn!("Resume verify failed for '{}': re-downloading", &pv.name);
         let _ = tokio::fs::remove_file(&pv.file_path).await;
         let _ = tokio::fs::remove_file(&pv.part_path).await;
-        let mut fp = pv.file_progress;
+        let mut fp = task;
         fp.is_downloaded = false;
         fp.size = 0;
         regressed_names.push(fp.name.clone());
-        files_to_download.push(fp);
+        queue_once(&mut files_to_download, &fp);
       }
       Err(e) => {
         // I/O error while hashing — re-check the file to decide whether
@@ -610,19 +763,19 @@ pub async fn continue_download_version(
         // re-download; otherwise (genuine transient read error during
         // hashing) keep the file and let it through to post-processing.
         match tokio::fs::metadata(&pv.file_path).await {
-          Ok(m) if m.len() == pv.total_size => {
+          Ok(m) if m.len() == task.total_size => {
             log::warn!("Resume verify of '{}' errored (kept, size matches): {}", &pv.name, e);
-            files_to_postprocess.push(pv.file_progress);
+            queue_once(&mut files_to_postprocess, &task);
           }
           _ => {
             log::warn!("Resume verify of '{}' errored and file missing/wrong size: re-downloading", &pv.name);
             let _ = tokio::fs::remove_file(&pv.file_path).await;
             let _ = tokio::fs::remove_file(&pv.part_path).await;
-            let mut fp = pv.file_progress;
+            let mut fp = task;
             fp.is_downloaded = false;
             fp.size = 0;
             regressed_names.push(fp.name.clone());
-            files_to_download.push(fp);
+            queue_once(&mut files_to_download, &fp);
           }
         }
       }
@@ -661,8 +814,17 @@ pub async fn continue_download_version(
   files_to_download.sort_by_key(|file| Reverse(file.size));
 
   let _ = app.emit("download-version-files", (&versionName, &file_sizes));
-  // D10: report files rejected by `safe_download_join` AFTER the file list is
-  // emitted — the frontend only applies an error to a file it already knows.
+  // D10: report the files stuck on a terminal BAD_MANIFEST AFTER the file list
+  // is emitted — the frontend only applies an error to a file it already knows.
+  // Only the ones STILL blocked are reported: reconciliation may have cleared
+  // the error with a corrected manifest entry (the file is downloading again),
+  // and a file dropped from the release is not in the emitted list at all.
+  bad_manifest_files.retain(|(name, _)| {
+    version
+      .files
+      .get(name)
+      .is_some_and(|vf| vf.last_error.as_deref() == Some(consts::FILE_ERR_BAD_MANIFEST))
+  });
   for (name, message) in &bad_manifest_files {
     let _ = app.emit(
       "download-version-file-error",
@@ -990,5 +1152,85 @@ mod tests {
     assert_eq!(queue[0].download_link, "https://new/0");
     assert_eq!(queue[0].target.as_deref(), Some("gamedata/x.db"));
     assert_eq!(queue[0].kind, ManifestFileKind::Raw);
+  }
+
+  // ---------------------------------------------------------------------
+  // resolve_resume: a file that is already unpacked must never be restarted
+  // just because its `.part` sidecar outlived the archive.
+  // ---------------------------------------------------------------------
+
+  /// The exact field report: data8.zip downloaded, verified, unpacked (so the
+  /// archive was deleted) — and on the next resume the leftover sidecar made
+  /// the launcher re-download 1.96 GB while the UI showed a green check.
+  #[test]
+  fn unpacked_file_with_a_stale_part_sidecar_is_not_redownloaded() {
+    let r = resolve_resume(Some(2_100_000_000), 0, true, true, 2_100_000_000);
+    assert_eq!(r, Resume::Done(2_100_000_000));
+    assert_eq!(r.size(), 2_100_000_000, "an installed file must count as complete");
+  }
+
+  #[test]
+  fn unpacked_file_without_a_sidecar_is_still_complete() {
+    assert_eq!(resolve_resume(None, 0, true, true, 500), Resume::Done(500));
+  }
+
+  /// Rescue path for players already hit by the bug: the spurious re-download
+  /// left a partial archive on disk, but the version is installed — it must be
+  /// recognised as complete, not resumed.
+  #[test]
+  fn unpacked_file_with_a_partial_archive_on_disk_is_still_complete() {
+    let r = resolve_resume(Some(376_000_000), 376_000_000, false, true, 2_100_000_000);
+    assert_eq!(r, Resume::Done(2_100_000_000));
+  }
+
+  /// Not yet unpacked and the payload is gone: starting over IS correct here.
+  #[test]
+  fn sidecar_without_payload_restarts_when_the_file_was_never_unpacked() {
+    assert_eq!(resolve_resume(Some(1_000), 0, false, false, 5_000), Resume::FromScratch);
+    assert_eq!(resolve_resume(Some(1_000), 0, true, false, 5_000), Resume::FromScratch);
+  }
+
+  #[test]
+  fn partial_payload_resumes_from_the_smaller_of_file_and_sidecar() {
+    // Crash after the sidecar write → trust the file.
+    assert_eq!(resolve_resume(Some(900), 800, false, false, 5_000), Resume::At(800));
+    // Bytes past the recorded point are of unknown quality → cut back.
+    assert_eq!(resolve_resume(Some(900), 950, false, false, 5_000), Resume::TruncateTo(900));
+    assert_eq!(resolve_resume(Some(900), 900, false, false, 5_000), Resume::At(900));
+  }
+
+  #[test]
+  fn downloaded_payload_without_a_sidecar_keeps_its_bytes() {
+    assert_eq!(resolve_resume(None, 4_096, true, false, 4_096), Resume::At(4_096));
+    // A partial payload with neither a sidecar nor the `downloaded` flag tells
+    // us nothing about how far the bytes are good → start over.
+    assert_eq!(resolve_resume(None, 1_000, false, false, 4_096), Resume::FromScratch);
+    // No payload at all → nothing to resume from.
+    assert_eq!(resolve_resume(None, 0, false, false, 4_096), Resume::FromScratch);
+  }
+
+  /// The sidecar is deleted as soon as the last chunk lands, while
+  /// `is_downloaded` is written only after the sha256 of the whole file was
+  /// computed. A launcher closed inside that window (tens of seconds for a
+  /// 2 GB archive) left a complete payload with no sidecar and no flag — and
+  /// the resume threw all of it away.
+  #[test]
+  fn complete_payload_without_a_sidecar_or_flag_is_not_redownloaded() {
+    assert_eq!(resolve_resume(None, 2_100_000_000, false, false, 2_100_000_000), Resume::At(2_100_000_000));
+    // Unknown total size gives no such guarantee → nothing to resume from.
+    assert_eq!(resolve_resume(None, 2_100_000_000, false, false, 0), Resume::FromScratch);
+  }
+
+  /// An installed file whose size is unknown (a manifest without sizes) yields
+  /// `Done(0)`: the "is it complete" decision must be taken from the variant,
+  /// never from the byte count — `0 >= 0` is exactly the comparison that used
+  /// to push such a file back into the download queue.
+  #[test]
+  fn installed_file_with_unknown_size_is_done_with_zero_bytes() {
+    let r = resolve_resume(None, 0, true, true, 0);
+    assert!(matches!(r, Resume::Done(_)), "an installed file must report Done");
+    assert_eq!(r.size(), 0);
+    let r = resolve_resume(Some(10), 10, false, true, 0);
+    assert!(matches!(r, Resume::Done(_)), "leftovers on disk do not undo the install");
   }
 }

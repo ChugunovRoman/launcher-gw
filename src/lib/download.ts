@@ -59,7 +59,16 @@ export async function initDownloadListeners() {
       const downloadFilesTotalBytes = (version.downloadedFileBytes ?? 0) - prevBytes + bytes;
       const totalSpeed = Math.max(0, (version.downloadSpeed ?? 0) - prevSpeed + speed);
 
-      const [totalSpeedValue, totalSfxValue] = formatSpeedBytesPerSec(totalSpeed);
+      // Every finished file reports speed 0, and while a file is being hashed
+      // or unpacked no speed events arrive at all — letting those zeroes reach
+      // the screen showed "0 B/s" for minutes in the middle of an active
+      // download. The aggregate itself keeps tracking the real value (so the
+      // next incremental delta stays correct); only the DISPLAYED value holds
+      // the last non-zero reading. It is zeroed again by the UI as soon as the
+      // version leaves the in-progress state.
+      const [rawSpeedValue, rawSfxValue] = formatSpeedBytesPerSec(totalSpeed);
+      const totalSpeedValue = totalSpeed > 0 ? rawSpeedValue : (version.speedValue ?? 0);
+      const totalSfxValue = totalSpeed > 0 ? rawSfxValue : (version.sfxValue ?? "");
 
       let downloadProgressVersion = version.downloadProgress;
 
@@ -81,7 +90,7 @@ export async function initDownloadListeners() {
     const [versionName, fileName, doneBytes, totalBytes] = event.payload;
 
     updateVersionProgress(versionName, (version) => {
-      const map = version.filesProgress;
+      const map = version.filesProgress ?? new Map();
       const prev = map.get(fileName);
       if (!prev) {
         return {};
@@ -102,7 +111,7 @@ export async function initDownloadListeners() {
     const { version_name, file, code } = event.payload;
 
     updateVersionProgress(version_name, (version) => {
-      const map = version.filesProgress;
+      const map = version.filesProgress ?? new Map();
       const prev = map.get(file);
       if (prev) {
         map.set(file, {
@@ -137,22 +146,34 @@ export async function initDownloadListeners() {
     const [versionName, fileSizesMap] = event.payload;
 
     updateVersionProgress(versionName, (version) => {
-      const map = new Map(version.filesProgress);
+      // The payload is the AUTHORITATIVE file list of the version: the backend
+      // drops files that are no longer part of the release. Rebuilding the map
+      // from it (instead of merging into the old one) is what removes them
+      // here too — carrying the stale entries over kept counting their bytes
+      // against the new, smaller total size ("Downloaded: 108.42%").
+      const prevMap = version.filesProgress ?? new Map();
+      const map = new Map<string, VersionFileDownload>();
       const totals = new Map((version.manifest?.files || []).map((f) => [f.name, f.size]));
 
       for (const item of fileSizesMap) {
-        const old = map.get(item.name);
+        const old = prevMap.get(item.name);
         const totalFileBytes = old?.totalFileBytes || totals.get(item.name) || 0;
         const downloadedFileBytes = item.size || 0;
         map.set(item.name, {
           downloadProgress: totalFileBytes > 0 ? (downloadedFileBytes / totalFileBytes) * 100 : 0,
           downloadedFileBytes,
           totalFileBytes,
-          unpackProgress: item.unpacked ? 100 : (old?.unpackProgress || 0),
+          // `unpacked: false` must be able to CLEAR a previous "done" state,
+          // not just fail to set it. The backend resets is_unpacked whenever a
+          // file goes back into the queue (a re-published release, a failed
+          // re-verify), and carrying the old status forward left a green check
+          // sitting next to a file that was downloading again — exactly what
+          // players reported.
+          unpackProgress: item.unpacked ? 100 : (old?.unpackProgress === 100 ? 0 : (old?.unpackProgress ?? 0)),
           downloadSpeed: old?.downloadSpeed || 0,
           speedValue: old?.speedValue || 0,
           sfxValue: old?.sfxValue || "",
-          status: item.unpacked ? 3 : (old?.status || 0),
+          status: item.unpacked ? 3 : (old?.status === 3 ? 0 : (old?.status ?? 0)),
         });
       }
 
@@ -192,11 +213,6 @@ export async function initDownloadListeners() {
       };
     });
   }));
-  unlisten.set('cancel-download-version', await listen('cancel-download-version', (event: Event<string>) => {
-    const versionName = event.payload;
-
-    console.log("cancel-download-version, versionName: ", versionName);
-  }));
   unlisten.set('file-unzipped', await listen('file-unzipped', (event: Event<[string, string | null]>) => {
     // Fired after unzip OR after a raw file was copied into the install dir —
     // the file is fully post-processed. Payload carries the archive path.
@@ -205,7 +221,7 @@ export async function initDownloadListeners() {
     const fileName = archivePath.split(/[\\/]/).pop() ?? archivePath;
 
     updateVersionProgress(versionName, (version) => {
-      const map = version.filesProgress;
+      const map = version.filesProgress ?? new Map();
       const prev = map.get(fileName);
       if (!prev) {
         return {};

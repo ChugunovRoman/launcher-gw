@@ -222,6 +222,15 @@ pub async fn start_download_version(
     return Err(crate::consts::ERR_USER_CANCELLED.to_string());
   }
 
+  // A release published before its assets finished uploading (or an API that
+  // answered with an empty list) would otherwise give a version of zero files,
+  // which `finalize_download` happily reports as fully installed. The resume
+  // path already refuses this; the start path must too.
+  if release.assets.is_empty() {
+    log::error!("start_download_version: release '{}' carries no assets — refusing to start", &versionName);
+    return Err(crate::consts::ERR_RELEASE_NO_ASSETS.to_string());
+  }
+
   version.total_file_count = release.assets.len() as u32;
 
   let _ = app.emit(
