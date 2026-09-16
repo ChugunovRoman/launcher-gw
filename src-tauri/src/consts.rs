@@ -262,3 +262,78 @@ pub const UNPACK_EXTRACTED_LOG_LIMIT: usize = 100;
 /// How many skipped (unsafe-named) archive entries are quoted in the log.
 /// Skipping is non-fatal, so this is a diagnostic hint only.
 pub const UNPACK_SKIPPED_LOG_LIMIT: usize = 50;
+
+// ---------------------------------------------------------------------------
+// Faction editor settings bundle (.gwfe)
+// See plans/launcher/faction-editor-settings-bundle-plan.md for the spec.
+// ---------------------------------------------------------------------------
+
+/// Files/dirs the faction editor writes, relative to `gamedata/configs`.
+pub const FE_CONFIG_LTX: &str = "faction_editor_config.ltx";
+pub const FE_CONFIG_WRITE_LTX: &str = "faction_editor_config.write.ltx";
+pub const FE_DEFAULT_CONFIG_LTX: &str = "faction_editor_default_config.ltx";
+pub const FE_AXR_OPTIONS_LTX: &str = "axr_options.ltx";
+pub const FE_AXR_OPTIONS_SECTION: &str = "mm_options";
+pub const FE_GAME_RELATIONS_CUSTOM: &str = "creatures/game_relations_custom.ltx";
+pub const FE_DEFAULT_CUSTOM_SIM: &str = "misc/simulations/default_custom.ltx";
+pub const FE_SIM_OBJECTS_PROPS_CUSTOM: &str = "misc/simulation_objects_props_custom.ltx";
+pub const FE_ARMAMENT_CUSTOM_DIR: &str = "misc/armament/custom";
+pub const FE_SQUAD_DESCR_CUSTOM_DIR: &str = "misc/squad_descr/custom";
+pub const FE_IS_CREATED_KEY: &str = "isCreated";
+
+/// Bundle container.
+pub const FE_BUNDLE_EXT: &str = "gwfe";
+pub const FE_BUNDLE_KIND: &str = "gw-faction-editor-settings";
+pub const FE_BUNDLE_SCHEMA: u32 = 1;
+/// Entry inside the archive with the config, and the fragment carrying the
+/// patched `axr_options.ltx` keys (see the bundle layout in the plan).
+pub const FE_BUNDLE_CONFIG_PATH: &str = "configs/faction_editor_config.ltx";
+pub const FE_BUNDLE_AXR_PARTIAL_PATH: &str = "configs/axr_options.partial.ltx";
+pub const FE_BUNDLE_RELATIONS_PATH: &str = "configs/creatures/game_relations_custom.ltx";
+pub const FE_BUNDLE_DEFAULT_CUSTOM_PATH: &str = "configs/misc/simulations/default_custom.ltx";
+pub const FE_BUNDLE_SIM_PROPS_CUSTOM_PATH: &str = "configs/misc/simulation_objects_props_custom.ltx";
+pub const FE_BUNDLE_ARMAMENT_CUSTOM_DIR: &str = "configs/misc/armament/custom";
+pub const FE_BUNDLE_SQUAD_DESCR_CUSTOM_DIR: &str = "configs/misc/squad_descr/custom";
+
+pub const FE_MAX_BUNDLE_SIZE: u64 = 20 * 1024 * 1024;
+pub const FE_MAX_FILE_SIZE: u64 = 5 * 1024 * 1024;
+pub const FE_MAX_NAME_LEN: usize = 64;
+pub const FE_MAX_DESC_LEN: usize = 1024;
+pub const FE_MAX_AUTHOR_LEN: usize = 64;
+pub const FE_MAX_BACKUPS: usize = 5;
+pub const FE_BACKUP_DIR: &str = "_backup";
+pub const FE_PROFILES_DIR: &str = "faction-profiles";
+
+/// axr_options.ltx keys the editor's "Common" tab writes; the editor's "reset
+/// all" does not touch them, so `apply_defaults` leaves them alone too.
+pub const FE_AXR_COMMON_FLAGS: &[&str] = &[
+  "enable_events_without_player",
+  "enable_events_with_azazel_mode",
+  "enable_change_beh_factions",
+  "enable_respawn_factions",
+];
+
+// Faction-editor bundle error codes (returned as Err strings to the frontend).
+pub const FE_ERR_NO_VERSION: &str = "FE_ERR_NO_VERSION";
+pub const FE_ERR_NO_CONFIG: &str = "FE_ERR_NO_CONFIG";
+pub const FE_ERR_GAME_RUNNING: &str = "FE_ERR_GAME_RUNNING";
+pub const FE_ERR_EXPORT_NOT_GWFE: &str = "FE_ERR_EXPORT_NOT_GWFE";
+pub const FE_ERR_BUNDLE_NOT_ZIP: &str = "FE_ERR_BUNDLE_NOT_ZIP";
+pub const FE_ERR_BUNDLE_NO_MANIFEST: &str = "FE_ERR_BUNDLE_NO_MANIFEST";
+pub const FE_ERR_BUNDLE_KIND: &str = "FE_ERR_BUNDLE_KIND";
+pub const FE_ERR_BUNDLE_SCHEMA: &str = "FE_ERR_BUNDLE_SCHEMA";
+pub const FE_ERR_BUNDLE_UNKNOWN_FILE: &str = "FE_ERR_BUNDLE_UNKNOWN_FILE";
+pub const FE_ERR_BUNDLE_TOO_LARGE: &str = "FE_ERR_BUNDLE_TOO_LARGE";
+pub const FE_ERR_BUNDLE_HASH_MISMATCH: &str = "FE_ERR_BUNDLE_HASH_MISMATCH";
+pub const FE_ERR_BUNDLE_INVALID_CONFIG: &str = "FE_ERR_BUNDLE_INVALID_CONFIG";
+pub const FE_ERR_BUNDLE_INVALID_AXR_KEYS: &str = "FE_ERR_BUNDLE_INVALID_AXR_KEYS";
+pub const FE_ERR_APPLY_FAILED: &str = "FE_ERR_APPLY_FAILED";
+pub const FE_ERR_ROLLBACK_FAILED: &str = "FE_ERR_ROLLBACK_FAILED";
+pub const FE_ERR_PROFILE_EXISTS: &str = "FE_ERR_PROFILE_EXISTS";
+pub const FE_ERR_PROFILE_NAME_INVALID: &str = "FE_ERR_PROFILE_NAME_INVALID";
+pub const FE_ERR_PROFILE_NOT_FOUND: &str = "FE_ERR_PROFILE_NOT_FOUND";
+
+// Non-fatal warnings surfaced to the frontend alongside a successful result.
+pub const FE_WARN_AXR_OPTIONS_MISSING: &str = "FE_WARN_AXR_OPTIONS_MISSING";
+pub const FE_WARN_AXR_OPTIONS_SECTION_MISSING: &str = "FE_WARN_AXR_OPTIONS_SECTION_MISSING";
+pub const FE_WARN_UNKNOWN_FACTIONS: &str = "FE_WARN_UNKNOWN_FACTIONS";

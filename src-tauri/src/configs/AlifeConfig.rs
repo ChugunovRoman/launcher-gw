@@ -78,6 +78,37 @@ impl AlifeConfig {
     true
   }
 
+  /// `true` if a `[section]` header exists (even with no keys under it).
+  pub fn has_section(&self, section: &str) -> bool {
+    self.section_range(section).is_some()
+  }
+
+  /// Read all `key = value` pairs of a section (comments stripped, keys as
+  /// written in the file). Empty — the section is missing or empty. Used to
+  /// build a fragment (e.g. `axr_options.partial.ltx`) without touching the
+  /// rest of the file.
+  pub fn get_section(&self, section: &str) -> Vec<(String, String)> {
+    let Some((start, end)) = self.section_range(section) else {
+      return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for line in &self.lines[start..end] {
+      let payload = match line.find(';') {
+        Some(pos) => &line[..pos],
+        None => &line[..],
+      };
+      let Some(eq) = payload.find('=') else { continue };
+      let key = payload[..eq].trim();
+      let value = payload[eq + 1..].trim();
+      if key.is_empty() {
+        continue;
+      }
+      out.push((key.to_string(), value.to_string()));
+    }
+    out
+  }
+
   /// Atomically save the file in cp1251 with the original line endings.
   pub fn save(&self) -> Result<()> {
     let mut out = self.lines.join(self.eol);
@@ -126,8 +157,15 @@ mod tests {
   // 8-space indent, key padded to 32 columns, trailing " " line.
   const SAMPLE: &str = "[alife]\r\n        objects_per_update               = 20\r\n        start_time                       = 10:00:00\r\n \r\n";
 
+  /// A pid-only name collided across tests once a second test using this
+  /// helper (`get_section_reads_keys_without_mutating`) started running
+  /// concurrently with `replaces_value_and_keeps_formatting` — both threads
+  /// wrote/removed the very same file. Add a per-call counter so each caller
+  /// gets its own path.
   fn temp_ltx() -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!("alife_config_test_{}.ltx", std::process::id()));
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("alife_config_test_{}_{}.ltx", std::process::id(), n));
     let bytes = crate::utils::encoding::encode_cp1251(SAMPLE).unwrap();
     std::fs::write(&path, bytes).unwrap();
     path
@@ -154,6 +192,23 @@ mod tests {
     // Untouched keys and the trailing " " line must stay byte-identical.
     assert!(text.contains("        start_time                       = 10:00:00\r\n"));
     assert!(text.ends_with(" \r\n"));
+    std::fs::remove_file(&path).ok();
+  }
+
+  #[test]
+  fn get_section_reads_keys_without_mutating() {
+    let path = temp_ltx();
+    let ltx = AlifeConfig::load(&path).unwrap().unwrap();
+
+    let pairs = ltx.get_section("alife");
+    assert_eq!(
+      pairs,
+      vec![
+        ("objects_per_update".to_string(), "20".to_string()),
+        ("start_time".to_string(), "10:00:00".to_string()),
+      ]
+    );
+    assert!(ltx.get_section("missing_section").is_empty());
     std::fs::remove_file(&path).ok();
   }
 

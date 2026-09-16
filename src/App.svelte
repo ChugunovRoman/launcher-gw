@@ -21,6 +21,7 @@
   import KeybindingsView from "./Views/Keybindings.svelte";
   import VersionsView from "./Views/Versions.svelte";
   import TokensView from "./Views/Tokens.svelte";
+  import FactionSettingsView from "./Views/FactionSettings.svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
@@ -31,7 +32,18 @@
   let bgUrl = "/static/bg.jpg";
   let flyOffset: number = 500;
   let bgLoadFailed = false;
-  const VIEW_ORDER: string[] = ["home", "runParams", "keybindings", "versions", "pack", "unpack", "releases", "tokens", "settings"];
+  const VIEW_ORDER: string[] = [
+    "home",
+    "runParams",
+    "keybindings",
+    "versions",
+    "factionSettings",
+    "pack",
+    "unpack",
+    "releases",
+    "tokens",
+    "settings",
+  ];
 
   // Маппинг view -> компонент
   const views: Record<string, any> = {
@@ -39,6 +51,7 @@
     runParams: RunParamsView,
     keybindings: KeybindingsView,
     versions: VersionsView,
+    factionSettings: FactionSettingsView,
     pack: PackView,
     unpack: UnpackView,
     releases: ReleasesView,

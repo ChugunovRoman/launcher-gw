@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Home, Settings, RunParams, Keybindings, Pack, Unpack, Releases, Versions, Tokens } from "../Icons";
+  import { Home, Settings, RunParams, Keybindings, Pack, Unpack, Releases, Versions, Tokens, FactionEditor } from "../Icons";
   import { allowPackMod } from "../store/main";
   import { currentView } from "../store/menu";
 
@@ -33,6 +33,13 @@
       size={54}
       onclick={() => {
         onSelect("versions");
+      }} />
+  </div>
+  <div class="baritem" class:active={$currentView === "factionSettings"}>
+    <FactionEditor
+      size={40}
+      onclick={() => {
+        onSelect("factionSettings");
       }} />
   </div>
   {#if $allowPackMod}

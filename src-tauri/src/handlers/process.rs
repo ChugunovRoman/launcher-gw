@@ -132,7 +132,7 @@ fn is_stalker_launcher_stub(exe_path: &str) -> bool {
 // launcher's subst drives (separate drive table), which is what broke installs
 // in temp/rar$ paths and on machines without CoP. Launching the engine binary
 // directly avoids all of it, so the stubs are never used.
-fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, PathBuf) {
+pub(crate) fn resolve_launch_target(version: &Version, installed_path: &Path) -> (PathBuf, PathBuf) {
   // Tier 1: explicit exe_path (relative to installed_path; absolute also works via join)
   if let Some(exe_rel) = version.exe_path.as_ref() {
     if is_stalker_launcher_stub(exe_rel) {

@@ -1,0 +1,279 @@
+//! Tauri commands for the faction editor settings bundle feature.
+//! See `plans/launcher/faction-editor-settings-bundle-plan.md`.
+//!
+//! All the actual file work lives in `service::faction_settings` (pure,
+//! testable against a fixture directory) and `service::faction_profile_manager`
+//! (named profile storage). This module only resolves the active game's
+//! `gamedata` root, checks the "game running" guard, and maps errors to the
+//! `FE_ERR_*` / `FE_WARN_*` codes the frontend matches on.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+
+use crate::configs::AppConfig::AppConfig;
+use crate::consts::*;
+use crate::service::faction_profile_manager::{FactionProfileItem, FactionProfileManager};
+use crate::service::faction_settings::{self, BundleInspectResult, FactionApplyResult};
+use crate::service::game_tracker::GameTracker;
+
+/// `(game_root, engine_exe_path)` for the version this screen works with.
+///
+/// `version_name` is the version picked in the "Faction editor" screen: unlike
+/// the rest of the launcher, this screen is explicitly NOT tied to the version
+/// selected for launching — the player may keep several installs and edit the
+/// factions of one while playing another. When it is empty, fall back to the
+/// launch-time resolution (game next to the launcher, then `selected_version`,
+/// then the single installed one).
+///
+/// The exe is resolved with the same tiers as the real launch
+/// (`process::resolve_launch_target`: `exe_path` is RELATIVE to the install
+/// dir, then `engine_path`, then `bin/xrEngine.exe`), so the "game running"
+/// scan looks for the binary the launcher would actually start.
+async fn resolve_context(
+  app_config: &tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  version_name: Option<&str>,
+) -> Result<(PathBuf, PathBuf), String> {
+  let cfg = app_config.lock().await;
+
+  let version = match version_name.map(str::trim).filter(|n| !n.is_empty()) {
+    Some(name) => crate::handlers::user_ltx::find_version_by_name(&cfg.installed_versions, &cfg.versions, name)
+      .filter(|v| !v.installed_path.is_empty())
+      .cloned()
+      .ok_or_else(|| FE_ERR_NO_VERSION.to_string())?,
+    None => crate::handlers::user_ltx::resolve_active_version(&cfg).ok_or_else(|| FE_ERR_NO_VERSION.to_string())?,
+  };
+  drop(cfg);
+
+  let game_root = crate::handlers::user_ltx::resolve_game_root(&version);
+  let (exe_path, _cwd) = crate::handlers::process::resolve_launch_target(&version, Path::new(&version.installed_path));
+  Ok((game_root, exe_path))
+}
+
+/// `Err(FE_ERR_GAME_RUNNING)` when the game is running — either tracked by
+/// this launcher, or launched directly (a process whose exe path matches).
+/// The full process scan is blocking, so it runs off the async runtime like
+/// the other sysinfo scans (`process.rs`, `game_tracker.rs`).
+async fn ensure_game_not_running(game_tracker: &tauri::State<'_, Arc<GameTracker>>, exe_path: &Path) -> Result<(), String> {
+  if game_tracker.status().await.running {
+    return Err(FE_ERR_GAME_RUNNING.to_string());
+  }
+  let exe = exe_path.to_path_buf();
+  let running = tokio::task::spawn_blocking(move || faction_settings::exe_process_running(&exe))
+    .await
+    .map_err(|e| e.to_string())?;
+  if running {
+    return Err(FE_ERR_GAME_RUNNING.to_string());
+  }
+  Ok(())
+}
+
+/// Persist the author the player typed (empty clears the remembered value).
+async fn remember_author(app_config: &tauri::State<'_, Arc<Mutex<AppConfig>>>, author: &str) {
+  let trimmed = author.trim();
+  let next = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+  let mut cfg = app_config.lock().await;
+  if cfg.faction_bundle_author != next {
+    cfg.faction_bundle_author = next;
+    if let Err(e) = cfg.save() {
+      log::warn!("fe: failed to persist faction_bundle_author: {}", e);
+    }
+  }
+}
+
+fn assert_gwfe_extension(path: &Path) -> Result<(), String> {
+  let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+  if ext != FE_BUNDLE_EXT {
+    return Err(FE_ERR_EXPORT_NOT_GWFE.to_string());
+  }
+  Ok(())
+}
+
+/// `true` when the active game process is running (tracked or standalone) —
+/// used by the frontend to show the "close the game first" dialog before it
+/// even opens the "replace settings?" confirmation.
+#[tauri::command]
+pub async fn fe_is_game_running(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  game_tracker: tauri::State<'_, Arc<GameTracker>>,
+  versionName: Option<String>,
+) -> Result<bool, String> {
+  let (_, exe_path) = resolve_context(&app_config, versionName.as_deref()).await?;
+  Ok(ensure_game_not_running(&game_tracker, &exe_path).await.is_err())
+}
+
+#[tauri::command]
+pub async fn fe_export_bundle(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  destPath: String,
+  name: String,
+  description: String,
+  author: String,
+  versionName: Option<String>,
+) -> Result<(), String> {
+  log::debug!("fe_export_bundle, destPath: {}, name: {}", &destPath, &name);
+  let dest = PathBuf::from(&destPath);
+  assert_gwfe_extension(&dest)?;
+  // Same guard as keybind profile export: no system/temp destinations via IPC.
+  crate::utils::paths::assert_creatable_directory(dest.parent().unwrap_or(&dest))?;
+
+  let (game_root, _) = resolve_context(&app_config, versionName.as_deref()).await?;
+  faction_settings::export_bundle(&game_root, &name, &description, &author, &dest).map_err(|e| e.to_string())?;
+
+  remember_author(&app_config, &author).await;
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn fe_inspect_bundle(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  path: String,
+  versionName: Option<String>,
+) -> Result<BundleInspectResult, String> {
+  let (game_root, _) = resolve_context(&app_config, versionName.as_deref()).await?;
+  faction_settings::inspect_bundle(Path::new(&path), Some(&game_root)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fe_import_bundle(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  game_tracker: tauri::State<'_, Arc<GameTracker>>,
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  path: String,
+  versionName: Option<String>,
+) -> Result<FactionApplyResult, String> {
+  log::debug!("fe_import_bundle, path: {}", &path);
+  let _guard = profile_manager.lock_apply().await;
+  let (game_root, exe_path) = resolve_context(&app_config, versionName.as_deref()).await?;
+  ensure_game_not_running(&game_tracker, &exe_path).await?;
+  faction_settings::apply_bundle(Path::new(&path), &game_root, profile_manager.backups_dir()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fe_reset_to_default(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  game_tracker: tauri::State<'_, Arc<GameTracker>>,
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  versionName: Option<String>,
+) -> Result<FactionApplyResult, String> {
+  log::debug!("fe_reset_to_default");
+  let _guard = profile_manager.lock_apply().await;
+  let (game_root, exe_path) = resolve_context(&app_config, versionName.as_deref()).await?;
+  ensure_game_not_running(&game_tracker, &exe_path).await?;
+  faction_settings::apply_defaults(&game_root, profile_manager.backups_dir()).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Profile manager
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn fe_profiles_list(profile_manager: tauri::State<'_, Arc<FactionProfileManager>>) -> Result<Vec<FactionProfileItem>, String> {
+  Ok(profile_manager.list().await)
+}
+
+#[tauri::command]
+pub async fn fe_profile_save_current(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  name: String,
+  description: String,
+  author: String,
+  versionName: Option<String>,
+) -> Result<FactionProfileItem, String> {
+  log::debug!("fe_profile_save_current, name: {}", &name);
+  let (game_root, _) = resolve_context(&app_config, versionName.as_deref()).await?;
+  let item = profile_manager
+    .save_current(&game_root, &name, &description, &author)
+    .await
+    .map_err(|e| e.to_string())?;
+  remember_author(&app_config, &author).await;
+  Ok(item)
+}
+
+#[tauri::command]
+pub async fn fe_profile_apply(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  game_tracker: tauri::State<'_, Arc<GameTracker>>,
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  id: String,
+  versionName: Option<String>,
+) -> Result<FactionApplyResult, String> {
+  log::debug!("fe_profile_apply, id: {}", &id);
+  let _guard = profile_manager.lock_apply().await;
+  let (game_root, exe_path) = resolve_context(&app_config, versionName.as_deref()).await?;
+  ensure_game_not_running(&game_tracker, &exe_path).await?;
+  profile_manager.apply(&id, &game_root).await.map_err(|e| e.to_string())
+}
+
+/// Re-inspect a stored profile against the local install — feeds the
+/// confirmation dialog (unknown-factions warning) before `fe_profile_apply`.
+#[tauri::command]
+pub async fn fe_profile_inspect(
+  app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>,
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  id: String,
+  versionName: Option<String>,
+) -> Result<BundleInspectResult, String> {
+  let (game_root, _) = resolve_context(&app_config, versionName.as_deref()).await?;
+  profile_manager.inspect(&id, &game_root).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fe_profile_export(
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  id: String,
+  destPath: String,
+) -> Result<(), String> {
+  log::debug!("fe_profile_export, id: {}, destPath: {}", &id, &destPath);
+  profile_manager.export(&id, Path::new(&destPath)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fe_profile_import(
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  path: String,
+) -> Result<FactionProfileItem, String> {
+  log::debug!("fe_profile_import, path: {}", &path);
+  profile_manager.import(Path::new(&path)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fe_profile_update_meta(
+  profile_manager: tauri::State<'_, Arc<FactionProfileManager>>,
+  id: String,
+  name: String,
+  description: String,
+) -> Result<FactionProfileItem, String> {
+  log::debug!("fe_profile_update_meta, id: {}, name: {}", &id, &name);
+  profile_manager.update_meta(&id, &name, &description).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fe_profile_delete(profile_manager: tauri::State<'_, Arc<FactionProfileManager>>, id: String) -> Result<(), String> {
+  log::debug!("fe_profile_delete, id: {}", &id);
+  profile_manager.delete(&id).await.map_err(|e| e.to_string())
+}
+
+/// Remember which game version the "Faction editor" screen works with.
+/// `None`/empty clears it, restoring the launch-time fallback.
+#[tauri::command]
+pub async fn fe_set_version(app_config: tauri::State<'_, Arc<Mutex<AppConfig>>>, versionName: Option<String>) -> Result<(), String> {
+  let next = versionName.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+  log::debug!("fe_set_version, versionName: {:?}", &next);
+
+  let mut cfg = app_config.lock().await;
+  if cfg.faction_settings_version != next {
+    cfg.faction_settings_version = next;
+    cfg.save().map_err(|e| e.to_string())?;
+  }
+  Ok(())
+}
+
+/// Path of the profiles directory, for the frontend's "open folder" button
+/// (opened via the existing `open_explorer` command).
+#[tauri::command]
+pub async fn fe_profiles_dir(profile_manager: tauri::State<'_, Arc<FactionProfileManager>>) -> Result<String, String> {
+  Ok(profile_manager.profiles_dir().to_string_lossy().into_owned())
+}

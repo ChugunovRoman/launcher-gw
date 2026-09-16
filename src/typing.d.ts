@@ -201,6 +201,8 @@ declare interface AppConfig {
   progress_download: Dict<VersionProgress>;
   tracked_game?: TrackedGame | null;
   bg_etag?: string | null;
+  faction_bundle_author?: string | null;
+  faction_settings_version?: string | null;
 }
 
 
@@ -385,4 +387,53 @@ declare interface AssetSha256 {
   name: string;
   size: number | null;
   sha256: string | null;
+}
+
+// --- Faction editor settings bundle (.gwfe) ---
+// plans/launcher/faction-editor-settings-bundle-plan.md
+//
+// `FactionBundleManifest`/`FactionBundleManifestFile`/`FactionBundleSummary`
+// mirror the on-disk `manifest.json` format byte-for-byte (snake_case, no
+// serde rename) — it is a shared file format, not a Tauri IPC payload, and
+// keeping the field names identical to the spec (plan §3.3) matters for a
+// future non-Rust reader (e.g. a C++ port). Every other faction* type below
+// is an ordinary camelCase Tauri command result.
+declare interface FactionBundleManifestFile {
+  path: string;
+  mode: "replace" | "merge_keys";
+  size: number;
+  sha256: string;
+  target?: string;
+}
+declare interface FactionBundleSummary {
+  factions_total: number;
+  factions_created: number;
+  custom_armament: string[];
+  custom_squad_sizes: string[];
+  has_relations: boolean;
+  has_population: boolean;
+  has_point_types: boolean;
+}
+declare interface FactionBundleManifest {
+  schema: number;
+  kind: string;
+  name: string;
+  description: string;
+  author: string;
+  created_at: string;
+  files: FactionBundleManifestFile[];
+  summary: FactionBundleSummary;
+}
+declare interface FactionBundleInspectResult {
+  manifest: FactionBundleManifest;
+  warnings: string[];
+}
+declare interface FactionApplyResult {
+  outcome: "applied" | "failed" | "rolledBack";
+  warnings: string[];
+  backupPath: string | null;
+}
+declare interface FactionProfileItem {
+  id: string;
+  manifest: FactionBundleManifest;
 }

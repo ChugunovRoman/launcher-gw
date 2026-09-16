@@ -4,6 +4,7 @@ pub mod compress;
 pub mod configs;
 pub mod continue_download_version;
 pub mod dto;
+pub mod faction_settings;
 pub mod logger;
 pub mod patch_install;
 pub mod patches;

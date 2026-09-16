@@ -9,6 +9,12 @@
   import MaxPerformancePresetWarning from "./MaxPerformancePresetWarning.svelte";
   import LaunchError from "./LaunchError.svelte";
   import TempPathWarning from "./TempPathWarning.svelte";
+  import FactionMeta from "./FactionMeta.svelte";
+  import FactionRename from "./FactionRename.svelte";
+  import FactionDelete from "./FactionDelete.svelte";
+  import FactionApplyConfirm from "./FactionApplyConfirm.svelte";
+  import FactionGameRunning from "./FactionGameRunning.svelte";
+  import FactionResult from "./FactionResult.svelte";
 </script>
 
 <RestartApp />
@@ -21,5 +27,11 @@
 <MaxPerformancePresetWarning />
 <LaunchError />
 <TempPathWarning />
+<FactionMeta />
+<FactionRename />
+<FactionDelete />
+<FactionApplyConfirm />
+<FactionGameRunning />
+<FactionResult />
 
 <style></style>

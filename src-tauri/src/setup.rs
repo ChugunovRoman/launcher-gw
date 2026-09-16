@@ -13,6 +13,7 @@ use tauri::{App, Emitter};
 use crate::handlers::patch_install::check_patches_available;
 use crate::handlers::start_download_version::CancelMap;
 use crate::handlers::upload_v2::UploadCancelMap;
+use crate::service::faction_profile_manager::FactionProfileManager;
 use crate::service::files::ServiceFiles;
 use crate::service::game_tracker::{probe, GameTracker};
 use crate::service::get_release::{ServiceGetRelease, ReleaseSource};
@@ -126,6 +127,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
   let keybind_manager_arc = Arc::new(KeybindManager::new(&handle2));
   let keybind_manager_arc_clone = keybind_manager_arc.clone();
+  let faction_profile_manager_arc = Arc::new(FactionProfileManager::new(&handle2));
 
   // Создаём сервис
   let mut service = Service::new(config_arc.clone(), logger);
@@ -186,6 +188,7 @@ pub fn tauri_setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
   app.manage(startup_tracker.clone());
   app.manage(provider_stats.clone());
   app.manage(keybind_manager_arc);
+  app.manage(faction_profile_manager_arc);
   app.manage(service_files_arc);
   app.manage(service_unpack_arc);
   app.manage(service_updater_arc);

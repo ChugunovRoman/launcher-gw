@@ -101,7 +101,7 @@ pub fn alife_ltx_path_in(game_root: &Path) -> PathBuf {
   game_root.join(GAMEDATA_DIR).join(CONFIGS_DIR).join(ALIFE_LTX)
 }
 
-fn resolve_active_version(config: &AppConfig) -> Option<Version> {
+pub(crate) fn resolve_active_version(config: &AppConfig) -> Option<Version> {
   // Prefer main game next to launcher (same priority as LaunchBtn mainVersion).
   let install = Path::new(&config.install_path);
   if install.join(BIN_DIR).join(game_exe()).exists() {
@@ -150,7 +150,7 @@ fn resolve_active_version(config: &AppConfig) -> Option<Version> {
 /// installed locally.
 ///
 /// Same lookup order as `resolve_version_for_launch` (handlers/process.rs).
-fn find_version_by_name<'a>(
+pub(crate) fn find_version_by_name<'a>(
   installed_versions: &'a std::collections::HashMap<String, Version>,
   versions: &'a [Version],
   name: &str,

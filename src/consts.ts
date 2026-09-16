@@ -60,6 +60,18 @@ export const DEFAULT_EXCLUDE_PATTERNS: string[] = [
   // Custom configs
   "gamedata/configs/misc/armament/custom",
   "gamedata/configs/misc/armament/custom/**",
+  // Faction editor settings (owned by the player via the in-game editor /
+  // the launcher's "Редактор фракций" section — a patch/repair must not
+  // overwrite them; see plans/launcher/faction-editor-settings-bundle-plan.md §5).
+  // faction_editor_default_config.ltx and faction_editor_presets.ltx are
+  // NOT excluded — those are the mod's shipped defaults/preset library.
+  "gamedata/configs/faction_editor_config.ltx",
+  "gamedata/configs/faction_editor_config.write.ltx",
+  "gamedata/configs/creatures/game_relations_custom.ltx",
+  "gamedata/configs/misc/simulations/default_custom.ltx",
+  "gamedata/configs/misc/simulation_objects_props_custom.ltx",
+  "gamedata/configs/misc/squad_descr/custom",
+  "gamedata/configs/misc/squad_descr/custom/**",
   // Misc
   "*JSGME*",
   "*.lnk",
@@ -69,6 +81,13 @@ export const DEFAULT_EXCLUDE_PATTERNS: string[] = [
 ];
 export const DEFAULT_BIND_LTX = "default.ltx";
 export const CUSTOM_BIND_LTX = "custom.ltx";
+
+/**
+ * Version the "Faction editor" screen preselects when the player has never
+ * picked one there. Matched case-insensitively against the installed versions;
+ * when absent, the screen falls back to the version selected for launching.
+ */
+export const FACTION_DEFAULT_VERSION_NAME = "Global War Dev";
 
 /**
  * Defaults for user-editable A-Life settings. Must match the Rust constants

@@ -21,8 +21,10 @@ import Installed from "./Installed.svelte";
 import Installed2 from "./Installed2.svelte";
 import CinC from "./CinC.svelte";
 import ToDownload from "./ToDownload.svelte";
+import FactionEditor from "./FactionEditor.svelte";
 
 export {
+  FactionEditor,
   Discord,
   Boosty,
   Patreon,

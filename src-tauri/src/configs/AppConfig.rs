@@ -411,6 +411,17 @@ pub struct AppConfig {
   #[serde(default)]
   pub tracked_game: Option<crate::service::game_tracker::TrackedGame>,
 
+  /// Author name remembered from the last faction editor settings bundle
+  /// export/save, offered as the default for the next one.
+  #[serde(default)]
+  pub faction_bundle_author: Option<String>,
+
+  /// Game version the "Faction editor" screen reads settings from and applies
+  /// them to. Deliberately independent of `selected_version` (the version to
+  /// launch): a player can edit one install while playing another.
+  #[serde(default)]
+  pub faction_settings_version: Option<String>,
+
   // SKIPED PROPS
   #[serde(skip)]
   pub path: String,
@@ -459,6 +470,8 @@ impl Default for AppConfig {
       tracked_game: None,
       progress_upload: None,
       choosed_version_path: None,
+      faction_bundle_author: None,
+      faction_settings_version: None,
     }
   }
 }
