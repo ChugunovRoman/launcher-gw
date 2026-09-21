@@ -37,6 +37,69 @@ fn patch_upload_log(app: &tauri::AppHandle, message: String) {
   let _ = app.emit("patch-upload-log", message);
 }
 
+/// Turn the staged faction-editor fragment into the one this patch ships:
+/// keep only the props the developer left ticked, and write it under the
+/// patch tag so several patches can sit side by side in the player's
+/// `appdata/patches`. Returns the props that survived.
+///
+/// The staged file is left in place: an upload that fails after packing (tag
+/// already exists, network) is retried with the same folder, and deleting the
+/// staging copy here would make that retry silently ship no settings. It is
+/// kept out of the archive by `fe_fragment_pack_excludes` instead. Any
+/// finalized fragment from an earlier attempt (possibly under another tag) is
+/// removed first, so exactly one reaches the player.
+///
+/// No staged fragment (the patch changes no settings) — `Ok(vec![])`.
+/// Nothing ticked — no fragment is written.
+fn finalize_fe_fragment(patch_dir: &Path, tag_name: &str, allowed_fields: &[String]) -> anyhow::Result<Vec<String>> {
+  use crate::consts::{FE_PATCH_FRAGMENT_STAGING, FE_PATCH_FRAGMENT_SUFFIX};
+  use crate::service::faction_patch;
+
+  let dir = crate::utils::patch_markers::patches_dir(patch_dir);
+  let staged = dir.join(FE_PATCH_FRAGMENT_STAGING);
+  if !staged.is_file() {
+    return Ok(Vec::new());
+  }
+
+  // Leftovers of a previous attempt must never travel alongside this one.
+  // Only reached when the staging file proves this folder came out of the
+  // collector: pointed at an arbitrary folder — say a real game install — this
+  // must not sweep away the fragments of the patches installed there.
+  if let Ok(entries) = fs::read_dir(&dir) {
+    for entry in entries.flatten() {
+      let name = entry.file_name().to_string_lossy().into_owned();
+      if name != FE_PATCH_FRAGMENT_STAGING && name.ends_with(FE_PATCH_FRAGMENT_SUFFIX) {
+        fs::remove_file(entry.path()).ok();
+      }
+    }
+  }
+
+  // Re-read through the same validator the player's launcher will use, so an
+  // unusable fragment is caught here rather than on a thousand machines.
+  let fragment = faction_patch::read_fragment(&staged)?.unwrap_or_default();
+  let fragment = fragment.retain_fields(allowed_fields);
+  if fragment.is_empty() {
+    return Ok(Vec::new());
+  }
+
+  crate::utils::patch_markers::assert_safe_patch_name(tag_name)?;
+  let final_path = dir.join(faction_patch::fragment_file_name(tag_name));
+  fs::write(&final_path, faction_patch::render_fragment(&fragment))?;
+
+  Ok(fragment.fields)
+}
+
+/// Exclude patterns keeping the staging fragment out of the patch archive.
+fn fe_fragment_pack_excludes() -> Vec<String> {
+  use crate::consts::{APPDATA_DIR, FE_PATCH_FRAGMENT_STAGING, PATCHES_DIR_NAME};
+  vec![format!("{}/{}/{}", APPDATA_DIR, PATCHES_DIR_NAME, FE_PATCH_FRAGMENT_STAGING)]
+}
+
+/// `true` when the collector left a staging fragment in this folder.
+fn fe_fragment_staged(patch_dir: &Path) -> bool {
+  crate::utils::patch_markers::patches_dir(patch_dir).join(crate::consts::FE_PATCH_FRAGMENT_STAGING).is_file()
+}
+
 /// Streams one patch asset to `asset_url` with `patch-upload-progress` events;
 /// returns the number of bytes actually streamed. Re-used by the re-uploads
 /// after a server-side hash mismatch (the file is re-opened each attempt).
@@ -159,6 +222,7 @@ pub async fn upload_patch(
   gameSourceDir: Option<String>,
   deletedFiles: Vec<String>,
   baseReleaseTag: Option<String>,
+  updatedFields: Vec<String>,
 ) -> Result<PatchUploadResult, String> {
   let patch_name_raw = patchName.trim().to_string();
   if patch_name_raw.is_empty() {
@@ -239,11 +303,38 @@ pub async fn upload_patch(
   // ------------------------------------------------------------------
   let pack_dir = std::env::temp_dir().join(format!("gw-patch-pack-{}", Uuid::new_v4()));
   let pack_dir_str = pack_dir.to_string_lossy().into_owned();
+  // Name the faction-editor fragment after the patch and drop the props the
+  // developer unticked. The collector could not do this: the patch tag only
+  // exists here. Failure is not fatal — the patch itself still ships.
+  let fe_updated_fields = match finalize_fe_fragment(Path::new(&patchDir), &tag_name, &updatedFields) {
+    Ok(fields) => {
+      if !fields.is_empty() {
+        patch_upload_log(&app, format!("Faction editor settings in this patch: {}", fields.join(", ")));
+      } else if fe_fragment_staged(Path::new(&patchDir)) {
+        // Happens when the folder is uploaded without going through the
+        // collect screen in this session (launcher restarted, folder picked by
+        // hand): the frontend then has no field list to send. Not an error,
+        // but silently shipping no settings would be a surprise.
+        patch_upload_log(
+          &app,
+          "A faction editor settings fragment is staged in this folder, but no props were selected — the patch ships without settings. Re-run \"Collect patch\" to include them.".to_string(),
+        );
+      }
+      fields
+    }
+    Err(e) => {
+      log::warn!("upload_patch: faction editor fragment skipped: {}", e);
+      patch_upload_log(&app, format!("Faction editor settings were skipped: {}", e));
+      Vec::new()
+    }
+  };
+
   let patch_meta = PatchMeta {
     patch_name: tag_name.clone(),
     base_patch: base_patch.clone(),
     base_release_tag: baseReleaseTag.clone().filter(|s| !s.is_empty()),
     deleted_files: deletedFiles.clone(),
+    updated_fields: fe_updated_fields,
   };
 
   patch_upload_log(&app, "Packing patch archives ...".to_string());
@@ -252,7 +343,7 @@ pub async fn upload_patch(
     patchDir.clone(),
     pack_dir_str.clone(),
     PATCH_CHUNK_SIZE_MB,
-    vec![],
+    fe_fragment_pack_excludes(),
     None,
     Some(patch_meta),
     Vec::new(),
@@ -444,4 +535,38 @@ pub async fn upload_patch(
   let _ = app.emit("patch-upload-files-count", (total_count, total_count));
 
   Ok(PatchUploadResult { repos, warnings })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// The staging fragment is kept out of the archive by an exclude pattern
+  /// spelled with `/`, while `pack_split_archives` matches it against paths
+  /// WalkDir yields with the platform separator. globset normalizes `\` on
+  /// Windows — this pins that down, because a silent miss would ship
+  /// `_pending.faction_editor_patch.ltx` into every player's appdata/patches.
+  #[test]
+  fn staging_fragment_exclude_matches_platform_paths() {
+    use globset::{GlobBuilder, GlobSetBuilder};
+    use std::path::Path;
+
+    let mut builder = GlobSetBuilder::new();
+    for pattern in fe_fragment_pack_excludes() {
+      builder.add(GlobBuilder::new(&pattern).case_insensitive(true).build().unwrap());
+    }
+    let set = builder.build().unwrap();
+
+    let staged_slash = Path::new("appdata/patches/_pending.faction_editor_patch.ltx");
+    let staged_backslash = Path::new("appdata\\patches\\_pending.faction_editor_patch.ltx");
+    let final_fragment = Path::new("appdata/patches/0.5.6-patch1.faction_editor_patch.ltx");
+    let unrelated = Path::new("appdata/patches/0.5.6-patch1.json");
+
+    assert!(set.is_match(staged_slash), "staging file must be excluded");
+    if cfg!(windows) {
+      assert!(set.is_match(staged_backslash), "must also match the backslash form WalkDir yields on Windows");
+    }
+    assert!(!set.is_match(final_fragment), "the finalized fragment must travel");
+    assert!(!set.is_match(unrelated));
+  }
 }

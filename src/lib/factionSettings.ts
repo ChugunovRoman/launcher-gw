@@ -67,6 +67,36 @@ export function factionProfilesDir(): Promise<string> {
   return invoke<string>("fe_profiles_dir");
 }
 
+/** What a patch would change in the player's faction editor config.
+ * `null` — this patch carries no settings fragment. */
+export function inspectFactionPatch(versionName: string | undefined, patchName: string): Promise<FePatchInspect | null> {
+  return invoke<FePatchInspect | null>("fe_patch_inspect", { versionName: versionName ?? null, patchName });
+}
+
+/** Patch a downloaded patch's settings into the player's config.
+ * `fields` are the props the player left ticked; omitting it applies all of
+ * them. A prop dropped here is dropped in every section of the fragment. */
+export function applyFactionPatch(
+  versionName: string | undefined,
+  patchName: string,
+  fields?: string[],
+): Promise<FePatchApplyResult> {
+  return invoke<FePatchApplyResult>("fe_patch_apply", {
+    versionName: versionName ?? null,
+    patchName,
+    fields: fields ?? null,
+  });
+}
+
+/** Locale key for a faction-editor prop name, e.g. `fire_wound_immunity`.
+ * Callers pass `{ default: field }` to `$_` so a prop added on the backend
+ * before its translation shows the raw name rather than the full locale id
+ * (svelte-i18n returns the id itself when a key is missing). A cargo test in
+ * consts.rs keeps the two sides in sync, so this is only a safety net. */
+export function factionFieldKey(field: string): string {
+  return `app.factionSettings.fields.${field}`;
+}
+
 /** Persist the version this screen works with. */
 export function setFactionVersion(name: string | undefined): Promise<void> {
   return invoke<void>("fe_set_version", { versionName: name ?? null });
@@ -103,9 +133,19 @@ const KNOWN_ERROR_CODES = [
   "FE_ERR_PROFILE_EXISTS",
   "FE_ERR_PROFILE_NAME_INVALID",
   "FE_ERR_PROFILE_NOT_FOUND",
+  "FE_ERR_PATCH_INVALID",
+  "FE_ERR_PATCH_EMPTY",
+  "FE_ERR_PATCH_NOT_FOUND",
 ];
 
-const KNOWN_WARNING_CODES = ["FE_WARN_AXR_OPTIONS_MISSING", "FE_WARN_AXR_OPTIONS_SECTION_MISSING", "FE_WARN_UNKNOWN_FACTIONS"];
+const KNOWN_WARNING_CODES = [
+  "FE_WARN_AXR_OPTIONS_MISSING",
+  "FE_WARN_AXR_OPTIONS_SECTION_MISSING",
+  "FE_WARN_UNKNOWN_FACTIONS",
+  "FE_WARN_PATCH_NO_CONFIG",
+  "FE_WARN_PATCH_NO_WRITE_CONFIG",
+  "FE_WARN_PATCH_SKIPPED_SECTIONS",
+];
 
 function errorText(err: unknown): string {
   return typeof err === "string" ? err : String((err as any)?.message ?? err ?? "");

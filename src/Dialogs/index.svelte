@@ -13,6 +13,7 @@
   import FactionRename from "./FactionRename.svelte";
   import FactionDelete from "./FactionDelete.svelte";
   import FactionApplyConfirm from "./FactionApplyConfirm.svelte";
+  import FactionPatchApply from "./FactionPatchApply.svelte";
   import FactionGameRunning from "./FactionGameRunning.svelte";
   import FactionResult from "./FactionResult.svelte";
 </script>
@@ -31,6 +32,7 @@
 <FactionRename />
 <FactionDelete />
 <FactionApplyConfirm />
+<FactionPatchApply />
 <FactionGameRunning />
 <FactionResult />
 

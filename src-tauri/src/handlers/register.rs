@@ -101,6 +101,9 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::faction_settings::fe_inspect_bundle,
     handlers::faction_settings::fe_import_bundle,
     handlers::faction_settings::fe_reset_to_default,
+    // Faction editor settings carried by a game patch
+    handlers::faction_settings::fe_patch_inspect,
+    handlers::faction_settings::fe_patch_apply,
     handlers::faction_settings::fe_profiles_list,
     handlers::faction_settings::fe_profile_save_current,
     handlers::faction_settings::fe_profile_apply,

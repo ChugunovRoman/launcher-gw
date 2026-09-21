@@ -366,6 +366,9 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
         // for the chain order + per-file sha256/kind/target for the assets.
         let patch_manifest = extract_patch_manifest(manifest_asset_url.as_deref()).await;
         let base_patch = patch_manifest.as_ref().and_then(|m| m.base_patch.clone());
+        // Same reason as base_patch: a republish rebuilds every entry from
+        // scratch, so anything not read back from the manifest is lost.
+        let updated_fields = patch_manifest.as_ref().map(|m| m.updated_fields.clone()).unwrap_or_default();
         if let Some(m) = &patch_manifest {
           let by_name: HashMap<&str, &ReleaseManifestFile> = m.files.iter().map(|f| (f.name.as_str(), f)).collect();
           for asset in patch_assets.iter_mut() {
@@ -383,6 +386,7 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
           notes: rr.body,
           manifest: manifest_asset_url,
           assets: patch_assets,
+          updated_fields,
         });
       }
     }

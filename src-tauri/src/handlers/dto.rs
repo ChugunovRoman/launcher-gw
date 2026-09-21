@@ -106,6 +106,11 @@ pub struct ReleaseManifest {
   /// Files to delete when applying the patch, relative to the game root.
   #[serde(default)]
   pub deleted_files: Vec<String>,
+  /// Faction-editor props this patch changes. Carried here so that
+  /// re-publishing the index (which rebuilds every entry from the patch
+  /// manifests) cannot lose it — see the plan §2.4.
+  #[serde(default)]
+  pub updated_fields: Vec<String>,
 }
 
 /// Patch metadata passed to the packer when building a patch upload.
@@ -117,6 +122,8 @@ pub struct PatchMeta {
   pub base_release_tag: Option<String>,
   #[serde(default)]
   pub deleted_files: Vec<String>,
+  #[serde(default)]
+  pub updated_fields: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]

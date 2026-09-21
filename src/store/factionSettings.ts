@@ -33,6 +33,21 @@ export type FactionApplyContext =
 export const showDlgFactionApplyConfirm = writable(false);
 export const factionApplyContext = writable<FactionApplyContext | undefined>(undefined);
 
+// "В этом патче изменены настройки редактора фракций: ..." — raised right
+// after a patch install and by the "Применить настройки" button on an
+// installed patch. `fields` is only for the list shown to the player; what
+// actually gets written lives in the fragment on disk.
+export interface FactionPatchContext {
+  versionName: string;
+  patchName: string;
+  fields: string[];
+  /// false — the player has no config yet, so there is nothing to patch.
+  hasPlayerConfig: boolean;
+  appliedAt: string | null;
+}
+export const showDlgFactionPatchApply = writable(false);
+export const factionPatchContext = writable<FactionPatchContext | undefined>(undefined);
+
 export const showDlgFactionGameRunning = writable(false);
 
 export const showDlgFactionResult = writable(false);

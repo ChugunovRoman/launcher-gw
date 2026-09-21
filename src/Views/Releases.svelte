@@ -3,7 +3,9 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { join } from "@tauri-apps/api/path";
   import { configReady } from "../store/main";
+  import { factionFieldKey } from "../lib/factionSettings";
   import { showUploading, inProcess, versions, logText, releaseName, releasePath, totalFiles, uploadedFiles, uploadFilesMap } from "../store/upload";
   import { loadVersions } from "../lib/versions";
   import { choosePath } from "../utils/path";
@@ -85,6 +87,33 @@
   let patchError = $state("");
   let patchExcludePatterns = $state<string[]>([...DEFAULT_EXCLUDE_PATTERNS]);
   let patchExcludeText = $state("");
+  // Faction editor props the developer keeps in the patch fragment.  Filled
+  // from every successful collect (all props enabled) and sent to upload_patch.
+  // Svelte 5 does not proxy Set: every mutation must reassign a NEW Set,
+  // same as the Map-reactivity pattern used above for shaResults/shaErrors.
+  let feSelectedFields = $state<Set<string>>(new Set());
+
+  function toggleFeField(field: string) {
+    const next = new Set(feSelectedFields);
+    if (next.has(field)) next.delete(field);
+    else next.add(field);
+    feSelectedFields = next;
+  }
+
+  /// Opens the folder holding the pending fragment in the system file manager
+  /// (same command the version screen uses for the game/log folders).
+  async function handleShowFeFragment(event: Event) {
+    event.stopPropagation();
+
+    if (!patchResult) return;
+
+    try {
+      const path = await join(patchResult.patch_dir, "appdata", "patches");
+      await invoke("open_explorer", { path });
+    } catch (e) {
+      console.error("handleShowFeFragment failed:", e);
+    }
+  }
 
   function repoStatusClass(status: string): string {
     switch (status) {
@@ -117,12 +146,16 @@
     collectingPatch = true;
     patchError = "";
     patchResult = null;
+    feSelectedFields = new Set();
 
     try {
       patchResult = await invoke<PatchCollectResult>("collect_patch", {
         sourceDir: patchSourcePath,
         excludePatterns: patchExcludePatterns,
       });
+      // Every collected prop is enabled by default — the developer only has to
+      // uncheck what must not reach the players.
+      feSelectedFields = new Set(patchResult.fe_updated_fields);
       // Persist the source path for next session.
       invoke("set_patch_source_dir", { source: patchSourcePath });
       // Prefill the per-version "add patch" form with the collected folder.
@@ -271,6 +304,9 @@
         gameSourceDir: patchSourcePath || null,
         deletedFiles: fromCollect && patchResult ? patchResult.deleted_files : [],
         baseReleaseTag: fromCollect && patchResult ? patchResult.base_tag : null,
+        // Faction editor props kept by the developer; the backend rebuilds the
+        // fragment from them (empty list = no fragment travels with the patch).
+        updatedFields: fromCollect && patchResult ? patchResult.fe_updated_fields.filter((f) => feSelectedFields.has(f)) : [],
       });
       updateUploadState(releaseNameStr, (s) => {
         s.result = result;
@@ -764,6 +800,34 @@
                   </span>
                 </div>
               {/each}
+            </div>
+
+            <!-- Faction editor settings carried by the patch: the developer
+                 reviews the changed props and can drop any of them before
+                 uploading. -->
+            <div class="patch-repos">
+              {#if patchResult.fe_updated_fields.length === 0}
+                <span class="repo-status skipped">{$_("app.releases.fePatchNone")}</span>
+              {:else}
+                <span class="patch-repos-title">{$_("app.releases.fePatchTitle")}</span>
+                <div class="patch-report">
+                  <span
+                    >{$_("app.releases.fePatchSummary", {
+                      values: { fields: patchResult.fe_updated_fields.length, entries: patchResult.fe_fragment_entries },
+                    })}</span>
+                </div>
+                <div class="fe-fields">
+                  {#each patchResult.fe_updated_fields as field}
+                    <label class="fe-field-row">
+                      <input type="checkbox" checked={feSelectedFields.has(field)} onchange={() => toggleFeField(field)} />
+                      <span>{$_(factionFieldKey(field), { default: field })}</span>
+                    </label>
+                  {/each}
+                </div>
+                <button type="button" onclick={handleShowFeFragment} class="reset-btn">
+                  {$_("app.releases.fePatchShowFragment")}
+                </button>
+              {/if}
             </div>
           {/if}
         </div>
@@ -1276,6 +1340,22 @@
 
   .repo-status.error {
     color: #f44336;
+  }
+
+  .fe-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin-top: 0.5rem;
+  }
+
+  .fe-field-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #ddd;
+    font-size: 0.85rem;
+    cursor: pointer;
   }
 
   .patch-upload-section {

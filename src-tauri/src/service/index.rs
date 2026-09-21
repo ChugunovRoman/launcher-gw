@@ -70,6 +70,12 @@ pub struct IndexPatch {
   pub manifest: Option<String>,
   #[serde(default)]
   pub assets: Vec<IndexAsset>,
+  /// Faction-editor props this patch changes, mirrored from its
+  /// `manifest.json`. Only used to flag a patch that is not installed yet;
+  /// once installed, the marker and the fragment on disk are the source of
+  /// truth. Empty for patches that change no settings.
+  #[serde(default)]
+  pub updated_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -258,6 +258,34 @@ pub fn apply_bundle(bundle_path: &Path, game_root: &Path, backups_dir: &Path) ->
   apply_with_backup(game_root, backups_dir, &files)
 }
 
+/// Snapshot the editor's current on-disk state into `backups_dir` as a `.gwfe`
+/// and rotate old snapshots, exactly as `apply_with_backup` does before an
+/// import. `Ok(None)` — the editor was never saved, so there is nothing to
+/// back up.
+///
+/// Used by `faction_patch`, which edits individual keys in place instead of
+/// replacing whole files and therefore cannot go through `apply_with_backup`.
+/// The snapshot lands in the same list the "Редактор фракций" screen restores
+/// from, so a patch-applied change is undoable the same way an import is.
+pub fn snapshot_backup(game_root: &Path, backups_dir: &Path) -> Result<Option<PathBuf>> {
+  let Some(state) = resolved_from_disk(game_root)? else {
+    return Ok(None);
+  };
+  Ok(Some(write_snapshot(&state, backups_dir)?))
+}
+
+/// Write `state` as a rotated `.gwfe` snapshot into `backups_dir`.
+fn write_snapshot(state: &CollectedState, backups_dir: &Path) -> Result<PathBuf> {
+  fs::create_dir_all(backups_dir).with_context(|| format!("create_dir_all {}", backups_dir.display()))?;
+  // Milliseconds in the name: two applies within one second must not
+  // overwrite each other's backup. Description stays empty — UI text is
+  // localized on the frontend, not baked into a file.
+  let path = backups_dir.join(format!("{}.{}", chrono::Utc::now().format("%Y%m%d-%H%M%S-%3f"), FE_BUNDLE_EXT));
+  write_bundle(state, "backup", "", "", &path)?;
+  rotate_backups(backups_dir)?;
+  Ok(path)
+}
+
 /// Reset the managed file set to the mod's shipped defaults
 /// (`faction_editor_default_config.ltx` + no custom files). Mirrors the
 /// editor's in-game "reset all" (see the plan §4.6).
@@ -683,16 +711,7 @@ fn read_and_verify_bundle(bundle_path: &Path) -> Result<(BundleManifest, Vec<Bun
 fn apply_with_backup(game_root: &Path, backups_dir: &Path, files: &[BundleFile]) -> Result<FactionApplyResult> {
   let backup_state = resolved_from_disk(game_root)?;
   let backup_path = match &backup_state {
-    Some(state) => {
-      fs::create_dir_all(backups_dir).with_context(|| format!("create_dir_all {}", backups_dir.display()))?;
-      // Milliseconds in the name: two applies within one second must not
-      // overwrite each other's backup. Description stays empty — UI text is
-      // localized on the frontend, not baked into a file.
-      let path = backups_dir.join(format!("{}.{}", chrono::Utc::now().format("%Y%m%d-%H%M%S-%3f"), FE_BUNDLE_EXT));
-      write_bundle(state, "backup", "", "", &path)?;
-      rotate_backups(backups_dir)?;
-      Some(path)
-    }
+    Some(state) => Some(write_snapshot(state, backups_dir)?),
     None => None,
   };
 

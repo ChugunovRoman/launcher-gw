@@ -37,6 +37,7 @@ export const DEFAULT_EXCLUDE_PATTERNS: string[] = [
   "gamedata/helpers",
   "gamedata/helpers/**",
   // Appdata caches/logs
+  "appdata/*.ltx",
   "appdata/logs",
   "appdata/logs/**",
   "appdata/savedgames",
@@ -72,6 +73,11 @@ export const DEFAULT_EXCLUDE_PATTERNS: string[] = [
   "gamedata/configs/misc/simulation_objects_props_custom.ltx",
   "gamedata/configs/misc/squad_descr/custom",
   "gamedata/configs/misc/squad_descr/custom/**",
+  // Debug symbols: a developer may drop the engine PDBs next to the DLLs in bin/ so that crash
+  // frames in the log carry function names (see wiki/doc/develop/logs_and_crashes.md).
+  // They are hundreds of megabytes and must never travel to players inside a release or patch.
+  "*.pdb",
+  "**/*.pdb",
   // Misc
   "*JSGME*",
   "*.lnk",

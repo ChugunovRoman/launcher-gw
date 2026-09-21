@@ -22,6 +22,9 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::consts::{FE_DEFAULT_CONFIG_REL_PATH, FE_PATCH_FRAGMENT_STAGING};
+use crate::service::faction_patch::{self, FePatchFragment};
+
 /// Per-repository outcome of the collection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,6 +64,12 @@ pub struct PatchCollectResult {
   pub repos: Vec<RepoPatchReport>,
   pub changed: u32,
   pub deleted: u32,
+  /// Distinct faction-editor props whose values changed in the mod's
+  /// reference config since the base tag. Shown to the developer for review
+  /// before upload; empty when the patch changes no settings.
+  pub fe_updated_fields: Vec<String>,
+  /// How many `(section, key)` pairs the settings fragment carries.
+  pub fe_fragment_entries: u32,
 }
 
 /// Finds all git repository roots under `base` (including `base` itself).
@@ -286,10 +295,13 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
     repos: Vec::new(),
     changed: 0,
     deleted: 0,
+    fe_updated_fields: Vec::new(),
+    fe_fragment_entries: 0,
   };
+  let mut fe_fragment: Option<FePatchFragment> = None;
 
   for repo_dir in find_git_roots(&source_dir) {
-    let report = collect_repo(&repo_dir, &source_dir, &patch_dir, &mut result.deleted_files, exclude_set.as_ref());
+    let report = collect_repo(&repo_dir, &source_dir, &patch_dir, &mut result.deleted_files, exclude_set.as_ref(), &mut fe_fragment);
     log::debug!(
       "collect_patch repo {:?}: status={:?} changed={} deleted={}",
       report.repo_rel_path,
@@ -308,6 +320,25 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
     result.repos.push(report);
   }
 
+  // Stage the faction-editor settings fragment inside the patch folder. It
+  // travels as an ordinary patch file and unpacks straight into the player's
+  // `appdata/patches`, where it stays as the record of what this patch
+  // changed. The patch tag is not known yet, so it is written under the
+  // staging name; `upload_patch` renames it.
+  if let Some(fragment) = fe_fragment.as_ref().filter(|f| !f.is_empty()) {
+    let dir = crate::utils::patch_markers::patches_dir(&patch_dir);
+    fs::create_dir_all(&dir).with_context(|| format!("create {:?}", dir))?;
+    let path = dir.join(FE_PATCH_FRAGMENT_STAGING);
+    fs::write(&path, faction_patch::render_fragment(fragment)).with_context(|| format!("write {:?}", path))?;
+    result.fe_updated_fields = fragment.fields.clone();
+    result.fe_fragment_entries = fragment.edits.len() as u32;
+    log::info!(
+      "collect_patch: faction editor settings fragment: {} prop(s), {} value(s)",
+      result.fe_updated_fields.len(),
+      result.fe_fragment_entries
+    );
+  }
+
   log::info!(
     "collect_patch done: repos: {}, changed: {}, deleted: {}, patch_dir: {:?}",
     result.repos.len(),
@@ -319,6 +350,23 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
   Ok(result)
 }
 
+/// Diff the two committed versions of `faction_editor_default_config.ltx` a
+/// delta points at.
+///
+/// Blobs come from git, not the working tree, so uncommitted edits never leak
+/// into a patch — the same rule the rest of the collection follows.
+fn diff_fe_default_config(repo: &git2::Repository, delta: &git2::DiffDelta<'_>) -> Result<FePatchFragment> {
+  let old_blob = repo.find_blob(delta.old_file().id()).context("read the previous reference config")?;
+  let new_blob = repo.find_blob(delta.new_file().id()).context("read the new reference config")?;
+
+  // Tags older than the editor's UTF-8 switch hold a cp1251 config; the
+  // decoder falls back so a patch based on one of those still diffs.
+  let old_text = faction_patch::decode_config_text(old_blob.content());
+  let new_text = faction_patch::decode_config_text(new_blob.content());
+
+  Ok(faction_patch::diff_configs(&old_text, &new_text))
+}
+
 /// Collects tag..HEAD changes of a single repository into the patch folder.
 /// Files matching `exclude_set` (relative to `source_dir`) are silently skipped.
 fn collect_repo(
@@ -327,6 +375,7 @@ fn collect_repo(
   patch_dir: &Path,
   deleted_files: &mut Vec<String>,
   exclude_set: Option<&GlobSet>,
+  fe_fragment: &mut Option<FePatchFragment>,
 ) -> RepoPatchReport {
   let rel_prefix = repo_dir
     .strip_prefix(source_dir)
@@ -425,6 +474,27 @@ fn collect_repo(
     ) {
       if let Some(new_path) = delta.new_file().path() {
         let rel = rel_prefix.join(new_path);
+
+        // The mod's reference faction-editor config additionally produces the
+        // settings fragment. Only a Modified delta can: on Added there is no
+        // previous version to diff against, and shipping the whole reference
+        // config as "changes" would overwrite every balance prop the player
+        // ever tuned.
+        if to_rel_slash(&rel) == FE_DEFAULT_CONFIG_REL_PATH && status == git2::Delta::Modified {
+          match diff_fe_default_config(&repo, &delta) {
+            Ok(fragment) => {
+              log::info!("collect_patch: faction editor diff gave {} value(s)", fragment.edits.len());
+              *fe_fragment = Some(fragment);
+            }
+            Err(e) => {
+              log::warn!("collect_patch: cannot diff {}: {}", FE_DEFAULT_CONFIG_REL_PATH, e);
+              report
+                .message
+                .get_or_insert_with(|| format!("faction editor settings were not collected: {}", e));
+            }
+          }
+        }
+
         // Skip files matching exclude patterns.
         if exclude_set.map_or(false, |s| s.is_match(&rel)) {
           continue;

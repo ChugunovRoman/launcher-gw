@@ -28,6 +28,8 @@
     fetchLocalVersions,
   } from "../store/main";
   import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
+  import { showDlgFactionPatchApply, factionPatchContext } from "../store/factionSettings";
+  import { inspectFactionPatch } from "../lib/factionSettings";
   import { normalizeLaunchError, warnIfTempPath } from "../lib/main";
   import { COFF_FROM_COMPRESSED_SIZE, DownloadStatus } from "../consts";
   import { Play, Pause, Stop, Installed, CinC, Installed2 } from "../Icons";
@@ -130,6 +132,8 @@
       await fetchLocalVersions();
       // Re-check available patches.
       await handleCheckPatches(version);
+      // Ask about the faction editor settings this patch brought, if any.
+      await offerPatchSettings(name, patchName, true);
     } catch (e: any) {
       const msg = typeof e === "string" ? e : String(e?.message ?? e);
       patchErrors = new Map(patchErrors).set(name, msg);
@@ -138,6 +142,37 @@
       // Clear progress stores so no stale state bleeds into the next install.
       patchInstallProgress.set(null);
       patchDownloadInfo = null;
+    }
+  }
+
+  /// Open the "apply the settings this patch changed?" dialog.
+  /// Silent when the patch carries no faction editor settings; a failure here
+  /// must never look like the patch install itself went wrong, so it is only
+  /// logged.
+  ///
+  /// `unsolicited` — the dialog is being raised by an install, not by the
+  /// player's click: then a player who never saved the editor (no config to
+  /// patch, the shipped defaults already apply) is not bothered at all. On a
+  /// click they still get the explanation.
+  async function offerPatchSettings(versionName: string, patchName: string, unsolicited = false) {
+    // An install finishing while the player already has this dialog open for
+    // another patch must not swap its contents from under them. The offer for
+    // the just-installed patch is not lost: its row keeps the button.
+    if ($showDlgFactionPatchApply) return;
+    try {
+      const inspect = await inspectFactionPatch(versionName, patchName);
+      if (!inspect || inspect.fields.length === 0) return;
+      if (unsolicited && !inspect.hasPlayerConfig) return;
+      $factionPatchContext = {
+        versionName,
+        patchName,
+        fields: inspect.fields,
+        hasPlayerConfig: inspect.hasPlayerConfig,
+        appliedAt: inspect.appliedAt,
+      };
+      $showDlgFactionPatchApply = true;
+    } catch (e) {
+      console.error("fe_patch_inspect failed:", e);
     }
   }
 
@@ -779,6 +814,17 @@
                       {patch.name}
                     </span>
                     <span class="patch-date">{formatInstalledDate(patch.installed_at)}</span>
+                    <!-- The patch changed faction editor settings: the player
+                         may have said "no" right after installing it, so the
+                         fragment stays on disk and can be applied any time. -->
+                    {#if patch.fe_fields.length}
+                      {#if patch.fe_applied_at}
+                        <span class="patch-hint">{$_("app.factionSettings.patchAlreadyApplied")}</span>
+                      {/if}
+                      <button type="button" class="download-btn patch-fe-btn" onclick={() => offerPatchSettings(name, patch.name)}>
+                        {$_("app.factionSettings.applyPatchSettings")}
+                      </button>
+                    {/if}
                   </div>
                 {/each}
               {/if}
@@ -794,6 +840,12 @@
                         {patch.name}
                       </span>
                       <span class="patch-size">{parseSize(patch.size)}</span>
+                      {#if patch.updated_fields.length}
+                        <!-- Not `.patch-hint`: that class carries margin-left: auto,
+                             and two auto margins in the row would split the free
+                             space and leave this tag floating mid-row. -->
+                        <span class="patch-tag">{$_("app.factionSettings.patchHasSettings")}</span>
+                      {/if}
                       {#if patch.is_next}
                         <button
                           type="button"
@@ -1690,6 +1742,17 @@
     align-items: center;
     gap: 6px;
   }
+  /* Sits at the right edge of an installed-patch row, next to the date. */
+  .patch-fe-btn {
+    font-size: 0.8rem;
+    padding: 0.3rem 1rem;
+    margin-left: auto;
+  }
+  /* The "already applied" hint carries its own margin-left: auto; with two of
+     them the free space would be split and the button would drift inwards. */
+  .patch-hint + .patch-fe-btn {
+    margin-left: 0;
+  }
   .patch-install-btn-busy {
     background-color: rgba(233, 236, 61, 0.8) !important;
     cursor: wait !important;
@@ -1702,6 +1765,13 @@
     font-size: 0.75rem;
     font-style: italic;
     margin-left: auto;
+  }
+  /* Inline marker next to the patch size; unlike .patch-hint it does not push
+     itself to the right edge, so the install button keeps that spot. */
+  .patch-tag {
+    color: #777;
+    font-size: 0.75rem;
+    font-style: italic;
   }
   .patch-up-to-date {
     color: #4caf50;

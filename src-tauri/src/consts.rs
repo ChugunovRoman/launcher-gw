@@ -313,6 +313,71 @@ pub const FE_AXR_COMMON_FLAGS: &[&str] = &[
   "enable_respawn_factions",
 ];
 
+/// Props of `faction_editor_config.ltx` a patch is allowed to overwrite in the
+/// player's config. Balance numbers only — visuals, names, descriptions, icons,
+/// colors, sounds and the faction-existence flags stay the player's own
+/// (see plans/launcher/faction-editor-patch-fields-plan.md §1.2).
+///
+/// `isCreated` / `isEnabled` are deliberately absent: `isCreated = false`
+/// arriving in a patch would delete a faction the player created.
+/// Every entry needs an `app.factionSettings.fields.<prop>` string in both
+/// locales — `fe_patchable_fields_are_localized` is the sync check.
+pub const FE_PATCHABLE_FIELDS: &[&str] = &[
+  // base section [<faction>]
+  "power",
+  "power_leader",
+  "leader_min_money",
+  "leader_max_money",
+  "leader_min_reputation",
+  "leader_max_reputation",
+  "fire_wound_immunity_leader",
+  "explosion_immunity_leader",
+  "fire_wound_preset",
+  "explosion_preset",
+  "mutant_alliance",
+  // Presentation the mod authors rather than the player: `descr_diff` is the
+  // 1..5 difficulty rating shown on the faction-select screen and has no
+  // control in the editor at all, and the map marker color is regularly
+  // retuned mod-side. A player who did recolor their faction can untick it in
+  // the dialog; the rest of their visuals (names, icons, models, sounds) is
+  // still never touched.
+  "descr_diff",
+  "spot_color_r",
+  "spot_color_g",
+  "spot_color_b",
+  // rank sections [<faction>_<rank>]
+  "min_money",
+  "max_money",
+  "min_reputation",
+  "max_reputation",
+  "fire_wound_immunity",
+  "explosion_immunity",
+];
+
+/// Marker that a section holds model paths, not `key = value` pairs
+/// (`[<faction>_visuals_<rank>]`). Never diffed, never patched.
+pub const FE_VISUALS_SECTION_MARKER: &str = "_visuals_";
+
+/// The mod's reference faction-editor config, spelled relative to the game
+/// folder the developer picks when collecting a patch. Diffing THIS file
+/// (never the developer's own `faction_editor_config.ltx`, which is excluded
+/// from patches entirely) is what produces a patch's settings fragment.
+pub const FE_DEFAULT_CONFIG_REL_PATH: &str = "gamedata/configs/faction_editor_default_config.ltx";
+
+/// `appdata/<this>`: installed-patch markers and the settings fragments
+/// patches carry. `patch_markers::patches_dir` builds the path; the pack
+/// exclude in `handlers/patches.rs` spells it too, so keep them on one name.
+pub const PATCHES_DIR_NAME: &str = "patches";
+
+/// Name of the fragment a patch carries, inside the patch archive and then in
+/// the player's `appdata/patches`: `<patch tag>` + this suffix.
+pub const FE_PATCH_FRAGMENT_SUFFIX: &str = ".faction_editor_patch.ltx";
+/// Staging name used while the patch is being collected — at that point the
+/// patch tag is not known yet; `upload_patch` renames it.
+pub const FE_PATCH_FRAGMENT_STAGING: &str = "_pending.faction_editor_patch.ltx";
+/// Hard cap on a fragment arriving from the network.
+pub const FE_MAX_PATCH_FRAGMENT_SIZE: u64 = 256 * 1024;
+
 // Faction-editor bundle error codes (returned as Err strings to the frontend).
 pub const FE_ERR_NO_VERSION: &str = "FE_ERR_NO_VERSION";
 pub const FE_ERR_NO_CONFIG: &str = "FE_ERR_NO_CONFIG";
@@ -332,8 +397,61 @@ pub const FE_ERR_ROLLBACK_FAILED: &str = "FE_ERR_ROLLBACK_FAILED";
 pub const FE_ERR_PROFILE_EXISTS: &str = "FE_ERR_PROFILE_EXISTS";
 pub const FE_ERR_PROFILE_NAME_INVALID: &str = "FE_ERR_PROFILE_NAME_INVALID";
 pub const FE_ERR_PROFILE_NOT_FOUND: &str = "FE_ERR_PROFILE_NOT_FOUND";
+pub const FE_ERR_PATCH_INVALID: &str = "FE_ERR_PATCH_INVALID";
+pub const FE_ERR_PATCH_EMPTY: &str = "FE_ERR_PATCH_EMPTY";
+pub const FE_ERR_PATCH_NOT_FOUND: &str = "FE_ERR_PATCH_NOT_FOUND";
 
 // Non-fatal warnings surfaced to the frontend alongside a successful result.
 pub const FE_WARN_AXR_OPTIONS_MISSING: &str = "FE_WARN_AXR_OPTIONS_MISSING";
 pub const FE_WARN_AXR_OPTIONS_SECTION_MISSING: &str = "FE_WARN_AXR_OPTIONS_SECTION_MISSING";
 pub const FE_WARN_UNKNOWN_FACTIONS: &str = "FE_WARN_UNKNOWN_FACTIONS";
+pub const FE_WARN_PATCH_NO_CONFIG: &str = "FE_WARN_PATCH_NO_CONFIG";
+pub const FE_WARN_PATCH_NO_WRITE_CONFIG: &str = "FE_WARN_PATCH_NO_WRITE_CONFIG";
+pub const FE_WARN_PATCH_SKIPPED_SECTIONS: &str = "FE_WARN_PATCH_SKIPPED_SECTIONS";
+
+#[cfg(test)]
+mod fe_patch_tests {
+  use super::*;
+
+  /// Every prop a patch may carry, and every `FE_*_PATCH_*` code the backend
+  /// can return, needs a string in BOTH locales — otherwise the player sees a
+  /// raw key like `fire_wound_immunity_leader` in the apply dialog. There is
+  /// no codegen between Rust and the locale files, so this is the sync check
+  /// (same role as `frontend_alife_consts_stay_in_sync` above).
+  #[test]
+  fn fe_patchable_fields_and_codes_are_localized() {
+    for locale in ["ru", "en"] {
+      let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../src/locales/{}.json", locale));
+      let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} must be readable: {}", path.display(), e));
+      let json: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} must be valid JSON: {}", path.display(), e));
+
+      let mut check = |pointer: &str, key: &str| {
+        let full = format!("{}/{}", pointer, key);
+        let value = json.pointer(&full).and_then(|v| v.as_str()).unwrap_or_default();
+        assert!(!value.trim().is_empty(), "{}: missing or empty '{}'", locale, full.replace('/', "."));
+      };
+
+      for prop in FE_PATCHABLE_FIELDS {
+        check("/app/factionSettings/fields", prop);
+      }
+      for code in [FE_ERR_PATCH_INVALID, FE_ERR_PATCH_EMPTY, FE_ERR_PATCH_NOT_FOUND] {
+        check("/app/factionSettings/errors", code);
+      }
+      for code in [FE_WARN_PATCH_NO_CONFIG, FE_WARN_PATCH_NO_WRITE_CONFIG, FE_WARN_PATCH_SKIPPED_SECTIONS] {
+        check("/app/factionSettings/warnings", code);
+      }
+    }
+  }
+
+  /// A prop listed twice would make the "collect patch" screen show duplicate
+  /// checkboxes and the dialog a duplicate line.
+  #[test]
+  fn fe_patchable_fields_have_no_duplicates() {
+    let mut seen: Vec<&str> = FE_PATCHABLE_FIELDS.to_vec();
+    seen.sort_unstable();
+    let before = seen.len();
+    seen.dedup();
+    assert_eq!(before, seen.len(), "FE_PATCHABLE_FIELDS contains duplicates");
+  }
+}

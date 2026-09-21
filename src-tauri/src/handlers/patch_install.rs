@@ -33,6 +33,10 @@ pub struct PatchInfo {
   pub notes: Option<String>,
   pub size: Option<u64>,
   pub is_next: bool,
+  /// Faction-editor props this patch changes, from the release index. Lets the
+  /// UI flag a patch before it is installed; the API fallback below has no
+  /// manifests at hand, so it leaves this empty.
+  pub updated_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -362,6 +366,7 @@ pub(crate) async fn get_version_patches_impl(
           notes: patch.notes.clone(),
           size: if size > 0 { Some(size) } else { None },
           is_next,
+          updated_fields: patch.updated_fields.clone(),
         });
       }
 
@@ -423,6 +428,7 @@ pub(crate) async fn get_version_patches_impl(
       notes: release.body.clone(),
       size,
       is_next,
+      updated_fields: Vec::new(),
     });
   }
 
@@ -500,6 +506,13 @@ async fn start_install_patch_inner(
   version_name: &str,
   patch_name: &str,
 ) -> Result<()> {
+  // The tag comes from the updates repo and is used below as a path component
+  // (`.patches/<tag>/`, `<tag>.manifest.json`, the marker, the settings
+  // fragment). Reject a bad one here, before anything is downloaded or
+  // unpacked — the later guards would only fire once the archives were
+  // already extracted into the game folder.
+  crate::utils::patch_markers::assert_safe_patch_name(patch_name)?;
+
   let api_client = {
     let svc = service.lock().await;
     svc.api_client.clone()
@@ -760,12 +773,37 @@ async fn start_install_patch_inner(
     );
   }
 
+  // Faction-editor settings the patch carries, if any. The fragment was just
+  // unpacked into `appdata/patches` like any other patch file; validate it now
+  // so a corrupted one never reaches the "apply settings" dialog. A bad
+  // fragment is dropped with a warning — it must not fail the patch install.
+  let (fe_fields, fe_fragment) = {
+    let fragment_name = crate::service::faction_patch::fragment_file_name(patch_name);
+    let fragment_path = crate::utils::patch_markers::patches_dir(Path::new(&installed_path)).join(&fragment_name);
+    match crate::service::faction_patch::read_fragment(&fragment_path) {
+      Ok(Some(fragment)) => {
+        install_log(app, format!("Patch carries {} faction editor setting(s)", fragment.fields.len()));
+        (fragment.fields, Some(fragment_name))
+      }
+      Ok(None) => (Vec::new(), None),
+      Err(e) => {
+        log::warn!("patch_install: ignoring invalid faction editor fragment {:?}: {}", fragment_path, e);
+        install_log(app, format!("Faction editor settings of this patch are invalid and were skipped: {}", e));
+        let _ = std::fs::remove_file(&fragment_path);
+        (Vec::new(), None)
+      }
+    }
+  };
+
   // Record the patch as installed via marker file.
   write_patch_marker(Path::new(&installed_path), &InstalledPatch {
     name: patch_name.to_string(),
     provider_id,
     installed_at: Some(chrono::Local::now().to_rfc3339()),
     notes: release.body.clone(),
+    fe_fields,
+    fe_fragment,
+    fe_applied_at: None,
   })?;
 
   // Keep the patch manifest next to the markers: "Verify integrity" uses it

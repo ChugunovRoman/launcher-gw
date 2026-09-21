@@ -1,86 +1,34 @@
 #![allow(non_snake_case)]
 
-use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use anyhow::Result;
+use std::path::Path;
 
-use crate::utils::encoding::{encode_cp1251, read_cp1251_file};
+use crate::configs::LtxLines::{LtxEncoding, LtxLines};
 
-/// Indent and key padding as written by CInifile::save_as (`%8s%-32s = %s`).
-const KEY_INDENT: &str = "        ";
-const KEY_WIDTH: usize = 32;
-
-/// Line-oriented patcher for sectioned ltx files (`[section]` + `key = value`).
-/// Patches only the requested keys; comments, line order, indentation, key
-/// alignment, encoding and line endings are preserved as-is.
+/// cp1251 sectioned-ltx patcher for the engine's own configs (`alife.ltx`,
+/// `axr_options.ltx`).
+///
+/// Thin wrapper over `LtxLines`, which holds the line-oriented implementation
+/// shared with the UTF-8 faction-editor configs. Comments, line order,
+/// indentation, key alignment and line endings are preserved as-is.
 #[derive(Debug, Clone)]
-pub struct AlifeConfig {
-  path: PathBuf,
-  lines: Vec<String>,
-  eol: &'static str,
-}
+pub struct AlifeConfig(LtxLines);
 
 impl AlifeConfig {
   /// Load an existing file. `Ok(None)` — file does not exist (must not be created).
   pub fn load<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
-    let path = path.as_ref().to_path_buf();
-    if !path.exists() {
-      return Ok(None);
-    }
-
-    let content = read_cp1251_file(&path).with_context(|| format!("Не удалось прочитать {}", path.display()))?;
-    let eol = if content.contains("\r\n") { "\r\n" } else { "\n" };
-    let lines: Vec<String> = content.split('\n').map(|l| l.trim_end_matches('\r').to_string()).collect();
-
-    Ok(Some(Self { path, lines, eol }))
+    Ok(LtxLines::load(path, LtxEncoding::Cp1251)?.map(Self))
   }
 
   /// Write `key = value` into `section`.
   /// `false` — the section is missing from the file, nothing was changed.
   pub fn set_in_section(&mut self, section: &str, key: &str, value: &str) -> bool {
-    let Some((start, end)) = self.section_range(section) else {
-      return false;
-    };
-
-    // 1) The key already exists in the section — replace the value only.
-    for i in start..end {
-      let line = self.lines[i].clone();
-      let payload = match line.find(';') {
-        Some(pos) => &line[..pos],
-        None => &line[..],
-      };
-      let comment = match line.find(';') {
-        Some(pos) => Some(line[pos..].to_string()),
-        None => None,
-      };
-
-      let Some(eq) = payload.find('=') else { continue };
-      if !payload[..eq].trim().eq_ignore_ascii_case(key) {
-        continue;
-      }
-
-      // `head` keeps the original prefix: all padding spaces and the `=` sign.
-      let head = &payload[..=eq];
-      let mut new_line = format!("{} {}", head, value);
-      if let Some(comment) = comment {
-        new_line.push_str("  ");
-        new_line.push_str(&comment);
-      }
-      self.lines[i] = new_line;
-      return true;
-    }
-
-    // 2) The key is missing — insert after the last non-empty line of the section.
-    let mut insert_at = end;
-    while insert_at > start && self.lines[insert_at - 1].trim().is_empty() {
-      insert_at -= 1;
-    }
-    self.lines.insert(insert_at, format!("{}{:<width$} = {}", KEY_INDENT, key, value, width = KEY_WIDTH));
-    true
+    self.0.set_in_section(section, key, value)
   }
 
   /// `true` if a `[section]` header exists (even with no keys under it).
   pub fn has_section(&self, section: &str) -> bool {
-    self.section_range(section).is_some()
+    self.0.has_section(section)
   }
 
   /// Read all `key = value` pairs of a section (comments stripped, keys as
@@ -88,65 +36,13 @@ impl AlifeConfig {
   /// build a fragment (e.g. `axr_options.partial.ltx`) without touching the
   /// rest of the file.
   pub fn get_section(&self, section: &str) -> Vec<(String, String)> {
-    let Some((start, end)) = self.section_range(section) else {
-      return Vec::new();
-    };
-
-    let mut out = Vec::new();
-    for line in &self.lines[start..end] {
-      let payload = match line.find(';') {
-        Some(pos) => &line[..pos],
-        None => &line[..],
-      };
-      let Some(eq) = payload.find('=') else { continue };
-      let key = payload[..eq].trim();
-      let value = payload[eq + 1..].trim();
-      if key.is_empty() {
-        continue;
-      }
-      out.push((key.to_string(), value.to_string()));
-    }
-    out
+    self.0.get_section(section)
   }
 
   /// Atomically save the file in cp1251 with the original line endings.
   pub fn save(&self) -> Result<()> {
-    let mut out = self.lines.join(self.eol);
-    if !out.ends_with(self.eol) {
-      out.push_str(self.eol);
-    }
-    let bytes = encode_cp1251(&out)?;
-    crate::configs::atomic_write_bytes(&self.path, &bytes)
+    self.0.save()
   }
-
-  /// Line range of the section body: `[start, end)` — from the line after the
-  /// header up to the next section header (or end of file).
-  fn section_range(&self, section: &str) -> Option<(usize, usize)> {
-    let mut start: Option<usize> = None;
-
-    for (i, line) in self.lines.iter().enumerate() {
-      let Some(name) = parse_section_header(line) else { continue };
-
-      if start.is_some() {
-        return Some((start.unwrap(), i));
-      }
-      if name.eq_ignore_ascii_case(section) {
-        start = Some(i + 1);
-      }
-    }
-
-    start.map(|s| (s, self.lines.len()))
-  }
-}
-
-/// `[alife]` -> `alife`; `[alife]:base1,base2` -> `alife`; otherwise `None`.
-fn parse_section_header(line: &str) -> Option<&str> {
-  let trimmed = line.trim();
-  if !trimmed.starts_with('[') {
-    return None;
-  }
-  let close = trimmed.find(']')?;
-  Some(trimmed[1..close].trim())
 }
 
 #[cfg(test)]

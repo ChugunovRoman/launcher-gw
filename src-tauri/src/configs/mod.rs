@@ -1,6 +1,7 @@
 pub mod AlifeConfig;
 pub mod AppConfig;
 pub mod GameConfig;
+pub mod LtxLines;
 
 pub use AppConfig::RunParams;
 pub use GameConfig::{TmpLtx, UserLtx};
@@ -16,7 +17,12 @@ pub fn atomic_write(path: &str, data: &str) -> Result<()> {
   // renamed over the real config as a corrupt mix.
   let tmp_path = format!("{}.{}.tmp", path, std::process::id());
   std::fs::write(&tmp_path, data).with_context(|| format!("Failed to write temp file: {}", tmp_path))?;
-  std::fs::rename(&tmp_path, path).with_context(|| format!("Failed to replace config file: {}", path))?;
+  if let Err(e) = std::fs::rename(&tmp_path, path) {
+    // A failed replace (target read-only, locked) must not leave the temp
+    // file behind next to the config.
+    let _ = std::fs::remove_file(&tmp_path);
+    return Err(e).with_context(|| format!("Failed to replace config file: {}", path));
+  }
   Ok(())
 }
 
@@ -26,6 +32,12 @@ pub fn atomic_write_bytes<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> Re
   let path = path.as_ref();
   let tmp_path = path.with_extension(format!("ltx.{}.tmp", std::process::id()));
   std::fs::write(&tmp_path, data).with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
-  std::fs::rename(&tmp_path, path).with_context(|| format!("Failed to replace config file: {}", path.display()))?;
+  if let Err(e) = std::fs::rename(&tmp_path, path) {
+    // Same as above: the rollback path of a faction-editor patch apply can hit
+    // this on a read-only write copy, and must not leave `*.ltx.<pid>.tmp` in
+    // gamedata/configs.
+    let _ = std::fs::remove_file(&tmp_path);
+    return Err(e).with_context(|| format!("Failed to replace config file: {}", path.display()));
+  }
   Ok(())
 }

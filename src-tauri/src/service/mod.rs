@@ -2,6 +2,7 @@ pub mod client;
 pub mod create_release;
 pub mod download_worker;
 pub mod dto;
+pub mod faction_patch;
 pub mod faction_profile_manager;
 pub mod faction_settings;
 pub mod game_tracker;

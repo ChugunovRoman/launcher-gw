@@ -49,6 +49,12 @@ declare interface InstalledPatch {
   provider_id: string;
   installed_at?: string | null;
   notes?: string | null;
+  /// Faction editor props this patch changes; empty when it changes none.
+  fe_fields: string[];
+  /// File name of the settings fragment in `appdata/patches`.
+  fe_fragment?: string | null;
+  /// When the player last applied those settings.
+  fe_applied_at?: string | null;
 }
 declare interface Version {
   id: number;
@@ -302,6 +308,10 @@ declare interface PatchCollectResult {
   repos: RepoPatchReport[];
   changed: number;
   deleted: number;
+  /// Distinct faction editor props changed in the mod's reference config.
+  fe_updated_fields: string[];
+  /// How many (section, key) pairs the settings fragment carries.
+  fe_fragment_entries: number;
 }
 
 // Partial update patches: upload result (stage 2)
@@ -344,6 +354,9 @@ declare interface PatchInfo {
   notes: string | null;
   size: number | null;
   is_next: boolean;
+  /// Faction editor props this patch changes, from the release index.
+  /// Empty when the index has no entry for it (API fallback path).
+  updated_fields: string[];
 }
 declare interface PatchCheckResult {
   patches: PatchInfo[];
@@ -436,4 +449,27 @@ declare interface FactionApplyResult {
 declare interface FactionProfileItem {
   id: string;
   manifest: FactionBundleManifest;
+}
+
+// --- Faction editor settings carried by a game patch ---
+// plans/launcher/faction-editor-patch-fields-plan.md
+declare interface FePatchInspect {
+  patchName: string;
+  /// Distinct prop names, for the dialog's list. The section each value
+  /// belongs to stays in the fragment on disk and is never sent here.
+  fields: string[];
+  /// How many (section, key) pairs the fragment carries.
+  entries: number;
+  fragmentPath: string;
+  appliedAt: string | null;
+  /// false — the editor was never saved on this install, so there is nothing
+  /// to patch and the shipped defaults already carry the new values.
+  hasPlayerConfig: boolean;
+}
+declare interface FePatchApplyResult {
+  outcome: "applied" | "failed" | "rolledBack";
+  applied: number;
+  skippedSections: string[];
+  warnings: string[];
+  backupPath: string | null;
 }
