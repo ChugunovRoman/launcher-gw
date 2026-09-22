@@ -563,6 +563,85 @@ pub async fn clear_all() {
     log::info!("http_cache: cleared all cached entries");
 }
 
+/// Drop every cached response whose URL contains `needle`.
+///
+/// Needed because the TTL is what makes a listing stale, not an explicit
+/// invalidation: right after creating a release the launcher rebuilds the
+/// index, and a releases listing cached minutes earlier would not contain the
+/// release that was just created, so the published index would silently omit
+/// it. Returns how many entries were dropped.
+pub async fn invalidate_urls_containing(needle: &str) -> usize {
+    let _guard = fetch_lock().lock().await;
+    let dir = match cache_dir() {
+        Ok(d) => d,
+        Err(_) => return 0,
+    };
+    let dropped = invalidate_in_dir(dir, needle);
+    if dropped > 0 {
+        log::info!("http_cache: dropped {} entry(ies) matching '{}'", dropped, needle);
+    }
+    dropped
+}
+
+/// Body of `invalidate_urls_containing`, split out so it can be tested against
+/// a temp directory (the real cache dir is a process-wide `OnceLock`).
+fn invalidate_in_dir(dir: &std::path::Path, needle: &str) -> usize {
+    let mut dropped = 0usize;
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let Some(hash) = name.strip_suffix(".meta.json") else { continue };
+        // A meta file that cannot be parsed has no URL to match on; leaving it
+        // alone keeps this from turning into a blanket cache wipe.
+        let Ok(meta) = read_meta(&path) else { continue };
+        if !meta.url.contains(needle) {
+            continue;
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(dir.join(format!("{}.body", hash)));
+        dropped += 1;
+    }
+
+    dropped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalidate_in_dir_drops_only_matching_pairs() {
+        let dir = std::env::temp_dir().join(format!("http_cache_inv_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let write = |hash: &str, url: &str| {
+            let meta = CacheMeta { etag: None, fetched_at: chrono::Utc::now().to_rfc3339(), url: url.to_owned() };
+            fs::write(dir.join(format!("{}.meta.json", hash)), serde_json::to_vec(&meta).unwrap()).unwrap();
+            fs::write(dir.join(format!("{}.body", hash)), b"x").unwrap();
+        };
+        write("aaa", "https://api.github.com/repos/o/r/releases?per_page=100&page=1");
+        write("bbb", "https://raw.githubusercontent.com/o/index/master/index.json");
+        write("ccc", "https://gitlab.com/api/v4/projects/1/releases");
+        // A corrupt meta file must be left alone rather than blindly removed.
+        fs::write(dir.join("ddd.meta.json"), b"not json").unwrap();
+        fs::write(dir.join("ddd.body"), b"x").unwrap();
+
+        assert_eq!(invalidate_in_dir(&dir, "/releases"), 2);
+
+        for gone in ["aaa.meta.json", "aaa.body", "ccc.meta.json", "ccc.body"] {
+            assert!(!dir.join(gone).exists(), "{} must be dropped", gone);
+        }
+        for kept in ["bbb.meta.json", "bbb.body", "ddd.meta.json", "ddd.body"] {
+            assert!(dir.join(kept).exists(), "{} must be kept", kept);
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
 mod hex {
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
         bytes

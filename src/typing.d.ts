@@ -301,6 +301,8 @@ declare interface RepoPatchReport {
   deleted: number;
   message?: string | null;
 }
+// `upload_patch` takes `updatedFields: string[] | null` — `null` means this
+// session has no prop selection for the folder, so everything staged ships.
 declare interface PatchCollectResult {
   patch_dir: string;
   deleted_files: string[];

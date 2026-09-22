@@ -369,6 +369,13 @@ pub const FE_DEFAULT_CONFIG_REL_PATH: &str = "gamedata/configs/faction_editor_de
 /// exclude in `handlers/patches.rs` spells it too, so keep them on one name.
 pub const PATCHES_DIR_NAME: &str = "patches";
 
+/// Subfolder of a patch folder holding the packed archives, their manifest
+/// and `sha256.txt`. Kept after the upload so a patch can be re-uploaded by
+/// hand; excluded from the archive it lives next to.
+pub const PATCH_ARCHIVE_DIR: &str = "_archive";
+/// Checksums of everything in `PATCH_ARCHIVE_DIR`, in the `sha256sum` format.
+pub const PATCH_ARCHIVE_SHA_FILE: &str = "sha256.txt";
+
 /// Name of the fragment a patch carries, inside the patch archive and then in
 /// the player's `appdata/patches`: `<patch tag>` + this suffix.
 pub const FE_PATCH_FRAGMENT_SUFFIX: &str = ".faction_editor_patch.ltx";

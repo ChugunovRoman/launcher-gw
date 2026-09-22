@@ -785,7 +785,28 @@ async fn start_install_patch_inner(
         install_log(app, format!("Patch carries {} faction editor setting(s)", fragment.fields.len()));
         (fragment.fields, Some(fragment_name))
       }
-      Ok(None) => (Vec::new(), None),
+      Ok(None) => {
+        // The manifest advertising props while the archive carries no fragment
+        // means the two were not produced by the same pack run — a hand-mixed
+        // release. Nothing to apply either way, but say so: without this the
+        // only symptom is a missing "apply settings" button.
+        if !manifest.updated_fields.is_empty() {
+          log::warn!(
+            "patch_install: manifest of '{}' lists {} faction editor prop(s) but the archive carries no fragment at {:?}",
+            patch_name,
+            manifest.updated_fields.len(),
+            fragment_path
+          );
+          install_log(
+            app,
+            format!(
+              "Manifest lists {} faction editor setting(s), but the archive carries none — manifest.json and data*.zip come from different builds. Re-upload the patch.",
+              manifest.updated_fields.len()
+            ),
+          );
+        }
+        (Vec::new(), None)
+      }
       Err(e) => {
         log::warn!("patch_install: ignoring invalid faction editor fragment {:?}: {}", fragment_path, e);
         install_log(app, format!("Faction editor settings of this patch are invalid and were skipped: {}", e));

@@ -163,6 +163,13 @@ fn url_file_name(url: &str) -> Option<&str> {
 
 /// Collect the release index from live API data (no network commit).
 async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<ReleaseIndex> {
+  // Providers' release listings (and the patch manifests read below) are
+  // cached on disk for CACHE_TTL_RELEASE_SECS. The index is published right
+  // after a release is created, so building it from a listing minutes old
+  // would silently omit that release — and the publish overwrites the index,
+  // so the omission is what players get. Always start from live data.
+  crate::utils::http_cache::invalidate_urls_containing("/releases").await;
+
   let is_gitlab = api.is_suppot_subgroups();
 
   // Load the existing published index so we can carry over entries that fail

@@ -306,7 +306,7 @@
         baseReleaseTag: fromCollect && patchResult ? patchResult.base_tag : null,
         // Faction editor props kept by the developer; the backend rebuilds the
         // fragment from them (empty list = no fragment travels with the patch).
-        updatedFields: fromCollect && patchResult ? patchResult.fe_updated_fields.filter((f) => feSelectedFields.has(f)) : [],
+        updatedFields: fromCollect && patchResult ? patchResult.fe_updated_fields.filter((f) => feSelectedFields.has(f)) : null,
       });
       updateUploadState(releaseNameStr, (s) => {
         s.result = result;
