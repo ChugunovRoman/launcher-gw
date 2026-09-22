@@ -412,7 +412,12 @@
       "stageDownload": "Downloading",
       "stageUnpack": "Unpacking",
       "stageDelete": "Deleting files",
-      "checkFailed": "Failed to check for updates"
+      "checkFailed": "Failed to check for updates",
+      "saveBreakWarning": "This patch updates level files. Existing save games will stop working after you install it. If you have a run in progress, you can finish it first and install the patch afterwards, then start a new game.",
+      "saveBreakContinue": "Install",
+      "saveBreakBadge": "Breaks existing saves",
+      "saveBreakDevWarning": "The patch contains level or spawn files. It will be marked as incompatible with existing saves.",
+      "installVersionGone": "The version is no longer available, the patch was not installed. Refresh the list and try again."
     },
     "runParams": {
       "apply": {

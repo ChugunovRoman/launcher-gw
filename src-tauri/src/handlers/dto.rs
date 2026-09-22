@@ -111,6 +111,11 @@ pub struct ReleaseManifest {
   /// manifests) cannot lose it — see the plan §2.4.
   #[serde(default)]
   pub updated_fields: Vec<String>,
+  /// True when the patch touches spawn/level files and old save games stop
+  /// working after installing it. Carried for the same reason as
+  /// `updated_fields`: a republish rebuilds the index from the manifests.
+  #[serde(default)]
+  pub breaks_saves: bool,
 }
 
 /// Patch metadata passed to the packer when building a patch upload.
@@ -124,6 +129,10 @@ pub struct PatchMeta {
   pub deleted_files: Vec<String>,
   #[serde(default)]
   pub updated_fields: Vec<String>,
+  /// Recomputed by `upload_patch` from the actual folder contents — see
+  /// `patch_collect::scan_save_breaking`. Old `PatchMeta`s default to false.
+  #[serde(default)]
+  pub breaks_saves: bool,
 }
 
 #[derive(Clone, Serialize)]

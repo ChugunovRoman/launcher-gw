@@ -376,6 +376,26 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
         // Same reason as base_patch: a republish rebuilds every entry from
         // scratch, so anything not read back from the manifest is lost.
         let updated_fields = patch_manifest.as_ref().map(|m| m.updated_fields.clone()).unwrap_or_default();
+        // Never downgrade the save-breaking flag on an unreadable manifest: a single
+        // failed CDN fetch would drop the warning for good (this path does NOT set
+        // patches_incomplete, so the carry-over below cannot save it either). Fall
+        // back to whatever was published for this very tag last time.
+        let breaks_saves = match patch_manifest.as_ref() {
+          Some(m) => m.breaks_saves,
+          None => {
+            let previous = old_entries_by_name
+              .get(&normalize_release_name(&release.name))
+              .and_then(|old| old.patches.iter().find(|p| p.tag == rr.tag_name))
+              .map(|p| p.breaks_saves)
+              .unwrap_or(false);
+            log::warn!(
+              "index: manifest of patch '{}' is unreadable, keeping published breaks_saves={}",
+              &rr.tag_name,
+              previous
+            );
+            previous
+          }
+        };
         if let Some(m) = &patch_manifest {
           let by_name: HashMap<&str, &ReleaseManifestFile> = m.files.iter().map(|f| (f.name.as_str(), f)).collect();
           for asset in patch_assets.iter_mut() {
@@ -394,6 +414,7 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
           manifest: manifest_asset_url,
           assets: patch_assets,
           updated_fields,
+          breaks_saves,
         });
       }
     }

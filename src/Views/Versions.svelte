@@ -25,6 +25,9 @@
     patchInstallProgress,
     showDlgPatchNotes,
     patchNotesData,
+    showDlgPatchSaveWarning,
+    patchSaveWarningContext,
+    patchSaveWarningProceed,
     fetchLocalVersions,
   } from "../store/main";
   import { versions, updateVersionProgress, selectedVersion, hasAnyLocalVersion, updateEachVersion, mainVersion } from "../store/upload";
@@ -86,6 +89,26 @@
   // Clear download info once the install leaves the download stage.
   $effect(() => {
     if ($patchInstallProgress && $patchInstallProgress.stage !== "download") patchDownloadInfo = null;
+  });
+
+  // The save-break warning dialog renders at the app root and cannot call this
+  // view's install handler, so its "continue" arrives as a store signal. The
+  // signal carries the version/patch itself, so it does not depend on the
+  // dialog context that closing the dialog clears.
+  $effect(() => {
+    const ctx = $patchSaveWarningProceed;
+    if (!ctx) return;
+    patchSaveWarningProceed.set(null);
+
+    const version = [...$localVersions.values()].find((v) => v.name === ctx.version);
+    if (!version) {
+      // The versions list changed between opening the dialog and confirming.
+      // Say so instead of leaving the player with a closed dialog and nothing
+      // installed, as if the click had been swallowed.
+      patchErrors = new Map(patchErrors).set(ctx.version, $_("app.patches.installVersionGone"));
+      return;
+    }
+    handleInstallPatch(version, ctx.patchName);
   });
 
   async function handleCheckPatches(version: Version) {
@@ -846,13 +869,26 @@
                              space and leave this tag floating mid-row. -->
                         <span class="patch-tag">{$_("app.factionSettings.patchHasSettings")}</span>
                       {/if}
+                      {#if patch.breaks_saves}
+                        <!-- Warn before the click, not only in the confirm dialog. -->
+                        <span class="patch-tag danger">{$_("app.patches.saveBreakBadge")}</span>
+                      {/if}
                       {#if patch.is_next}
                         <button
                           type="button"
                           class="download-btn patch-install-btn"
                           class:patch-install-btn-busy={installingPatch?.version === name}
                           disabled={installingPatch?.version === name}
-                          onclick={() => handleInstallPatch(version, patch.name)}>
+                          onclick={() => {
+                            // Save-breaking patches need an explicit confirm:
+                            // after the install the old saves are gone for good.
+                            if (patch.breaks_saves) {
+                              patchSaveWarningContext.set({ version: version.name, patchName: patch.name });
+                              $showDlgPatchSaveWarning = true;
+                            } else {
+                              handleInstallPatch(version, patch.name);
+                            }
+                          }}>
                           {#if installingPatch?.version === name}
                             <Spin size={12} /> {$_("app.patches.installing")}
                           {:else}
@@ -1772,6 +1808,11 @@
     color: #777;
     font-size: 0.75rem;
     font-style: italic;
+  }
+  /* Save-breaking marker: must not read like the neutral settings tag. */
+  .patch-tag.danger {
+    color: #ff6b6b;
+    font-style: normal;
   }
   .patch-up-to-date {
     color: #4caf50;

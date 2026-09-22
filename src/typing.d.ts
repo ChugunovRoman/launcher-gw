@@ -314,6 +314,10 @@ declare interface PatchCollectResult {
   fe_updated_fields: string[];
   /// How many (section, key) pairs the settings fragment carries.
   fe_fragment_entries: number;
+  /// True when the diff touches spawn/level files — old saves break.
+  breaks_saves: boolean;
+  /// Marker paths that tripped the flag, shown in the developer UI.
+  save_breaking_files: string[];
 }
 
 // Partial update patches: upload result (stage 2)
@@ -359,6 +363,9 @@ declare interface PatchInfo {
   /// Faction editor props this patch changes, from the release index.
   /// Empty when the index has no entry for it (API fallback path).
   updated_fields: string[];
+  /// True when the patch updates level/spawn files and old saves stop
+  /// working after installing it — the UI asks for confirmation first.
+  breaks_saves: boolean;
 }
 declare interface PatchCheckResult {
   patches: PatchInfo[];

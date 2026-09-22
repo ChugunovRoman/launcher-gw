@@ -368,12 +368,32 @@ pub async fn upload_patch(
     }
   };
 
+  // Source of truth for the save-breaking flag: re-scan the actual folder and
+  // the delete list. `upload_patch` receives a folder the collector may have
+  // built in an earlier session (or that was touched by hand), so the collect
+  // result cannot be trusted here. The walk is cheap — the packer reads the
+  // same files right after.
+  let save_breaking_files = patch_collect::scan_save_breaking(Path::new(&patchDir), &deletedFiles);
+  let breaks_saves = !save_breaking_files.is_empty();
+  if breaks_saves {
+    let shown = save_breaking_files.iter().take(20).cloned().collect::<Vec<_>>().join(", ");
+    patch_upload_log(
+      &app,
+      format!(
+        "WARNING: this patch breaks existing save games, marker files ({}): {}",
+        save_breaking_files.len(),
+        shown
+      ),
+    );
+  }
+
   let patch_meta = PatchMeta {
     patch_name: tag_name.clone(),
     base_patch: base_patch.clone(),
     base_release_tag: baseReleaseTag.clone().filter(|s| !s.is_empty()),
     deleted_files: deletedFiles.clone(),
     updated_fields: fe_updated_fields,
+    breaks_saves,
   };
 
   patch_upload_log(&app, "Packing patch archives ...".to_string());

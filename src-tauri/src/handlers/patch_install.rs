@@ -37,6 +37,11 @@ pub struct PatchInfo {
   /// UI flag a patch before it is installed; the API fallback below has no
   /// manifests at hand, so it leaves this empty.
   pub updated_fields: Vec<String>,
+  /// True when the patch touches spawn/level files and old save games stop
+  /// working after installing it — the UI asks for confirmation first. From
+  /// the release index; the API fallback below pulls the manifest for the
+  /// next-to-install patch only.
+  pub breaks_saves: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -367,6 +372,7 @@ pub(crate) async fn get_version_patches_impl(
           size: if size > 0 { Some(size) } else { None },
           is_next,
           updated_fields: patch.updated_fields.clone(),
+          breaks_saves: patch.breaks_saves,
         });
       }
 
@@ -423,12 +429,39 @@ pub(crate) async fn get_version_patches_impl(
       if total > 0 { Some(total) } else { None }
     };
 
+    // Unlike `updated_fields`, the save-breaking flag must not silently
+    // default to false here: a missed warning on a save-breaking patch is
+    // exactly the problem this flag exists for. Pull the manifest (one
+    // request) for the one patch the player can actually install next; the
+    // rest of the chain is not installable until its turn, and installed
+    // patches no longer matter.
+    let breaks_saves = if is_next {
+      let manifest_asset = release.assets.iter().find(|a| a.name == MANIFEST_NAME);
+      match manifest_asset {
+        Some(a) => match download_manifest(&api_client, &a.download_link).await {
+          Ok(m) => m.breaks_saves,
+          Err(e) => {
+            log::warn!(
+              "get_version_patches: cannot fetch manifest of next patch '{}': {} — assuming it does not break saves",
+              &name,
+              e
+            );
+            false
+          }
+        },
+        None => false,
+      }
+    } else {
+      false
+    };
+
     patches.push(PatchInfo {
       name,
       notes: release.body.clone(),
       size,
       is_next,
       updated_fields: Vec::new(),
+      breaks_saves,
     });
   }
 

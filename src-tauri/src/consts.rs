@@ -364,6 +364,18 @@ pub const FE_VISUALS_SECTION_MARKER: &str = "_visuals_";
 /// from patches entirely) is what produces a patch's settings fragment.
 pub const FE_DEFAULT_CONFIG_REL_PATH: &str = "gamedata/configs/faction_editor_default_config.ltx";
 
+/// Path markers (globs, relative to the game root, `/`-separated) of files
+/// whose change or deletion in a patch breaks existing save games: they sit
+/// inside the game graph / AI maps, and rebuilding those renumbers game and
+/// level vertices that old saves reference. Matched case-insensitively like
+/// the exclude masks; a deleted marker file counts the same as a changed one.
+pub const SAVE_BREAKING_GLOBS: &[&str] = &[
+  "gamedata/spawns/all.spawn",
+  "gamedata/levels/*/level.ai",
+  "gamedata/levels/*/level.game",
+  "gamedata/levels/*/level.spawn",
+];
+
 /// `appdata/<this>`: installed-patch markers and the settings fragments
 /// patches carry. `patch_markers::patches_dir` builds the path; the pack
 /// exclude in `handlers/patches.rs` spells it too, so keep them on one name.

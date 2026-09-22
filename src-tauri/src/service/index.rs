@@ -76,6 +76,11 @@ pub struct IndexPatch {
   /// truth. Empty for patches that change no settings.
   #[serde(default)]
   pub updated_fields: Vec<String>,
+  /// True when the patch breaks existing save games, mirrored from its
+  /// `manifest.json`. Drives the confirmation dialog before install; false
+  /// in old indexes (the field post-dates schema 1).
+  #[serde(default)]
+  pub breaks_saves: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

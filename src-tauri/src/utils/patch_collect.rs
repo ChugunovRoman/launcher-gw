@@ -70,6 +70,13 @@ pub struct PatchCollectResult {
   pub fe_updated_fields: Vec<String>,
   /// How many `(section, key)` pairs the settings fragment carries.
   pub fe_fragment_entries: u32,
+  /// True when the diff touches spawn/level files — old save games stop
+  /// working after installing such a patch.
+  pub breaks_saves: bool,
+  /// Paths (relative to the game root, `/`-separated) that tripped the
+  /// save-breaking markers, both changed and deleted. Kept for the developer
+  /// UI; the manifest carries only the boolean.
+  pub save_breaking_files: Vec<String>,
 }
 
 /// Finds all git repository roots under `base` (including `base` itself).
@@ -250,6 +257,60 @@ fn patch_dir_root() -> Result<PathBuf> {
   Ok(root)
 }
 
+/// GlobSet of the save-breaking path markers (`consts::SAVE_BREAKING_GLOBS`),
+/// case-insensitive like the exclude masks: the game tree on Windows may carry
+/// `Gamedata/` or `gamedata/` spellings.
+pub(crate) fn build_save_breaking_set() -> GlobSet {
+  let mut builder = GlobSetBuilder::new();
+  for pat in crate::consts::SAVE_BREAKING_GLOBS {
+    builder.add(
+      GlobBuilder::new(pat)
+        .case_insensitive(true)
+        .build()
+        .unwrap_or_else(|e| panic!("invalid save-breaking pattern '{}': {}", pat, e)),
+    );
+  }
+  builder.build().unwrap_or_else(|e| panic!("cannot build save-breaking glob set: {}", e))
+}
+
+/// Records `rel` (already `/`-separated) when it matches a save-breaking
+/// marker. Keeps the list deduplicated — a rename can trip both delta sides.
+fn note_save_breaking(set: &GlobSet, rel_slash: &str, hits: &mut Vec<String>) {
+  if set.is_match(rel_slash) && !hits.iter().any(|h| h.eq_ignore_ascii_case(rel_slash)) {
+    hits.push(rel_slash.to_string());
+  }
+}
+
+/// Save-breaking re-scan of a patch upload folder. `upload_patch` cannot trust
+/// the collector's verdict alone: the folder may have been collected in an
+/// earlier session or edited by hand. Walks the folder and the delete list
+/// against the same markers. Cheap — patch folders are small, and the packer
+/// reads these files right after anyway.
+pub fn scan_save_breaking(patch_dir: &Path, deleted_files: &[String]) -> Vec<String> {
+  let set = build_save_breaking_set();
+  let mut hits: Vec<String> = Vec::new();
+
+  for entry in walkdir::WalkDir::new(patch_dir)
+    .follow_links(false)
+    .into_iter()
+    .filter_entry(|e| e.file_name() != crate::consts::PATCH_ARCHIVE_DIR)
+    .filter_map(|e| e.ok())
+  {
+    if !entry.file_type().is_file() {
+      continue;
+    }
+    if let Ok(rel) = entry.path().strip_prefix(patch_dir) {
+      note_save_breaking(&set, &to_rel_slash(rel), &mut hits);
+    }
+  }
+
+  for rel in deleted_files {
+    note_save_breaking(&set, rel, &mut hits);
+  }
+
+  hits
+}
+
 /// Collects the patch for every repo under `source_dir`.
 ///
 /// `exclude_patterns` are glob patterns (relative to `source_dir`) for files
@@ -285,6 +346,7 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
 
   // Build a GlobSet for fast matching of excluded paths.
   let exclude_set = build_exclude_set(&exclude_patterns)?;
+  let save_breaking_set = build_save_breaking_set();
 
   let patch_dir = patch_dir_root()?.join(format!("gw-patch-{}", Uuid::new_v4()));
 
@@ -297,11 +359,22 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
     deleted: 0,
     fe_updated_fields: Vec::new(),
     fe_fragment_entries: 0,
+    breaks_saves: false,
+    save_breaking_files: Vec::new(),
   };
   let mut fe_fragment: Option<FePatchFragment> = None;
 
   for repo_dir in find_git_roots(&source_dir) {
-    let report = collect_repo(&repo_dir, &source_dir, &patch_dir, &mut result.deleted_files, exclude_set.as_ref(), &mut fe_fragment);
+    let report = collect_repo(
+      &repo_dir,
+      &source_dir,
+      &patch_dir,
+      &mut result.deleted_files,
+      exclude_set.as_ref(),
+      &mut fe_fragment,
+      &save_breaking_set,
+      &mut result.save_breaking_files,
+    );
     log::debug!(
       "collect_patch repo {:?}: status={:?} changed={} deleted={}",
       report.repo_rel_path,
@@ -318,6 +391,14 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
     result.changed += report.changed;
     result.deleted += report.deleted;
     result.repos.push(report);
+  }
+
+  result.breaks_saves = !result.save_breaking_files.is_empty();
+  if result.breaks_saves {
+    log::warn!(
+      "collect_patch: patch breaks existing saves, markers: {}",
+      result.save_breaking_files.join(", ")
+    );
   }
 
   // Stage the faction-editor settings fragment inside the patch folder. It
@@ -340,10 +421,11 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
   }
 
   log::info!(
-    "collect_patch done: repos: {}, changed: {}, deleted: {}, patch_dir: {:?}",
+    "collect_patch done: repos: {}, changed: {}, deleted: {}, breaks_saves: {}, patch_dir: {:?}",
     result.repos.len(),
     result.changed,
     result.deleted,
+    result.breaks_saves,
     result.patch_dir
   );
 
@@ -376,6 +458,8 @@ fn collect_repo(
   deleted_files: &mut Vec<String>,
   exclude_set: Option<&GlobSet>,
   fe_fragment: &mut Option<FePatchFragment>,
+  save_breaking_set: &GlobSet,
+  save_breaking_files: &mut Vec<String>,
 ) -> RepoPatchReport {
   let rel_prefix = repo_dir
     .strip_prefix(source_dir)
@@ -458,6 +542,8 @@ fn collect_repo(
         if exclude_set.map_or(false, |s| s.is_match(&rel)) {
           continue;
         }
+        // A deleted level/spawn file breaks saves exactly like a changed one.
+        note_save_breaking(save_breaking_set, &to_rel_slash(&rel), save_breaking_files);
         deleted_files.push(to_rel_slash(&rel));
         report.deleted += 1;
       }
@@ -500,6 +586,8 @@ fn collect_repo(
           continue;
         }
 
+        // Only files that actually ship can break saves — after the exclude
+        // filter and the on-disk check, same conditions as the copy below.
         let src = repo_dir.join(new_path);
         if !src.is_file() {
           // Committed but missing on disk (e.g. sparse checkout) — skip with a note.
@@ -508,6 +596,7 @@ fn collect_repo(
             .get_or_insert_with(|| "some files are missing on disk and were skipped".to_string());
           continue;
         }
+        note_save_breaking(save_breaking_set, &to_rel_slash(&rel), save_breaking_files);
 
         let dest = patch_dir.join(&rel);
         if let Some(parent) = dest.parent() {
@@ -559,5 +648,66 @@ mod tests {
   #[test]
   fn empty_exclude_list_yields_no_set() {
     assert!(build_exclude_set(&[]).expect("ok").is_none());
+  }
+
+  /// Every save-breaking marker must match its intended spelling and ignore
+  /// case, while neighbouring level files (level.prj, other .spawn files)
+  /// stay neutral — a false positive would warn on every ordinary patch.
+  #[test]
+  fn save_breaking_markers_match_their_files_only() {
+    let set = build_save_breaking_set();
+
+    for hits in [
+      "gamedata/spawns/all.spawn",
+      "gamedata/levels/l01_escape/level.ai",
+      "gamedata/levels/k01_marsh/level.game",
+      "gamedata/levels/zaton/level.spawn",
+      "GAMEDATA/Spawns/ALL.SPAWN",
+      "Gamedata/Levels/L01_Escape/Level.AI",
+    ] {
+      assert!(set.is_match(hits), "{} must be a save-breaking marker", hits);
+    }
+
+    for neutral in [
+      "gamedata/levels/l01_escape/level.prj",
+      "gamedata/levels/l01_escape/level.detail",
+      "gamedata/levels/l01_escape/level.ltx",
+      "gamedata/configs/creatures/m_stalker.ltx",
+      "gamedata/spawns/alife.psua", // not all.spawn
+      "appdata/patches/x.faction_editor_patch.ltx",
+    ] {
+      assert!(!set.is_match(neutral), "{} must NOT be a save-breaking marker", neutral);
+    }
+  }
+
+  /// The upload-time re-scan walks the folder and the delete list: deleted
+  /// markers count the same as shipped ones, and unrelated files (the pack
+  /// dir of a previous upload, the fe fragment) do not.
+  #[test]
+  fn scan_save_breaking_covers_files_and_deletions() {
+    let root = std::env::temp_dir().join(format!("gw_scan_save_breaking_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("gamedata/levels/l01_escape")).unwrap();
+    fs::create_dir_all(root.join("gamedata/configs")).unwrap();
+    fs::write(root.join("gamedata/levels/l01_escape/level.ai"), b"ai").unwrap();
+    fs::write(root.join("gamedata/configs/weapons.ltx"), b"ltx").unwrap();
+
+    let mut hits = scan_save_breaking(&root, &["gamedata/spawns/all.spawn".to_string()]);
+    hits.sort();
+    assert_eq!(
+      hits,
+      vec![
+        "gamedata/levels/l01_escape/level.ai".to_string(),
+        "gamedata/spawns/all.spawn".to_string(),
+      ]
+    );
+
+    // No markers anywhere — empty result, including an empty delete list.
+    fs::remove_dir_all(&root).unwrap();
+    fs::create_dir_all(root.join("gamedata/configs")).unwrap();
+    fs::write(root.join("gamedata/configs/weapons.ltx"), b"ltx").unwrap();
+    assert!(scan_save_breaking(&root, &[]).is_empty());
+
+    fs::remove_dir_all(&root).ok();
   }
 }

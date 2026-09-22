@@ -94,6 +94,17 @@ export const patchInstallLog = writable<string[]>([]);
 export const showDlgPatchNotes = writable(false);
 export const patchNotesData = writable<{ title: string; notes: string | null } | null>(null);
 
+// Save-break warning: raised when the player tries to install a patch flagged
+// as incompatible with existing saves. The dialog lives at the app root and
+// cannot reach the install handler of the Versions view, so "continue" is
+// signalled through `patchSaveWarningProceed` (consumed in Versions.svelte).
+// The signal carries the version/patch itself instead of pointing at
+// `patchSaveWarningContext`: closing the dialog clears that context, and the
+// clear would otherwise race the consumer reading it.
+export const showDlgPatchSaveWarning = writable(false);
+export const patchSaveWarningContext = writable<{ version: string; patchName: string } | null>(null);
+export const patchSaveWarningProceed = writable<{ version: string; patchName: string } | null>(null);
+
 export function updateConfig<F extends keyof AppConfig>(field: F, value: any) {
   appConfig.update(cfg => {
     cfg[field] = value;

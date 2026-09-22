@@ -782,6 +782,24 @@
               <span>{$_("app.releases.patch.deleted")}{patchResult.deleted}</span>
               <span class="patch-dir">{$_("app.releases.patch.patchDir")}{patchResult.patch_dir}</span>
             </div>
+
+            <!-- Save-break detector: the patch carries level/spawn files, so
+                 players' old saves stop working after installing it. Shown
+                 before upload so such a patch is never published unnoticed.
+                 Capped at the first 20 markers — enough to see the cause. -->
+            {#if patchResult.breaks_saves}
+              <div class="patch-save-break">
+                <span>{$_("app.patches.saveBreakDevWarning")}</span>
+                <ul>
+                  {#each patchResult.save_breaking_files.slice(0, 20) as file}
+                    <li>{file}</li>
+                  {/each}
+                  {#if patchResult.save_breaking_files.length > 20}
+                    <li>… +{patchResult.save_breaking_files.length - 20}</li>
+                  {/if}
+                </ul>
+              </div>
+            {/if}
             <div class="patch-repos">
               <span class="patch-repos-title">{$_("app.releases.patch.reposReport")}</span>
               {#each patchResult.repos as repo}
@@ -1305,6 +1323,24 @@
 
   .patch-repos {
     margin-top: 1rem;
+  }
+
+  /* Save-break warning in the collect report: red and loud — this is the one
+     thing in the report the developer must not scroll past. */
+  .patch-save-break {
+    margin-top: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid #f44336;
+    border-radius: 6px;
+    color: #ff8a80;
+    font-size: 0.85rem;
+  }
+  .patch-save-break ul {
+    margin: 0.4rem 0 0 1.2rem;
+    padding: 0;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #ddd;
   }
 
   .patch-repos-title {

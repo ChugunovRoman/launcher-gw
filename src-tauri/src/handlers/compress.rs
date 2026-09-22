@@ -358,6 +358,7 @@ fn pack_split_archives_blocking(
     base_release_tag: None,
     deleted_files: vec![],
     updated_fields: vec![],
+    breaks_saves: false,
   };
 
   // Optional launcher exe (e.g. Stalker-CoC.exe) recorded in the manifest as a
@@ -541,6 +542,7 @@ fn pack_split_archives_blocking(
     manifest.base_release_tag = pm.base_release_tag.clone().filter(|s| !s.is_empty());
     manifest.deleted_files = pm.deleted_files.clone();
     manifest.updated_fields = pm.updated_fields.clone();
+    manifest.breaks_saves = pm.breaks_saves;
   }
 
   let manifest_path = Path::new(&targetPath).join(MANIFEST_NAME);
@@ -670,6 +672,7 @@ mod tests {
       base_release_tag: None,
       deleted_files: vec![],
       updated_fields: vec![],
+      breaks_saves: false,
     };
     fs::write(dir.join(MANIFEST_NAME), serde_json::to_string(&prev).unwrap()).unwrap();
     fs::write(dir.join("data1.zip"), b"old").unwrap();
