@@ -831,7 +831,12 @@
               <!-- Installed patches -->
               {#if version.installed_updates.length > 0}
                 <div class="patch-subsection">{$_("app.patches.installed")}</div>
-                {#each version.installed_updates as patch}
+                <!-- Newest first. Reversed here and not in the backend:
+                     read_installed_patches() sorts by (installed_at, name)
+                     ascending on purpose, and start_install_patch takes its
+                     .last() as the base of the patch chain. Copy before
+                     reverse() — it mutates the array in place. -->
+                {#each [...version.installed_updates].reverse() as patch}
                   <div class="patch-row">
                     <span class="patch-name clickable" onclick={() => openPatchNotes(patch.name, patch.notes ?? null)}>
                       {patch.name}
