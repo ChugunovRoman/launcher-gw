@@ -402,11 +402,7 @@ pub(crate) async fn get_version_patches_impl(
   }
 
   let mut sorted_releases = releases;
-  sorted_releases.sort_by(|a, b| {
-    let ta = a.created_at.as_deref().unwrap_or("");
-    let tb = b.created_at.as_deref().unwrap_or("");
-    ta.cmp(tb)
-  });
+  sorted_releases.sort_by(|a, b| a.release_date().cmp(b.release_date()));
 
   let mut found_next = false;
   let mut patches: Vec<PatchInfo> = Vec::new();

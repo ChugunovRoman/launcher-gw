@@ -46,6 +46,8 @@ pub async fn __get_repo_releases(s: &Gitlab, project_id: &str) -> Result<Vec<Rep
       name: r.name,
       body: r.description,
       created_at: r.created_at,
+      // GitLab's created_at is already the release creation date.
+      published_at: None,
       assets: r.assets.links.into_iter().map(|a| RepoReleaseAsset {
         name: a.name,
         size: None, // GitLab does not expose size in link objects.

@@ -57,8 +57,14 @@ pub struct ReleaseGithub {
   // Optional fields for the release listing (patch chain / release notes).
   #[serde(default)]
   pub body: Option<String>,
+  /// Date of the COMMIT the tag points to, not of the release: every patch
+  /// release of an updates repo tags the same commit, so it is identical
+  /// for all of them. Use `published_at` to order releases.
   #[serde(default)]
   pub created_at: Option<String>,
+  /// When the release was published (`None` for drafts).
+  #[serde(default)]
+  pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

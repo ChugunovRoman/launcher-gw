@@ -613,14 +613,26 @@ async fn run_upload_patch(
   reporter.log(format!("Updates repo: {}", &project_id));
 
   // Detect base_patch = latest existing patch release in the chain.
-  let mut repo_releases = api.get_repo_releases(&project_id).await.map_err(|e| {
+  //
+  // The listing must be fresh: it is cached for CACHE_TTL_RELEASE_SECS, and
+  // a re-upload right after deleting a half-uploaded release on the
+  // provider's site would still see that release — the patch then became its
+  // own base (0.5.5-patch3 shipped with base_patch = 0.5.5-patch3 and no
+  // player could install it).
+  crate::utils::http_cache::invalidate_urls_containing(&format!("{}/releases", &project_id)).await;
+  let repo_releases = api.get_repo_releases(&project_id).await.map_err(|e| {
     log_full_error(&e);
     reporter.fail(Stage::Prepare, e.to_string(), None)
   })?;
-  // Newest first (None sorts last).
-  repo_releases.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-  let base_patch = repo_releases.first().map(|r| r.tag_name.clone());
   let already_exists = repo_releases.iter().any(|r| r.tag_name == tag_name);
+  // A patch is never its own base: its own release (a leftover of an
+  // interrupted upload) is not a candidate. Newest by publication date —
+  // GitHub's created_at is the tagged commit's date, equal for all patches.
+  let base_patch = repo_releases
+    .iter()
+    .filter(|r| r.tag_name != tag_name)
+    .max_by(|a, b| a.release_date().cmp(b.release_date()))
+    .map(|r| r.tag_name.clone());
   if let Some(bp) = &base_patch {
     reporter.log(format!("Base patch: {}", bp));
   } else {

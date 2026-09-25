@@ -68,10 +68,23 @@ pub struct RepoReleaseInfo {
   pub name: String,
   #[serde(default)]
   pub body: Option<String>,
+  /// GitHub: date of the tagged commit (the same for all patches of an
+  /// updates repo); GitLab: release creation date. Order by `release_date`.
   #[serde(default)]
   pub created_at: Option<String>,
+  /// GitHub publication date; `None` on GitLab.
+  #[serde(default)]
+  pub published_at: Option<String>,
   #[serde(default)]
   pub assets: Vec<RepoReleaseAsset>,
+}
+
+impl RepoReleaseInfo {
+  /// Date to order releases by (RFC 3339, compares as a string): the
+  /// publication date when the provider has one, else `created_at`.
+  pub fn release_date(&self) -> &str {
+    self.published_at.as_deref().or(self.created_at.as_deref()).unwrap_or("")
+  }
 }
 
 #[derive(Deserialize, Debug, Clone)]

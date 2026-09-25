@@ -209,6 +209,7 @@ pub async fn __get_repo_releases(s: &Github, project_id: &str) -> Result<Vec<Rep
       name: r.name,
       body: r.body,
       created_at: r.created_at,
+      published_at: r.published_at,
       assets: r.assets.into_iter().map(|a| RepoReleaseAsset {
         name: a.name,
         size: Some(a.size),
