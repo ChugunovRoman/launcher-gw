@@ -652,7 +652,16 @@ impl AppConfig {
         reconcile_vid_modes(&modes, &mut config.vid_mode_latest, &mut config.run_params.vid_mode);
         config.vid_modes = modes;
       }
-      _ => { /* keep the existing list if resolution probe fails */ }
+      probe => {
+        // Keep the existing list if the resolution probe fails, but never leave
+        // the resolution empty: an empty `run_params.vid_mode` is written to
+        // user.ltx as a bare `vid_mode` line and the game starts in 0x0 mode.
+        match probe {
+          Err(e) => log::warn!("get_available_resolutions failed, keeping saved list: {}", e),
+          Ok(_) => log::warn!("get_available_resolutions returned no modes, keeping saved list"),
+        }
+        fill_empty_vid_modes(&config.vid_modes, &mut config.vid_mode_latest, &mut config.run_params.vid_mode);
+      }
     }
 
     // Migration: latest_pid was a bare pid that Windows pid reuse turned into
@@ -756,6 +765,23 @@ fn reconcile_vid_modes(modes: &[String], vid_mode_latest: &mut String, vid_mode:
   }
 }
 
+/// Fallback when the OS resolution list is unavailable: only EMPTY values are
+/// replaced with the best saved mode (`modes` is sorted best-first). Non-empty
+/// values are kept — the saved list may be stale, the value may still be valid.
+fn fill_empty_vid_modes(modes: &[String], vid_mode_latest: &mut String, vid_mode: &mut String) {
+  let Some(first) = modes.first() else { return };
+
+  if vid_mode_latest.trim().is_empty() {
+    log::warn!("vid_mode_latest is empty, falling back to '{}'", first);
+    *vid_mode_latest = first.clone();
+  }
+
+  if vid_mode.trim().is_empty() {
+    log::warn!("run_params.vid_mode is empty, falling back to '{}'", first);
+    *vid_mode = first.clone();
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -853,5 +879,29 @@ mod tests {
 
     assert_eq!(latest, "1920x1080 (60Hz)");
     assert_eq!(current, "1280x720 (60Hz)");
+  }
+
+  #[test]
+  fn reconcile_vid_modes_replaces_empty_value_with_best_mode() {
+    let modes = vec!["1920x1080 (60Hz)".to_string(), "1280x720 (60Hz)".to_string()];
+    let mut latest = "1920x1080 (60Hz)".to_string();
+    let mut current = String::new();
+
+    reconcile_vid_modes(&modes, &mut latest, &mut current);
+
+    assert_eq!(current, "1920x1080 (60Hz)");
+  }
+
+  #[test]
+  fn fill_empty_vid_modes_fills_only_empty_values() {
+    let modes = vec!["1920x1080 (60Hz)".to_string(), "1280x720 (60Hz)".to_string()];
+    let mut latest = "2560x1440 (144Hz)".to_string();
+    let mut current = " ".to_string();
+
+    fill_empty_vid_modes(&modes, &mut latest, &mut current);
+
+    // A stale saved list must not override a non-empty value.
+    assert_eq!(latest, "2560x1440 (144Hz)");
+    assert_eq!(current, "1920x1080 (60Hz)");
   }
 }

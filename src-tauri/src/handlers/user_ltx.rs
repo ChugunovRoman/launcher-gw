@@ -235,7 +235,13 @@ pub async fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams, pr
     log::warn!("apply_run_params_to_ltx: preset load failed (continuing without): {}", e);
   }
 
-  ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
+  // An empty value becomes a bare `vid_mode` line: the engine ignores it and
+  // starts in 0x0 mode, dropping the resolution the game itself saved.
+  if run_params.vid_mode.trim().is_empty() {
+    log::warn!("apply_run_params_to_ltx: vid_mode is empty, keeping the game's value in {:?}", ltx_path);
+  } else {
+    ltx.set("vid_mode".to_string(), run_params.vid_mode.clone());
+  }
   ltx.set("renderer".to_string(), render_to_ltx(run_params.render.clone()));
   let lang = lang_to_ltx(run_params.lang.clone());
   ltx.set("g_language".to_string(), lang.clone());

@@ -193,7 +193,11 @@
         uiDebug = config.run_params.ui_debug;
         checks = config.run_params.checks;
         debugSpawn = config.run_params.debug_spawn;
-        selectedResolution = config.run_params.vid_mode;
+        // An empty/unknown saved value left the select blank, and saving then
+        // wrote an empty vid_mode — default to the best mode (list is sorted best-first).
+        selectedResolution = config.vid_modes.includes(config.run_params.vid_mode)
+          ? config.run_params.vid_mode
+          : (config.vid_modes[0] ?? config.run_params.vid_mode);
         selectedLang = langMap.getValue(config.run_params.lang as LangType)!;
         selectedRenderer = renderersMap.getValue(config.run_params.render as RenderType)!;
         fov = config.run_params.fov;
