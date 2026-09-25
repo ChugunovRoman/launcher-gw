@@ -39,8 +39,18 @@ pub async fn create_split_archives(
   excludePatterns: Vec<String>,
   exePath: Option<String>,
 ) -> Result<PackResult, String> {
-  let (manifest, skipped_files) =
-    pack_split_archives_reported(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, None, Vec::new()).await?;
+  let (manifest, skipped_files) = pack_split_archives_reported(
+    &app,
+    PackProgress::pack_view(),
+    sourceDir,
+    targetPath,
+    chunkSize,
+    excludePatterns,
+    exePath,
+    None,
+    Vec::new(),
+  )
+  .await?;
 
   Ok(PackResult {
     skipped_files,
@@ -48,33 +58,65 @@ pub async fn create_split_archives(
   })
 }
 
+/// Routing data of a patch upload, flattened into its pack progress events so
+/// the frontend can tell concurrent uploads apart.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackProgressTag {
+  pub patch_tag: String,
+  pub release_name: String,
+}
+
+/// Where and how `CompressProgressPayload` is reported.
+#[derive(Debug, Clone)]
+pub struct PackProgress {
+  /// Event name: `consts::EVT_PACKING_PROGRESS` (Pack view) or
+  /// `consts::EVT_PATCH_PACK_PROGRESS` (patch upload).
+  pub event: &'static str,
+  /// Flattened into the payload when set (patch uploads).
+  pub tag: Option<PackProgressTag>,
+  /// Throttled progress while each archive is hashed.
+  pub hash_progress: bool,
+}
+
+impl PackProgress {
+  /// Pack view: plain payload, one "hashing" emit per archive.
+  pub fn pack_view() -> Self {
+    Self { event: consts::EVT_PACKING_PROGRESS, tag: None, hash_progress: false }
+  }
+
+  fn emit(&self, app: &tauri::AppHandle, payload: CompressProgressPayload) {
+    #[derive(Serialize, Clone)]
+    struct Tagged<'a> {
+      #[serde(flatten)]
+      payload: CompressProgressPayload,
+      #[serde(flatten)]
+      tag: Option<&'a PackProgressTag>,
+    }
+    let _ = app.emit(self.event, Tagged { payload, tag: self.tag.as_ref() });
+  }
+}
+
+/// Minimum interval between two progress emits while an archive is hashed.
+const HASH_PROGRESS_THROTTLE_MS: u128 = 200;
+
 /// Builds split `data{N}.zip` archives (zip+zstd) from `sourceDir` into
 /// `targetPath` and writes `manifest.json` next to them. Shared by the Pack
 /// view (full releases, `patch_meta = None`) and patch uploads
 /// (`patch_meta = Some(..)` adds patch fields into the manifest).
 ///
+/// Returns the manifest and the names of source files that were skipped as
+/// unreadable (item 33 — the Pack view and the patch upload report them).
+///
+/// `progress` — event name, optional routing tag and whether archives report
+/// throttled hashing progress (`status = 2`, `processed_size` / `total_size`
+/// = hashed / archive bytes); see [`PackProgress`].
+///
 /// `extra_raw_files` — (src, target) pairs copied as-is into the pack dir and
 /// recorded with `kind = Raw` (dev/test hook for future `.db` archives; not
 /// exposed in the Pack UI).
-pub async fn pack_split_archives(
+pub async fn pack_split_archives_reported(
   app: &tauri::AppHandle,
-  sourceDir: String,
-  targetPath: String,
-  chunkSize: u64,
-  excludePatterns: Vec<String>,
-  exePath: Option<String>,
-  patch_meta: Option<PatchMeta>,
-  extra_raw_files: Vec<(PathBuf, String)>,
-) -> Result<ReleaseManifest, String> {
-  pack_split_archives_reported(app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, patch_meta, extra_raw_files)
-    .await
-    .map(|(manifest, _)| manifest)
-}
-
-/// Same as [`pack_split_archives`], but also returns the names of source files
-/// that were skipped as unreadable (item 33 — the Pack view shows them).
-async fn pack_split_archives_reported(
-  app: &tauri::AppHandle,
+  progress: PackProgress,
   sourceDir: String,
   targetPath: String,
   chunkSize: u64,
@@ -88,7 +130,17 @@ async fn pack_split_archives_reported(
   // command with it) for minutes.
   let app = app.clone();
   tokio::task::spawn_blocking(move || {
-    pack_split_archives_blocking(&app, sourceDir, targetPath, chunkSize, excludePatterns, exePath, patch_meta, extra_raw_files)
+    pack_split_archives_blocking(
+      &app,
+      &progress,
+      sourceDir,
+      targetPath,
+      chunkSize,
+      excludePatterns,
+      exePath,
+      patch_meta,
+      extra_raw_files,
+    )
   })
   .await
   .map_err(|e| e.to_string())?
@@ -105,12 +157,14 @@ async fn pack_split_archives_reported(
 ///
 /// The hash is computed by re-reading the file: ZipWriter seeks backwards
 /// inside the archive, so a streaming hash over the written bytes is wrong.
+/// `on_hash_progress(done, total)` is forwarded to `sha256_file`.
 fn close_archive(
   out_dir: &Path,
   archive_name: String,
   entries_written: u32,
   manifest: &mut ReleaseManifest,
   compressed_size: &mut u64,
+  on_hash_progress: Option<&dyn Fn(u64, u64)>,
 ) -> Result<(), String> {
   let file_path = out_dir.join(&archive_name);
 
@@ -122,7 +176,7 @@ fn close_archive(
     return Ok(());
   }
 
-  let sha = crate::utils::hash::sha256_file(&file_path, None, None).map_err(|e| e.to_string())?;
+  let sha = crate::utils::hash::sha256_file(&file_path, on_hash_progress, None).map_err(|e| e.to_string())?;
   let size = file_path.metadata().map_err(|e| e.to_string())?.len();
   *compressed_size += size;
   log::info!("Packed {}: {} bytes, sha256 {}", &archive_name, size, &sha);
@@ -136,11 +190,18 @@ fn close_archive(
   Ok(())
 }
 
-/// Progress event emitted right before an archive is hashed.
-fn emit_hashing_progress(app: &tauri::AppHandle, archive_name: &str, total_size: u64, processed_size: u64) {
+/// Progress event emitted right before an archive is hashed (and, for patch
+/// uploads, repeatedly while it is hashed).
+fn emit_hashing_progress(
+  app: &tauri::AppHandle,
+  progress: &PackProgress,
+  archive_name: &str,
+  total_size: u64,
+  processed_size: u64,
+) {
   let percentage = if total_size > 0 { (processed_size as f64 / total_size as f64) * 100.0 } else { 0.0 };
-  let _ = app.emit(
-    "packing-progress",
+  progress.emit(
+    app,
     CompressProgressPayload {
       status: 2,
       current_file: archive_name.to_owned(),
@@ -212,6 +273,7 @@ fn cleanup_previous_pack(out_dir: &Path) {
 
 fn pack_split_archives_blocking(
   app: &tauri::AppHandle,
+  progress: &PackProgress,
   sourceDir: String,
   targetPath: String,
   chunkSize: u64,
@@ -249,8 +311,8 @@ fn pack_split_archives_blocking(
   let mut total_size = 0;
   let mut all_files = Vec::new();
 
-  let _ = app.emit(
-    "packing-progress",
+  progress.emit(
+    app,
     CompressProgressPayload {
       status: 0,
       current_file: "".to_owned(),
@@ -412,6 +474,21 @@ fn pack_split_archives_blocking(
     .compression_method(CompressionMethod::Zstd)
     .compression_level(Some(3));
 
+  // Throttled in-archive hashing progress (patch uploads only, see the doc of
+  // `pack_split_archives_reported`). The archive name is set right before
+  // each `close_archive`.
+  let hash_progress_enabled = progress.hash_progress;
+  let hashing_archive = std::cell::RefCell::new(String::new());
+  let last_hash_emit = std::cell::Cell::new(std::time::Instant::now());
+  let on_hash_progress = |done: u64, total: u64| {
+    if done < total && last_hash_emit.get().elapsed().as_millis() < HASH_PROGRESS_THROTTLE_MS {
+      return;
+    }
+    last_hash_emit.set(std::time::Instant::now());
+    emit_hashing_progress(app, progress, &hashing_archive.borrow(), total, done);
+  };
+  let hash_progress: Option<&dyn Fn(u64, u64)> = if hash_progress_enabled { Some(&on_hash_progress) } else { None };
+
   let all_files_count = all_files.len();
   for (full_path, entry_name, size) in all_files {
     // The per-file chunk limit is already validated above, before the cleanup.
@@ -424,8 +501,10 @@ fn pack_split_archives_blocking(
       zip.finish().map_err(|e| e.to_string())?;
 
       let archive_name = format!("data{}.zip", part_number);
-      emit_hashing_progress(app, &archive_name, total_size, processed_size);
-      close_archive(out_dir, archive_name, current_group_entries, &mut manifest, &mut compressed_size)?;
+      emit_hashing_progress(app, progress, &archive_name, total_size, processed_size);
+      *hashing_archive.borrow_mut() = archive_name.clone();
+      last_hash_emit.set(std::time::Instant::now());
+      close_archive(out_dir, archive_name, current_group_entries, &mut manifest, &mut compressed_size, hash_progress)?;
 
       part_number += 1;
       let archive_path = out_dir.join(format!("data{}.zip", part_number));
@@ -442,8 +521,8 @@ fn pack_split_archives_blocking(
 
     // Эмит прогресса ПЕРЕД началом сжатия файла
     let percentage = if total_size > 0 { (processed_size as f64 / total_size as f64) * 100.0 } else { 0.0 };
-    let _ = app.emit(
-      "packing-progress",
+    progress.emit(
+      app,
       CompressProgressPayload {
         status: 1,
         current_file: str_file_name.clone(),
@@ -479,10 +558,12 @@ fn pack_split_archives_blocking(
   zip.finish().map_err(|e| e.to_string())?;
 
   let archive_name = format!("data{}.zip", part_number);
-  emit_hashing_progress(app, &archive_name, total_size, processed_size);
+  emit_hashing_progress(app, progress, &archive_name, total_size, processed_size);
+  *hashing_archive.borrow_mut() = archive_name.clone();
+  last_hash_emit.set(std::time::Instant::now());
   // An empty last part (rollover happened and every remaining file was skipped)
   // is discarded here instead of being hashed into the manifest (item 88).
-  close_archive(out_dir, archive_name, current_group_entries, &mut manifest, &mut compressed_size)?;
+  close_archive(out_dir, archive_name, current_group_entries, &mut manifest, &mut compressed_size, hash_progress)?;
 
   if manifest.files.is_empty() {
     return Err(format!(
@@ -506,8 +587,8 @@ fn pack_split_archives_blocking(
     let dest = out_dir.join(&flat_name);
     fs::copy(&src, &dest).map_err(|e| format!("copy raw file {:?}: {}", &src, e))?;
 
-    let _ = app.emit(
-      "packing-progress",
+    progress.emit(
+      app,
       CompressProgressPayload {
         status: 2,
         current_file: flat_name.clone(),
@@ -553,8 +634,8 @@ fn pack_split_archives_blocking(
   fs::write(&tmp_path, &json).map_err(|e| e.to_string())?;
   fs::rename(&tmp_path, &manifest_path).map_err(|e| e.to_string())?;
 
-  let _ = app.emit(
-    "packing-progress",
+  progress.emit(
+    app,
     CompressProgressPayload {
       status: 1,
       current_file: "".to_owned(),
@@ -717,7 +798,7 @@ mod tests {
 
     let mut manifest = ReleaseManifest::default();
     let mut compressed = 0u64;
-    close_archive(&dir, "data3.zip".to_owned(), 0, &mut manifest, &mut compressed).unwrap();
+    close_archive(&dir, "data3.zip".to_owned(), 0, &mut manifest, &mut compressed, None).unwrap();
 
     assert!(manifest.files.is_empty(), "empty part must not reach the manifest");
     assert_eq!(compressed, 0, "empty part must not add compressed size");
@@ -734,7 +815,7 @@ mod tests {
 
     let mut manifest = ReleaseManifest::default();
     let mut compressed = 0u64;
-    close_archive(&dir, "data1.zip".to_owned(), 2, &mut manifest, &mut compressed).unwrap();
+    close_archive(&dir, "data1.zip".to_owned(), 2, &mut manifest, &mut compressed, None).unwrap();
 
     assert_eq!(manifest.files.len(), 1);
     assert_eq!(manifest.files[0].name, "data1.zip");

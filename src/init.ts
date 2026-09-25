@@ -9,6 +9,7 @@ import { initUploadListeners } from "./lib/upload";
 import { initDownloadListeners } from "./lib/download";
 import { initProfilesListeners } from './lib/profiles';
 import { initPatchListeners } from './lib/patches';
+import { initPatchUploadListeners } from './lib/patchUpload';
 
 export async function init() {
   // Register listeners first (IPC subscriptions, millisecond-fast).
@@ -20,6 +21,7 @@ export async function init() {
     initUploadListeners(),
     initDownloadListeners(),
     initPatchListeners(),
+    initPatchUploadListeners(),
   ]);
 
   register(Lang.En, () => import('./locales/en.json'));

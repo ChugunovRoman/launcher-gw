@@ -2,7 +2,7 @@
 <script lang="ts">
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { get } from "svelte/store";
   import { join } from "@tauri-apps/api/path";
   import { configReady } from "../store/main";
   import { factionFieldKey } from "../lib/factionSettings";
@@ -10,11 +10,23 @@
   import { loadVersions } from "../lib/versions";
   import { choosePath } from "../utils/path";
   import { DEFAULT_EXCLUDE_PATTERNS } from "../consts";
+  import {
+    patchUploads,
+    patchCollectProgress,
+    readPatchUpload,
+    updatePatchUpload,
+    getPatchUpload,
+    resetPatchUploadProgress,
+    isPatchUploadActive,
+    type PatchUploadState,
+  } from "../store/patchUpload";
+  import { PATCH_UPLOAD_STAGES, PATCH_STAGE_LABEL_KEYS, PATCH_HINT_KEYS } from "../lib/patchUpload";
 
   import Progress from "../Components/Progress.svelte";
   import Button from "../Components/Button.svelte";
   import Spin from "../Components/Spin.svelte";
-  import { getInMb, parseBytes, formatSpeedBytesPerSec } from "../utils/dwn";
+  import PatchUploadStatus from "../Components/PatchUploadStatus.svelte";
+  import { parseBytes } from "../utils/dwn";
 
   // 5.18: Use version name (or special string key) instead of numeric index
   // so that expanding a card survives a list replacement (e.g. after refresh).
@@ -146,6 +158,7 @@
     collectingPatch = true;
     patchError = "";
     patchResult = null;
+    patchCollectProgress.set(null);
     feSelectedFields = new Set();
 
     try {
@@ -163,7 +176,8 @@
       // If a version is expanded, also update its state directly.
       if (expandedName !== null && !expandedName.startsWith("__")) {
         const vn = expandedName;
-        if (vn)
+        // Never swap the folder under a patch that is uploading right now.
+        if (vn && !isPatchUploadActive(getPatchUpload(vn)))
           updateUploadState(vn, (s) => {
             s.uploadPath = patchResult!.patch_dir;
           });
@@ -178,93 +192,51 @@
   }
 
   // --- Patch upload (stage 2 of partial updates) ---
-  // Per-version upload state to prevent cross-version interference.
-  interface PatchUploadState {
-    uploadPath: string;
-    uploadName: string;
-    uploading: boolean;
-    error: string;
-    log: string[];
-    files: Map<string, UploadFileData>;
-    result: PatchUploadResult | null;
-  }
-  const defaultUploadState: PatchUploadState = {
-    uploadPath: "",
-    uploadName: "",
-    uploading: false,
-    error: "",
-    log: [],
-    files: new Map(),
-    result: null,
-  };
-  let patchUploadStates = $state<Map<string, PatchUploadState>>(new Map());
-  // Tracks which version is currently uploading (for event routing).
-  let activeUploadVersion = $state<string | null>(null);
+  // Per-version state lives in the global store (store/patchUpload.ts) and is
+  // filled by the global listeners (lib/patchUpload.ts), so it survives
+  // switching tabs.
   // Global default upload path (from collect or config).
   let lastPatchUploadPath = $state("");
 
-  /// Non-mutating read for template use — returns existing state or a static default.
-  function readUploadState(versionName: string): PatchUploadState {
-    return patchUploadStates.get(versionName) ?? defaultUploadState;
-  }
-
-  /// Creates the entry if missing (mutation — only in event handlers, never in template).
-  function ensureUploadState(versionName: string): PatchUploadState {
-    let state = patchUploadStates.get(versionName);
-    if (!state) {
-      state = {
-        uploadPath: lastPatchUploadPath,
-        uploadName: "",
-        uploading: false,
-        error: "",
-        log: [],
-        files: new Map(),
-        result: null,
-      };
-      patchUploadStates = new Map(patchUploadStates).set(versionName, state);
-    }
-    return state;
+  /// Non-mutating read for template use.
+  function readUploadState(map: Map<string, PatchUploadState>, versionName: string): PatchUploadState {
+    return readPatchUpload(map, versionName, lastPatchUploadPath);
   }
 
   function updateUploadState(versionName: string, updater: (s: PatchUploadState) => void) {
-    const state = ensureUploadState(versionName);
-    updater(state);
-    // Trigger reactivity by creating a new Map reference.
-    patchUploadStates = new Map(patchUploadStates);
+    updatePatchUpload(versionName, updater, lastPatchUploadPath);
   }
 
-  // Subscribe to the patch upload events (kept separate from upload-v2 ones).
-  $effect(() => {
-    const unlistenLog = listen<string>("patch-upload-log", (e) => {
-      const vn = activeUploadVersion;
-      if (!vn) return;
-      updateUploadState(vn, (s) => {
-        s.log = [...s.log.slice(-30), e.payload];
-      });
-    });
-    const unlistenProgress = listen<UploadProgressPayload>("patch-upload-progress", (e) => {
-      const vn = activeUploadVersion;
-      if (!vn) return;
-      const p = e.payload;
-      // Keep speedValue numeric (UploadFileData.speedValue is number) and use the
-      // shared formatter for consistent units, same as the upload-v2 flow.
-      const [speedValue, sfxValue] = formatSpeedBytesPerSec(p.speed);
-      updateUploadState(vn, (s) => {
-        s.files = new Map(s.files).set(p.file_name, {
-          file_uploaded_size: p.file_uploaded_size,
-          file_total_size: p.file_total_size,
-          progress: p.file_total_size > 0 ? (p.file_uploaded_size / p.file_total_size) * 100 : 0,
-          speedValue,
-          sfxValue,
-        });
-      });
-    });
+  /// «Stop» works only while files are uploaded: the backend checks the cancel
+  /// signal only in that stage (packing, index publishing and tagging go on).
+  function canCancelPatchUpload(s: PatchUploadState): boolean {
+    return s.status === "running" && s.currentStage === "upload";
+  }
 
-    return () => {
-      unlistenLog.then((u) => u());
-      unlistenProgress.then((u) => u());
-    };
-  });
+  /// Fallback for the case `patch-upload-finished` never arrives (e.g. the
+  /// command failed before its first event). Events may be delivered a bit
+  /// after the invoke promise settles, so give them a moment first.
+  const FINISHED_FALLBACK_MS = 1500;
+  function applyUploadFallback(versionName: string, outcome: { result: PatchUploadResult } | { error: string }) {
+    setTimeout(() => {
+      const s = getPatchUpload(versionName);
+      if (!s || !isPatchUploadActive(s)) return;
+      updateUploadState(versionName, (st) => {
+        st.pendingStart = false;
+        if ("result" in outcome) {
+          st.status = "done";
+          st.result = outcome.result;
+          st.repos = outcome.result.repos;
+          st.warnings = [...new Set([...st.warnings, ...outcome.result.warnings])];
+          st.currentStage = null;
+          st.uploadName = "";
+        } else {
+          st.status = "failed";
+          st.error = { stage: st.currentStage, message: outcome.error, code: null };
+        }
+      });
+    }, FINISHED_FALLBACK_MS);
+  }
 
   async function choosePatchUploadPath(event: Event, versionName: string) {
     event.stopPropagation();
@@ -280,16 +252,16 @@
   async function handleUploadPatch(event: Event, releaseNameStr: string) {
     event.stopPropagation();
 
-    const state = ensureUploadState(releaseNameStr);
-    if (!state.uploadPath.trim() || !state.uploadName.trim() || state.uploading) return;
+    const state = readUploadState(get(patchUploads), releaseNameStr);
+    if (!state.uploadPath.trim() || !state.uploadName.trim() || isPatchUploadActive(state)) return;
 
-    activeUploadVersion = releaseNameStr;
+    // Every event carries `release_name`; the first `stage prepare running`
+    // event confirms the start and resets the state again.
     updateUploadState(releaseNameStr, (s) => {
-      s.uploading = true;
-      s.error = "";
-      s.result = null;
-      s.log = [];
-      s.files = new Map();
+      resetPatchUploadProgress(s);
+      s.uploadPath = state.uploadPath;
+      s.status = "running";
+      s.pendingStart = true;
     });
 
     // Reuse collect results (deleted files / base tag) when uploading the
@@ -308,29 +280,34 @@
         // fragment from them (empty list = no fragment travels with the patch).
         updatedFields: fromCollect && patchResult ? patchResult.fe_updated_fields.filter((f) => feSelectedFields.has(f)) : null,
       });
-      updateUploadState(releaseNameStr, (s) => {
-        s.result = result;
-      });
+      applyUploadFallback(releaseNameStr, { result });
     } catch (e) {
       console.error("handleUploadPatch failed:", e);
-      updateUploadState(releaseNameStr, (s) => {
-        s.error = String(e);
-      });
-    } finally {
-      updateUploadState(releaseNameStr, (s) => {
-        s.uploading = false;
-      });
-      activeUploadVersion = null;
+      applyUploadFallback(releaseNameStr, { error: errText(e) });
     }
   }
 
   async function handleCancelPatchUpload(event: Event, versionName: string) {
     event.stopPropagation();
 
-    const state = ensureUploadState(versionName);
-    if (!state.uploadName.trim()) return;
+    const state = getPatchUpload(versionName);
+    if (!state || !canCancelPatchUpload(state) || !state.uploadName.trim()) return;
 
-    await invoke<void>("cancel_patch_upload", { patchName: state.uploadName });
+    updateUploadState(versionName, (s) => {
+      s.status = "cancelling";
+      s.actionError = null;
+    });
+
+    try {
+      await invoke<void>("cancel_patch_upload", { patchName: state.uploadName });
+    } catch (e) {
+      console.error("handleCancelPatchUpload failed:", e);
+      updateUploadState(versionName, (s) => {
+        // The upload keeps running unless `finished` already arrived.
+        if (s.status === "cancelling") s.status = "running";
+        s.actionError = `${$_("app.releases.patch.cancelFailed")}: ${errText(e)}`;
+      });
+    }
   }
 
   async function handlePreviewIndex() {
@@ -768,6 +745,22 @@
             {/if}
           </button>
 
+          {#if collectingPatch && $patchCollectProgress}
+            {@const cp = $patchCollectProgress}
+            <div class="patch-report collect-progress">
+              <span>{$_(`app.releases.patch.collectStage.${cp.stage === "fe_fragment" ? "feFragment" : cp.stage}`)}</span>
+              {#if cp.repos_total > 0 && cp.repo}
+                <span
+                  >{$_("app.releases.patch.collectProgress", {
+                    values: { done: Math.min(cp.repos_done + 1, cp.repos_total), total: cp.repos_total, repo: cp.repo },
+                  })}</span>
+              {/if}
+              {#if cp.stage === "copy" && cp.files_total > 0}
+                <span>{$_("app.releases.patch.collectFiles", { values: { done: cp.files_done, total: cp.files_total } })}</span>
+              {/if}
+            </div>
+          {/if}
+
           {#if patchError}
             <div class="patch-summary error-text">{patchError}</div>
           {/if}
@@ -909,6 +902,7 @@
          share a display name, GitHub descriptions may share a path), and a
          duplicate key throws and takes the whole view down. -->
     {#each $versions as version (version.path + '|' + version.name)}
+      {@const ups = readUploadState($patchUploads, version.name)}
       <div class="release-item" onclick={() => toggleExpand(version.name)}>
         <div class="header">
           <span class="version-name">{version.name}</span>
@@ -917,9 +911,20 @@
               {$_("app.releases.notPublished")}
             </span>
           {/if}
+          {#if isPatchUploadActive(ups)}
+            <span class="patch-header-status">
+              <Spin size={14} />
+              {$_("app.releases.patch.headerStatus", {
+                values: { stage: ups.currentStage ? $_(PATCH_STAGE_LABEL_KEYS[ups.currentStage]) : "" },
+              })}
+            </span>
+          {:else if ups.status === "failed"}
+            <span class="patch-failed-badge" title={ups.error?.message ?? ""}>
+              {$_("app.releases.patch.headerFailed")}
+            </span>
+          {/if}
         </div>
         {#if expandedName === version.name}
-          {@const ups = readUploadState(version.name)}
           <div class="expanded-content installed-status">
             <span class="status-icon">✓</span>
             <span class="status-text">{$_("app.releases.installed")}</span>
@@ -955,7 +960,11 @@
               <label class="input-label">{$_("app.releases.patch.dir")}</label>
               <div class="input-row">
                 <input type="text" readonly value={ups.uploadPath} placeholder={$_("app.releases.patch.dir")} class="release-input" />
-                <button type="button" onclick={(e) => choosePatchUploadPath(e, version.name)} class="choose-btn">
+                <button
+                  type="button"
+                  onclick={(e) => choosePatchUploadPath(e, version.name)}
+                  class="choose-btn"
+                  disabled={isPatchUploadActive(ups)}>
                   {$_("app.releases.browse")}
                 </button>
               </div>
@@ -966,6 +975,7 @@
                 <input
                   type="text"
                   value={ups.uploadName}
+                  disabled={isPatchUploadActive(ups)}
                   oninput={(e) =>
                     updateUploadState(version.name, (s) => {
                       s.uploadName = (e.target as HTMLInputElement).value;
@@ -975,71 +985,42 @@
               </div>
             </div>
             <div class="input-row patch-actions">
-              <button type="button" onclick={(e) => handleUploadPatch(e, version.name)} class="create-btn" disabled={ups.uploading}>
-                {#if ups.uploading}
+              <button
+                type="button"
+                onclick={(e) => handleUploadPatch(e, version.name)}
+                class="create-btn"
+                disabled={isPatchUploadActive(ups) || !ups.uploadName.trim() || !ups.uploadPath.trim()}>
+                {#if isPatchUploadActive(ups)}
                   <Spin size={14} />
                 {:else}
                   {$_("app.releases.patch.add")}
                 {/if}
               </button>
-              {#if ups.uploading}
-                <button type="button" onclick={(e) => handleCancelPatchUpload(e, version.name)} class="continue-btn">
-                  {$_("app.releases.stop")}
+              {#if isPatchUploadActive(ups)}
+                <button
+                  type="button"
+                  onclick={(e) => handleCancelPatchUpload(e, version.name)}
+                  class="continue-btn"
+                  disabled={!canCancelPatchUpload(ups)}
+                  title={canCancelPatchUpload(ups) || ups.status === "cancelling" ? "" : $_("app.releases.patch.cancelDisabledHint")}>
+                  {#if ups.status === "cancelling"}
+                    {$_("app.releases.patch.cancelling")}
+                  {:else}
+                    {$_("app.releases.stop")}
+                  {/if}
                 </button>
               {/if}
             </div>
 
-            {#if ups.error}
-              <div class="patch-summary error-text">{ups.error}</div>
+            {#if ups.actionError}
+              <div class="patch-summary error-text">{ups.actionError}</div>
             {/if}
 
-            {#if ups.uploading || ups.files.size > 0}
-              {#each [...ups.files] as [name, progress]}
-                <div class="file-row">
-                  <span>{name}</span>
-                  <Progress height={12} maxWidth="1fr - 300px" progress={progress.progress} showPercents={false} />
-                  <span style="justify-self: end;"
-                    >{parseBytes(progress.file_uploaded_size)[0]}
-                    {$_(`app.common.${parseBytes(progress.file_uploaded_size)[1]}`)} / {parseBytes(progress.file_total_size)[0]}
-                    {$_(`app.common.${parseBytes(progress.file_total_size)[1]}`)}</span>
-                </div>
-              {/each}
-            {/if}
-
-            {#if ups.result}
-              <div class="patch-summary">
-                <span class="status-icon">✓</span>
-                <span>{$_("app.releases.patch.uploaded")}</span>
-              </div>
-              {#if ups.result.warnings.length > 0}
-                <div class="patch-repos">
-                  {#each ups.result.warnings as w}
-                    <span class="repo-status error">{w}</span>
-                  {/each}
-                </div>
-              {/if}
-              {#if ups.result.repos.length > 0}
-                <div class="patch-repos">
-                  <span class="patch-repos-title">{$_("app.releases.patch.tagReport")}</span>
-                  {#each ups.result.repos as repo}
-                    <div class="repo-row">
-                      <span class="repo-path">{repo.repo_rel_path || "(root)"}</span>
-                      <span class={repo.pushed ? "repo-status collected" : "repo-status error"}>
-                        {#if repo.pushed}
-                          {$_("app.releases.patch.tagOk")}
-                        {:else}
-                          {$_("app.releases.patch.tagFail")}{repo.message ? `: ${repo.message}` : ""}
-                        {/if}
-                      </span>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            {/if}
-
-            {#each ups.log as text}
-              <span class="log-text">{text}</span>
-            {/each}
+            <PatchUploadStatus
+              state={ups}
+              stageOrder={PATCH_UPLOAD_STAGES}
+              stageLabelKeys={PATCH_STAGE_LABEL_KEYS}
+              hintKeys={PATCH_HINT_KEYS} />
           </div>
         {/if}
       </div>
@@ -1402,6 +1383,36 @@
 
   .patch-actions {
     gap: 0.5rem;
+  }
+
+  .create-btn:disabled,
+  .continue-btn:disabled,
+  .choose-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .patch-header-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: 0.5rem;
+    color: #ddd;
+    font-size: 0.8rem;
+  }
+
+  .patch-failed-badge {
+    margin-left: 0.5rem;
+    padding: 1px 6px;
+    font-size: 0.72rem;
+    color: #f44336;
+    border: 1px solid rgba(244, 67, 54, 0.6);
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .collect-progress {
+    font-size: 0.85rem;
   }
 
   .exclude-textarea {

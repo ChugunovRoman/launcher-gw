@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 use std::fs;
 
@@ -11,8 +12,13 @@ use tokio::{fs::File, sync::broadcast, sync::Mutex};
 use tokio_util::io::ReaderStream;
 
 use crate::consts::{DEFAULT_BRANCH, MANIFEST_NAME};
-use crate::handlers::compress::pack_split_archives;
-use crate::handlers::dto::{PatchMeta, ReleaseManifestFile, UploadProgressPayload};
+use crate::handlers::compress::{pack_split_archives_reported, PackProgress, PackProgressTag};
+use crate::handlers::dto::{FilesCountPayload, LogLinePayload, PatchUploadResult, TaggedPayload};
+use crate::handlers::dto::{
+  PatchManifestEntry, PatchMeta, PatchRepoTaggedPayload, PatchUploadFileStatusPayload, PatchUploadFinishedPayload,
+  PatchUploadManifestPayload, PatchUploadStage, ReleaseManifestFile, StageEventPayload, StageState, UploadFileStatus,
+  UploadFinishedKind, UploadProgressPayload,
+};
 use crate::handlers::patch_install::{project_id_for, resolve_updates_project};
 use crate::handlers::upload_v2::{UploadCancelMap, build_asset_url, make_tag_name};
 use crate::providers::dto::CreateReleaseAsset;
@@ -24,16 +30,175 @@ use crate::utils::patch_collect::{self, RepoTagReport};
 /// limit as full releases for consistency (well below the 2 GiB asset limit).
 const PATCH_CHUNK_SIZE_MB: u64 = 2000;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct PatchUploadResult {
-  /// Per-repo outcome of tagging the game repositories with the patch tag.
-  pub repos: Vec<RepoTagReport>,
-  /// Non-fatal issues (e.g. failed tag pushes).
-  pub warnings: Vec<String>,
+/// Progress event of `collect_patch` (`PatchCollectProgress`).
+const EVT_PATCH_COLLECT_PROGRESS: &str = "patch-collect-progress";
+
+/// Event names of one staged command. Patch uploads use [`PATCH_UPLOAD_EVENTS`];
+/// the full release upload can get its own set later.
+#[derive(Debug, Clone, Copy)]
+pub struct StageEvents {
+  /// Stage start/end event (`StageEventPayload`).
+  pub stage: &'static str,
+  /// Plain text log event (also mirrored into `launcher.log`).
+  pub log: &'static str,
 }
 
-fn patch_upload_log(app: &tauri::AppHandle, message: String) {
-  let _ = app.emit("patch-upload-log", message);
+const PATCH_UPLOAD_EVENTS: StageEvents = StageEvents {
+  stage: "patch-upload-stage",
+  log: "patch-upload-log",
+};
+
+/// Failure of a stage: (stage, message, code). `code` is one of the
+/// `consts::ERR_*` codes or `None`.
+type StageFailure<S> = (S, String, Option<String>);
+
+/// Owned routing data of a staged command, cheap to clone into streams and
+/// blocking tasks: every tagged event carries `patch_tag` + `release_name`.
+#[derive(Clone)]
+struct StageTarget {
+  app: tauri::AppHandle,
+  patch_tag: String,
+  release_name: String,
+}
+
+impl StageTarget {
+  /// Emits `payload` with this target's routing key flattened into it.
+  fn emit_tagged<T: Serialize + Clone>(&self, event: &str, payload: T) {
+    let _ = self.app.emit(
+      event,
+      TaggedPayload {
+        patch_tag: self.patch_tag.clone(),
+        release_name: self.release_name.clone(),
+        payload,
+      },
+    );
+  }
+
+  fn emit_log(&self, event: &str, message: String) {
+    self.emit_tagged(event, LogLinePayload { message });
+  }
+
+  fn emit_files_count(&self, done: u32, total: u32) {
+    self.emit_tagged(EVT_PATCH_UPLOAD_FILES_COUNT, FilesCountPayload { done, total });
+  }
+}
+
+const EVT_PATCH_UPLOAD_FILES_COUNT: &str = "patch-upload-files-count";
+
+/// Emits the stage events of a multi-step command and keeps the warnings it
+/// reported. Generic over the stage enum so it is not tied to patches.
+///
+/// Rule of the event contract: a stage that got warnings ends as `Warning`
+/// (message/code of the last warning), otherwise as `Done`.
+struct StageReporter<S: Serialize + Copy + PartialEq + std::fmt::Debug> {
+  target: StageTarget,
+  events: StageEvents,
+  /// Last warning (message, code) of every stage that got one.
+  last_warning: StdMutex<Vec<(S, String, Option<String>)>>,
+  /// All warnings in order, for the command result.
+  warnings: StdMutex<Vec<String>>,
+}
+
+impl<S: Serialize + Copy + PartialEq + std::fmt::Debug> StageReporter<S> {
+  fn new(target: StageTarget, events: StageEvents) -> Self {
+    Self {
+      target,
+      events,
+      last_warning: StdMutex::new(Vec::new()),
+      warnings: StdMutex::new(Vec::new()),
+    }
+  }
+
+  fn emit(&self, stage: S, state: StageState, message: Option<String>, code: Option<String>) {
+    let _ = self.target.app.emit(
+      self.events.stage,
+      StageEventPayload {
+        patch_tag: self.target.patch_tag.clone(),
+        release_name: self.target.release_name.clone(),
+        stage,
+        state,
+        message,
+        code,
+      },
+    );
+  }
+
+  /// Text log line: frontend event + `launcher.log`.
+  fn log(&self, message: String) {
+    log::info!("{}", &message);
+    self.target.emit_log(self.events.log, message);
+  }
+
+  fn start(&self, stage: S) {
+    log::info!("stage {:?}: running", stage);
+    self.emit(stage, StageState::Running, None, None);
+  }
+
+  /// End of a stage: `Warning` when it reported warnings, `Done` otherwise.
+  fn done(&self, stage: S) {
+    let last = crate::utils::locks::lock(&self.last_warning)
+      .iter()
+      .rev()
+      .find(|(s, _, _)| *s == stage)
+      .map(|(_, m, c)| (m.clone(), c.clone()));
+    match last {
+      Some((message, code)) => self.emit(stage, StageState::Warning, Some(message), code),
+      None => self.emit(stage, StageState::Done, None, None),
+    }
+  }
+
+  fn skipped(&self, stage: S, message: String, code: Option<&str>) {
+    self.log(message.clone());
+    self.emit(stage, StageState::Skipped, Some(message), code.map(str::to_string));
+  }
+
+  /// Non-fatal issue: `Warning` event + log + the command result's warnings.
+  fn warn(&self, stage: S, message: String, code: Option<&str>) {
+    log::warn!("stage {:?}: {}", stage, &message);
+    self.target.emit_log(self.events.log, format!("WARNING: {}", &message));
+    let code = code.map(str::to_string);
+    crate::utils::locks::lock(&self.last_warning).push((stage, message.clone(), code.clone()));
+    crate::utils::locks::lock(&self.warnings).push(message.clone());
+    self.emit(stage, StageState::Warning, Some(message), code);
+  }
+
+  /// Fatal error: `Failed` event + log line + `log::error`. Returns the
+  /// failure for `Err(..)`.
+  fn fail(&self, stage: S, message: impl Into<String>, code: Option<&str>) -> StageFailure<S> {
+    let message = message.into();
+    log::error!("stage {:?} failed: {} (code: {:?})", stage, &message, code);
+    self.target.emit_log(self.events.log, format!("ERROR: {}", &message));
+    let code = code.map(str::to_string);
+    self.emit(stage, StageState::Failed, Some(message.clone()), code.clone());
+    (stage, message, code)
+  }
+
+  fn take_warnings(&self) -> Vec<String> {
+    std::mem::take(&mut *crate::utils::locks::lock(&self.warnings))
+  }
+}
+
+/// Cancel-map key of a patch upload. Both `upload_patch` and
+/// `cancel_patch_upload` must derive it the same way from the raw patch name.
+fn patch_cancel_key(raw: &str) -> String {
+  format!("patch:{}", make_tag_name(raw.trim()))
+}
+
+fn emit_file_status(target: &StageTarget, file_name: &str, status: UploadFileStatus) {
+  let _ = target.app.emit(
+    "patch-upload-file-status",
+    PatchUploadFileStatusPayload {
+      patch_tag: target.patch_tag.clone(),
+      release_name: target.release_name.clone(),
+      file_name: file_name.to_string(),
+      status,
+    },
+  );
+}
+
+/// `true` once a cancel was sent. `Lagged` also means a send happened.
+fn cancel_requested(rx: &mut broadcast::Receiver<()>) -> bool {
+  !matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty))
 }
 
 /// Turn the staged faction-editor fragment into the one this patch ships:
@@ -140,9 +305,13 @@ fn fe_fragment_staged(patch_dir: &Path) -> bool {
 /// Streams one patch asset to `asset_url` with `patch-upload-progress` events;
 /// returns the number of bytes actually streamed. Re-used by the re-uploads
 /// after a server-side hash mismatch (the file is re-opened each attempt).
+///
+/// Emits `patch-upload-file-status` = `waiting_server` once the body has been
+/// handed over completely (the HTTP client polled past the last chunk).
+/// Returns `Err(USER_CANCELLED)` when the stream was stopped by a cancel.
 #[allow(clippy::too_many_arguments)]
 async fn upload_patch_asset_stream(
-  app: &tauri::AppHandle,
+  target: &StageTarget,
   api: &(dyn crate::providers::ApiProvider::ApiProvider + Send + Sync),
   file_path: &Path,
   asset_name: String,
@@ -163,15 +332,18 @@ async fn upload_patch_asset_stream(
 
   let uploaded_for_emit = Arc::new(std::sync::atomic::AtomicU64::new(0));
   let uploaded_for_emit_in_stream = uploaded_for_emit.clone();
+  let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  let cancelled_in_stream = cancelled.clone();
   let mut cancel_rx_for_stream = cancel_rx;
   // Owned handle: the stream is boxed as `dyn Stream + 'static`.
-  let app_handle = app.clone();
+  let target_for_stream = target.clone();
 
   let progress_stream = async_stream::stream! {
     let mut uploaded = 0u64;
     for await chunk in file_stream {
       if let Ok(()) = cancel_rx_for_stream.try_recv() {
         log::info!("Patch upload of '{}' cancelled mid-stream", &asset_name_for_stream);
+        cancelled_in_stream.store(true, std::sync::atomic::Ordering::Relaxed);
         return;
       }
       if let Ok(ref data) = chunk {
@@ -179,7 +351,7 @@ async fn upload_patch_asset_stream(
         uploaded_for_emit_in_stream.store(uploaded, std::sync::atomic::Ordering::Relaxed);
         let elapsed = start_time.elapsed().as_secs_f64();
         let speed = if elapsed > 0.0 { uploaded as f64 / elapsed } else { 0.0 };
-        let _ = app_handle.emit("patch-upload-progress", UploadProgressPayload {
+        target_for_stream.emit_tagged("patch-upload-progress", UploadProgressPayload {
           file_name: asset_name_for_stream.clone(),
           file_uploaded_size: uploaded,
           file_total_size: total_size,
@@ -190,11 +362,17 @@ async fn upload_patch_asset_stream(
       }
       yield chunk;
     }
+    // The client asked for more after the last chunk: the whole body is sent.
+    emit_file_status(&target_for_stream, &asset_name_for_stream, UploadFileStatus::WaitingServer);
   };
   let boxed_stream: Box<dyn Stream<Item = std::io::Result<Bytes>> + Send + Unpin> = Box::new(Box::pin(progress_stream));
 
   log::debug!("upload_patch: asset: {} by url: {}", &asset_name, &asset_url);
-  api.upload_release_file(&asset_url, total_size, boxed_stream).await.map_err(|e| {
+  let result = api.upload_release_file(&asset_url, total_size, boxed_stream).await;
+  if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+    return Err(crate::consts::ERR_USER_CANCELLED.to_string());
+  }
+  result.map_err(|e| {
     log_full_error(&e);
     format!("upload_release_file '{}' failed: {}", &asset_name, e)
   })?;
@@ -205,18 +383,27 @@ async fn upload_patch_asset_stream(
 /// Collects a partial-update patch from the game git repositories:
 /// committed changes (latest reachable tag -> HEAD) of every repo found
 /// under the selected folder. Heavy git/fs work runs on a blocking thread.
+/// Progress goes out as `patch-collect-progress`.
 #[tauri::command]
-pub async fn collect_patch(source_dir: String, exclude_patterns: Vec<String>) -> Result<patch_collect::PatchCollectResult, String> {
+pub async fn collect_patch(
+  app: tauri::AppHandle,
+  source_dir: String,
+  exclude_patterns: Vec<String>,
+) -> Result<patch_collect::PatchCollectResult, String> {
   log::info!("collect_patch: source_dir: {}, exclude_patterns: {}", source_dir, exclude_patterns.len());
 
-  let result =
-    tokio::task::spawn_blocking(move || patch_collect::collect_patch(std::path::PathBuf::from(source_dir), exclude_patterns))
-      .await
-      .map_err(|e| e.to_string())?
-      .map_err(|e| {
-        log_full_error(&e);
-        e.to_string()
-      })?;
+  let result = tokio::task::spawn_blocking(move || {
+    let on_progress = |progress: crate::handlers::dto::PatchCollectProgress| {
+      let _ = app.emit(EVT_PATCH_COLLECT_PROGRESS, progress);
+    };
+    patch_collect::collect_patch(std::path::PathBuf::from(source_dir), exclude_patterns, &on_progress)
+  })
+  .await
+  .map_err(|e| e.to_string())?
+  .map_err(|e| {
+    log_full_error(&e);
+    e.to_string()
+  })?;
 
   log::info!(
     "collect_patch done: repos: {}, changed: {}, deleted: {}",
@@ -228,14 +415,24 @@ pub async fn collect_patch(source_dir: String, exclude_patterns: Vec<String>) ->
   Ok(result)
 }
 
-/// Cancels an in-progress patch upload by patch tag name.
+/// Cancels an in-progress patch upload by patch name (raw, as typed).
 #[tauri::command]
 pub async fn cancel_patch_upload(cancel_map: tauri::State<'_, UploadCancelMap>, patchName: String) -> Result<(), String> {
-  let key = format!("patch:{}", patchName);
-  if let Some(tx) = crate::utils::locks::lock(&cancel_map).get(&key) {
-    let _ = tx.send(());
+  let key = patch_cancel_key(&patchName);
+  match crate::utils::locks::lock(&cancel_map).get(&key) {
+    Some(tx) => {
+      log::info!("cancel_patch_upload: cancelling '{}'", &key);
+      let _ = tx.send(());
+    }
+    None => log::warn!("cancel_patch_upload: no running upload for '{}'", &key),
   }
   Ok(())
+}
+
+/// `true` when `resolve_updates_project` failed because the release or its
+/// updates repo does not exist (as opposed to a network/API error).
+fn is_updates_repo_missing(message: &str) -> bool {
+  message.starts_with("No updates repo found") || (message.starts_with("Release '") && message.ends_with("' not found"))
 }
 
 /// Uploads a patch into the updates repo of a game release.
@@ -245,6 +442,11 @@ pub async fn cancel_patch_upload(cancel_map: tauri::State<'_, UploadCancelMap>, 
 /// manifest (data*.zip + manifest.json as release assets) -> create tag +
 /// release -> upload assets -> tag the game git repositories with the patch
 /// tag (anchors the diff base for the next patch).
+///
+/// Every stage is reported as `patch-upload-stage`; `patch-upload-finished`
+/// is emitted exactly once, whatever the outcome. The returned `Err` keeps
+/// the previous shape: the bare code for USER_CANCELLED /
+/// PATCH_UPLOAD_ALREADY_RUNNING / UPLOAD_HASH_MISMATCH, the error text otherwise.
 ///
 /// No resume: patches are small, and the resume infrastructure of upload_v2
 /// is bound to the single `progress_upload` slot in the config.
@@ -263,23 +465,127 @@ pub async fn upload_patch(
   // earlier session); everything staged then travels.
   updatedFields: Option<Vec<String>>,
 ) -> Result<PatchUploadResult, String> {
-  let patch_name_raw = patchName.trim().to_string();
-  if patch_name_raw.is_empty() {
-    return Err("Patch name must not be empty".to_string());
+  let target = StageTarget {
+    app: app.clone(),
+    patch_tag: make_tag_name(patchName.trim()),
+    release_name: name.clone(),
+  };
+  let reporter = StageReporter::new(target.clone(), PATCH_UPLOAD_EVENTS);
+
+  let outcome = run_upload_patch(
+    &reporter,
+    cancel_map.inner(),
+    service.inner(),
+    &name,
+    &patchName,
+    &patchDir,
+    gameSourceDir,
+    deletedFiles,
+    baseReleaseTag,
+    updatedFields,
+  )
+  .await;
+
+  let mut finished = PatchUploadFinishedPayload {
+    patch_tag: target.patch_tag.clone(),
+    release_name: target.release_name.clone(),
+    kind: UploadFinishedKind::Done,
+    stage: None,
+    message: None,
+    code: None,
+    result: None,
+  };
+  let reply = match outcome {
+    Ok(result) => {
+      finished.result = Some(result.clone());
+      Ok(result)
+    }
+    Err((stage, message, code)) => {
+      let is_cancel = code.as_deref() == Some(crate::consts::ERR_USER_CANCELLED);
+      finished.kind = if is_cancel { UploadFinishedKind::Cancelled } else { UploadFinishedKind::Failed };
+      finished.stage = Some(stage);
+      // The frontend matches these codes on the bare `Err` string.
+      let reply = match code.as_deref() {
+        Some(
+          c @ (crate::consts::ERR_USER_CANCELLED
+          | crate::consts::ERR_PATCH_UPLOAD_ALREADY_RUNNING
+          | crate::consts::ERR_UPLOAD_HASH_MISMATCH),
+        ) => c.to_string(),
+        _ => message.clone(),
+      };
+      finished.message = Some(message);
+      finished.code = code;
+      Err(reply)
+    }
+  };
+
+  log::info!(
+    "upload_patch finished: release: {} patch: {} kind: {:?} stage: {:?} code: {:?}",
+    &finished.release_name,
+    &finished.patch_tag,
+    finished.kind,
+    finished.stage,
+    finished.code
+  );
+  let _ = app.emit("patch-upload-finished", finished);
+  reply
+}
+
+/// Body of [`upload_patch`], split into stages. Every failure is reported by
+/// `reporter.fail` (stage event + log) before it is returned.
+#[allow(clippy::too_many_arguments)]
+async fn run_upload_patch(
+  reporter: &StageReporter<PatchUploadStage>,
+  cancel_map: &UploadCancelMap,
+  service: &Arc<Mutex<Service>>,
+  name: &str,
+  patch_name: &str,
+  patch_dir: &str,
+  game_source_dir: Option<String>,
+  deleted_files: Vec<String>,
+  base_release_tag: Option<String>,
+  updated_fields: Option<Vec<String>>,
+) -> Result<PatchUploadResult, StageFailure<PatchUploadStage>> {
+  use PatchUploadStage as Stage;
+  let app = &reporter.target.app;
+  let tag_name = reporter.target.patch_tag.clone();
+
+  // ------------------------------------------------------------------
+  // 1. Prepare: validate, find the updates repo, detect base_patch.
+  // ------------------------------------------------------------------
+  // Cancel map guard (keyed distinctly from full-release uploads). The
+  // receiver is subscribed before the key is visible, so a cancel sent at any
+  // later point is seen by the check before each file.
+  let cancel_key = patch_cancel_key(patch_name);
+  let (cancel_tx, mut cancel_rx) = broadcast::channel::<()>(1);
+  let already_running = {
+    let mut map = crate::utils::locks::lock(cancel_map);
+    if map.contains_key(&cancel_key) {
+      true
+    } else {
+      map.insert(cancel_key.clone(), cancel_tx.clone());
+      false
+    }
+  };
+  if already_running {
+    // Checked BEFORE the first stage event: a duplicate start must not emit
+    // `prepare running`, which the frontend treats as the start of a new
+    // upload of that release. Only `patch-upload-finished` reports it.
+    let message = format!("Upload of patch '{}' is already running", &tag_name);
+    log::warn!("upload_patch: {}", &message);
+    return Err((Stage::Prepare, message, Some(crate::consts::ERR_PATCH_UPLOAD_ALREADY_RUNNING.to_string())));
   }
-  let tag_name = make_tag_name(&patch_name_raw);
-  if !Path::new(&patchDir).is_dir() {
-    return Err(format!("Patch dir does not exist: {}", patchDir));
+  scopeguard::defer! { crate::utils::locks::lock(cancel_map).remove(&cancel_key); };
+
+  reporter.start(Stage::Prepare);
+
+  if patch_name.trim().is_empty() {
+    return Err(reporter.fail(Stage::Prepare, "Patch name must not be empty", None));
+  }
+  if !Path::new(patch_dir).is_dir() {
+    return Err(reporter.fail(Stage::Prepare, format!("Patch dir does not exist: {}", patch_dir), None));
   }
 
-  // Cancel map guard (keyed distinctly from full-release uploads).
-  let cancel_key = format!("patch:{}", tag_name);
-  if crate::utils::locks::lock(&cancel_map).contains_key(&cancel_key) {
-    return Err("PATCH_UPLOAD_ALREADY_RUNNING".to_string());
-  }
-  let (cancel_tx, _) = broadcast::channel::<()>(1);
-  crate::utils::locks::lock(&cancel_map).insert(cancel_key.clone(), cancel_tx.clone());
-  scopeguard::defer! { crate::utils::locks::lock(&cancel_map).remove(&cancel_key); };
 
   // Get api_client (drop Service guard immediately, mirrors upload_v2).
   let api_client = {
@@ -288,42 +594,37 @@ pub async fn upload_patch(
   };
   let api = api_client.current_provider().map_err(|e| {
     log_full_error(&e);
-    e.to_string()
+    reporter.fail(Stage::Prepare, e.to_string(), None)
   })?;
 
-  patch_upload_log(&app, format!("Uploading patch '{}' for release '{}' ...", &tag_name, &name));
+  reporter.log(format!("Uploading patch '{}' for release '{}' ...", &tag_name, name));
 
-  // ------------------------------------------------------------------
-  // 1. Find the updates repo of the release.
-  // ------------------------------------------------------------------
-  let updates_project = resolve_updates_project(&api_client, &name)
-    .await
-    .map_err(|e| {
-      log_full_error(&e);
-      e.to_string()
-    })?;
+  let updates_project = resolve_updates_project(&api_client, name).await.map_err(|e| {
+    log_full_error(&e);
+    let message = e.to_string();
+    let code = is_updates_repo_missing(&message).then_some(crate::consts::ERR_UPDATES_REPO_NOT_FOUND);
+    reporter.fail(Stage::Prepare, message, code)
+  })?;
   let project_id = project_id_for(&api_client, &updates_project).map_err(|e| {
     log_full_error(&e);
-    e.to_string()
+    reporter.fail(Stage::Prepare, e.to_string(), None)
   })?;
 
-  patch_upload_log(&app, format!("Updates repo: {}", &project_id));
+  reporter.log(format!("Updates repo: {}", &project_id));
 
-  // ------------------------------------------------------------------
-  // 2. Detect base_patch = latest existing patch release in the chain.
-  // ------------------------------------------------------------------
+  // Detect base_patch = latest existing patch release in the chain.
   let mut repo_releases = api.get_repo_releases(&project_id).await.map_err(|e| {
     log_full_error(&e);
-    e.to_string()
+    reporter.fail(Stage::Prepare, e.to_string(), None)
   })?;
   // Newest first (None sorts last).
   repo_releases.sort_by(|a, b| b.created_at.cmp(&a.created_at));
   let base_patch = repo_releases.first().map(|r| r.tag_name.clone());
   let already_exists = repo_releases.iter().any(|r| r.tag_name == tag_name);
   if let Some(bp) = &base_patch {
-    patch_upload_log(&app, format!("Base patch: {}", bp));
+    reporter.log(format!("Base patch: {}", bp));
   } else {
-    patch_upload_log(&app, "First patch after full release".to_string());
+    reporter.log("First patch after full release".to_string());
   }
 
   // Ensure the updates repo has at least one commit so that
@@ -331,75 +632,100 @@ pub async fn upload_patch(
   // (GitHub, which needs target_commitish) work on freshly created
   // empty repos.
   if base_patch.is_none() {
-    patch_upload_log(&app, "Initializing empty updates repo ...".to_string());
+    reporter.log("Initializing empty updates repo ...".to_string());
     let _ = api
       .add_file_to_repo(&project_id, ".gitkeep", "", "Initialize updates repo", DEFAULT_BRANCH)
       .await;
   }
+  reporter.done(Stage::Prepare);
 
   // ------------------------------------------------------------------
-  // 3. Pack the patch folder into split archives + patch manifest.
+  // 2. Faction editor settings fragment.
   // ------------------------------------------------------------------
-  // Next to the patch, not in %TEMP%: a failed or partial upload then leaves
-  // a ready archive the developer can re-upload by hand.
-  let pack_dir = Path::new(&patchDir).join(crate::consts::PATCH_ARCHIVE_DIR);
-  let pack_dir_str = pack_dir.to_string_lossy().into_owned();
   // Name the faction-editor fragment after the patch and drop the props the
   // developer unticked. The collector could not do this: the patch tag only
   // exists here. Failure is not fatal — the patch itself still ships.
-  let fe_updated_fields = match finalize_fe_fragment(Path::new(&patchDir), &tag_name, updatedFields.as_deref()) {
+  reporter.start(Stage::FeFragment);
+  let fe_updated_fields = match finalize_fe_fragment(Path::new(patch_dir), &tag_name, updated_fields.as_deref()) {
     Ok(fields) => {
       if !fields.is_empty() {
-        patch_upload_log(&app, format!("Faction editor settings in this patch: {}", fields.join(", ")));
-      } else if fe_fragment_staged(Path::new(&patchDir)) {
+        reporter.log(format!("Faction editor settings in this patch: {}", fields.join(", ")));
+        reporter.done(Stage::FeFragment);
+      } else if fe_fragment_staged(Path::new(patch_dir)) {
         // Only reachable now when the developer unticked every prop, since an
         // absent selection ships everything. Still worth saying out loud.
-        patch_upload_log(
-          &app,
+        reporter.skipped(
+          Stage::FeFragment,
           "A faction editor settings fragment is staged in this folder, but every prop was unticked — the patch ships without settings.".to_string(),
+          None,
         );
+      } else {
+        reporter.skipped(Stage::FeFragment, "No faction editor settings in this patch".to_string(), None);
       }
       fields
     }
     Err(e) => {
-      log::warn!("upload_patch: faction editor fragment skipped: {}", e);
-      patch_upload_log(&app, format!("Faction editor settings were skipped: {}", e));
+      reporter.warn(Stage::FeFragment, format!("Faction editor settings were skipped: {}", e), None);
+      reporter.done(Stage::FeFragment);
       Vec::new()
     }
   };
 
+  // ------------------------------------------------------------------
+  // 3. Save-breaking scan.
+  // ------------------------------------------------------------------
   // Source of truth for the save-breaking flag: re-scan the actual folder and
   // the delete list. `upload_patch` receives a folder the collector may have
   // built in an earlier session (or that was touched by hand), so the collect
   // result cannot be trusted here. The walk is cheap — the packer reads the
   // same files right after.
-  let save_breaking_files = patch_collect::scan_save_breaking(Path::new(&patchDir), &deletedFiles);
+  reporter.start(Stage::SaveBreakScan);
+  let save_breaking_files = patch_collect::scan_save_breaking(Path::new(patch_dir), &deleted_files);
   let breaks_saves = !save_breaking_files.is_empty();
   if breaks_saves {
     let shown = save_breaking_files.iter().take(20).cloned().collect::<Vec<_>>().join(", ");
-    patch_upload_log(
-      &app,
+    reporter.warn(
+      Stage::SaveBreakScan,
       format!(
-        "WARNING: this patch breaks existing save games, marker files ({}): {}",
+        "This patch breaks existing save games, marker files ({}): {}",
         save_breaking_files.len(),
         shown
       ),
+      Some(crate::consts::WARN_SAVE_BREAKING),
     );
   }
+  reporter.done(Stage::SaveBreakScan);
+
+  // ------------------------------------------------------------------
+  // 4. Pack the patch folder into split archives + patch manifest.
+  // ------------------------------------------------------------------
+  reporter.start(Stage::Packing);
+  // Next to the patch, not in %TEMP%: a failed or partial upload then leaves
+  // a ready archive the developer can re-upload by hand.
+  let pack_dir = Path::new(patch_dir).join(crate::consts::PATCH_ARCHIVE_DIR);
+  let pack_dir_str = pack_dir.to_string_lossy().into_owned();
 
   let patch_meta = PatchMeta {
     patch_name: tag_name.clone(),
     base_patch: base_patch.clone(),
-    base_release_tag: baseReleaseTag.clone().filter(|s| !s.is_empty()),
-    deleted_files: deletedFiles.clone(),
+    base_release_tag: base_release_tag.filter(|s| !s.is_empty()),
+    deleted_files,
     updated_fields: fe_updated_fields,
     breaks_saves,
   };
 
-  patch_upload_log(&app, "Packing patch archives ...".to_string());
-  let mut manifest = pack_split_archives(
-    &app,
-    patchDir.clone(),
+  reporter.log("Packing patch archives ...".to_string());
+  let (mut manifest, skipped_files) = pack_split_archives_reported(
+    app,
+    PackProgress {
+      event: crate::consts::EVT_PATCH_PACK_PROGRESS,
+      tag: Some(PackProgressTag {
+        patch_tag: reporter.target.patch_tag.clone(),
+        release_name: reporter.target.release_name.clone(),
+      }),
+      hash_progress: true,
+    },
+    patch_dir.to_string(),
     pack_dir_str.clone(),
     PATCH_CHUNK_SIZE_MB,
     patch_pack_excludes(),
@@ -407,7 +733,20 @@ pub async fn upload_patch(
     Some(patch_meta),
     Vec::new(),
   )
-  .await?;
+  .await
+  .map_err(|e| reporter.fail(Stage::Packing, e, None))?;
+
+  if !skipped_files.is_empty() {
+    reporter.warn(
+      Stage::Packing,
+      format!(
+        "{} unreadable file(s) were left out of the patch: {}",
+        skipped_files.len(),
+        skipped_files.join(", ")
+      ),
+      Some(crate::consts::WARN_PACK_SKIPPED_FILES),
+    );
+  }
 
   // The patch manifest itself is uploaded as a release asset (NOT committed
   // into the repo: full releases already own the single manifest.json path).
@@ -425,17 +764,35 @@ pub async fn upload_patch(
     // Only a convenience for a manual re-upload; never worth failing on.
     log::warn!("cannot write patch checksums: {}", e);
   }
-  patch_upload_log(&app, format!("Patch archive: {}", pack_dir_str));
+  reporter.log(format!("Patch archive: {}", pack_dir_str));
+
+  let _ = app.emit(
+    "patch-upload-manifest",
+    PatchUploadManifestPayload {
+      patch_tag: tag_name.clone(),
+      release_name: name.to_string(),
+      files: manifest
+        .files
+        .iter()
+        .map(|f| PatchManifestEntry {
+          name: f.name.clone(),
+          size: f.size,
+        })
+        .collect(),
+    },
+  );
+  reporter.done(Stage::Packing);
 
   // ------------------------------------------------------------------
-  // 4. Create tag + release, then upload every asset.
+  // 5. Create tag + release.
   // ------------------------------------------------------------------
+  reporter.start(Stage::CreateRelease);
   if already_exists {
-    patch_upload_log(&app, format!("Tag '{}' already exists (retry after interrupted upload), skipping tag creation", &tag_name));
+    reporter.log(format!("Tag '{}' already exists (retry after interrupted upload), skipping tag creation", &tag_name));
   } else {
-    patch_upload_log(&app, format!("Creating tag '{}' in updates repo ...", &tag_name));
+    reporter.log(format!("Creating tag '{}' in updates repo ...", &tag_name));
     if let Err(e) = api.create_tag(&project_id, &tag_name, DEFAULT_BRANCH).await {
-      patch_upload_log(&app, format!("Warning: create_tag '{}' failed (may already exist): {}", &tag_name, e));
+      reporter.warn(Stage::CreateRelease, format!("create_tag '{}' failed (may already exist): {}", &tag_name, e), None);
     }
   }
 
@@ -451,28 +808,37 @@ pub async fn upload_patch(
     })
     .collect();
 
-  patch_upload_log(&app, format!("Creating release '{}' ...", &tag_name));
+  reporter.log(format!("Creating release '{}' ...", &tag_name));
   let created_release = match api.create_release(&project_id, &tag_name, first_assets).await {
     Ok(r) => r,
     Err(e) => {
       if already_exists {
-        return Err(format!(
-          "Release '{}' already exists from a previous interrupted upload. \
-           Delete the release and tag '{}' manually in the updates repo, then retry. \
-           Original error: {}",
-          &tag_name, &tag_name, e
+        return Err(reporter.fail(
+          Stage::CreateRelease,
+          format!(
+            "Release '{}' already exists from a previous interrupted upload. \
+             Delete the release and tag '{}' manually in the updates repo, then retry. \
+             Original error: {}",
+            &tag_name, &tag_name, e
+          ),
+          Some(crate::consts::ERR_RELEASE_EXISTS),
         ));
       }
-      return Err(format!("create_release '{}' failed: {}", &tag_name, e));
+      return Err(reporter.fail(Stage::CreateRelease, format!("create_release '{}' failed: {}", &tag_name, e), None));
     }
   };
   let upload_template = created_release.upload_url;
+  reporter.done(Stage::CreateRelease);
 
+  // ------------------------------------------------------------------
+  // 6. Upload every asset (with server-side hash verification).
+  // ------------------------------------------------------------------
+  reporter.start(Stage::Upload);
   let grand_total: u64 = manifest.files.iter().map(|f| f.size).sum();
   let total_count = manifest.files.len() as u32;
   let mut done_count: u32 = 0;
   let mut uploaded_before: u64 = 0;
-  let _ = app.emit("patch-upload-files-count", (done_count, total_count));
+  reporter.target.emit_files_count(done_count, total_count);
 
   for file in &manifest.files {
     let asset_url = build_asset_url(&upload_template, &project_id, "gw_releases", &tag_name, &file.name);
@@ -485,16 +851,17 @@ pub async fn upload_patch(
     let mut verify_attempts: u32 = 0;
     loop {
       // Cancel check before each attempt.
-      if cancel_tx.receiver_count() > 0 {
-        let mut probe = cancel_tx.subscribe();
-        if probe.try_recv().is_ok() {
-          patch_upload_log(&app, format!("Patch upload cancelled before file: {}", &file.name));
-          return Err("USER_CANCELLED".to_string());
-        }
+      if cancel_requested(&mut cancel_rx) {
+        return Err(reporter.fail(
+          Stage::Upload,
+          format!("Patch upload cancelled before file: {}", &file.name),
+          Some(crate::consts::ERR_USER_CANCELLED),
+        ));
       }
 
+      emit_file_status(&reporter.target, &asset_name, UploadFileStatus::Uploading);
       let actually_uploaded = upload_patch_asset_stream(
-        &app,
+        &reporter.target,
         api,
         &file_path,
         asset_name.clone(),
@@ -504,39 +871,61 @@ pub async fn upload_patch(
         grand_total,
         cancel_tx.subscribe(),
       )
-      .await?;
+      .await
+      .map_err(|e| {
+        if e == crate::consts::ERR_USER_CANCELLED {
+          reporter.fail(
+            Stage::Upload,
+            format!("Patch upload cancelled during file: {}", &asset_name),
+            Some(crate::consts::ERR_USER_CANCELLED),
+          )
+        } else {
+          reporter.fail(Stage::Upload, e, None)
+        }
+      })?;
 
       if actually_uploaded < total_size {
-        patch_upload_log(&app, format!("Upload of '{}' was interrupted ({} of {} bytes)", &asset_name, actually_uploaded, total_size));
-        return Err("USER_CANCELLED".to_string());
+        return Err(reporter.fail(
+          Stage::Upload,
+          format!("Upload of '{}' was interrupted ({} of {} bytes)", &asset_name, actually_uploaded, total_size),
+          Some(crate::consts::ERR_USER_CANCELLED),
+        ));
       }
 
       let Some(expected) = file.sha256.as_deref().filter(|s| !s.is_empty()) else {
         break;
       };
 
+      emit_file_status(&reporter.target, &asset_name, UploadFileStatus::Verifying);
       match api.get_uploaded_asset_sha256(&project_id, &tag_name, &asset_name).await {
         Ok(Some(remote)) if remote.eq_ignore_ascii_case(expected) => {
-          patch_upload_log(&app, format!("File {}: sha256 verified on server", &asset_name));
+          reporter.log(format!("File {}: sha256 verified on server", &asset_name));
           break;
         }
         Ok(Some(remote)) => {
           verify_attempts += 1;
           if verify_attempts > crate::consts::MAX_UPLOAD_VERIFY_RETRIES {
-            patch_upload_log(&app, format!("File {}: server sha256 {} != local {} after {} attempts", &asset_name, &remote, expected, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
-            return Err(crate::consts::ERR_UPLOAD_HASH_MISMATCH.to_string());
+            return Err(reporter.fail(
+              Stage::Upload,
+              format!("File {}: server sha256 {} != local {} after {} attempts", &asset_name, &remote, expected, crate::consts::MAX_UPLOAD_VERIFY_RETRIES),
+              Some(crate::consts::ERR_UPLOAD_HASH_MISMATCH),
+            ));
           }
-          patch_upload_log(&app, format!("File {}: server sha256 {} != local {}, deleting asset and re-uploading (attempt {}/{})", &asset_name, &remote, expected, verify_attempts, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
+          reporter.log(format!("File {}: server sha256 {} != local {}, deleting asset and re-uploading (attempt {}/{})", &asset_name, &remote, expected, verify_attempts, crate::consts::MAX_UPLOAD_VERIFY_RETRIES));
           if let Err(e) = api.delete_release_asset(&project_id, &tag_name, &asset_name).await {
             // Fatal: see the identical comment in upload_v2.rs — GitHub
             // rejects a re-upload under an existing asset name, so a failed
             // delete must not be swallowed as a warning.
-            patch_upload_log(&app, format!("File {}: failed to delete stale asset before re-upload: {}", &asset_name, e));
-            return Err(crate::consts::ERR_UPLOAD_HASH_MISMATCH.to_string());
+            return Err(reporter.fail(
+              Stage::Upload,
+              format!("File {}: failed to delete stale asset before re-upload: {}", &asset_name, e),
+              Some(crate::consts::ERR_UPLOAD_HASH_MISMATCH),
+            ));
           }
+          emit_file_status(&reporter.target, &asset_name, UploadFileStatus::Retrying);
         }
         Ok(None) => {
-          patch_upload_log(&app, format!("File {}: server returned no sha256, verification skipped", &asset_name));
+          reporter.log(format!("File {}: server returned no sha256, verification skipped", &asset_name));
           break;
         }
         Err(e) => {
@@ -548,16 +937,24 @@ pub async fn upload_patch(
 
     uploaded_before += total_size;
     done_count += 1;
-    let _ = app.emit("patch-upload-files-count", (done_count, total_count));
-    patch_upload_log(&app, format!("File {} uploaded successful !", &asset_name));
+    emit_file_status(&reporter.target, &asset_name, UploadFileStatus::Done);
+    reporter.target.emit_files_count(done_count, total_count);
+    reporter.log(format!("File {} uploaded successful !", &asset_name));
   }
 
-  patch_upload_log(&app, format!("Patch '{}' uploaded successful !", &tag_name));
+  reporter.log(format!("Patch '{}' uploaded successful !", &tag_name));
+  reporter.done(Stage::Upload);
 
-  // Best-effort: re-publish the static release index.  Non-fatal but visible.
+  // ------------------------------------------------------------------
+  // 7. Re-publish the static release index. Non-fatal but visible.
+  // ------------------------------------------------------------------
+  reporter.start(Stage::PublishIndex);
   if let Err(e) = crate::service::index_publisher::publish_index(api, false).await {
-    log::warn!("Failed to publish release index after patch upload: {}", e);
-    patch_upload_log(&app, format!("WARNING: Failed to publish release index: {}. The patch may not appear for players until the index is re-published manually.", e));
+    reporter.warn(
+      Stage::PublishIndex,
+      format!("Failed to publish release index: {}. The patch may not appear for players until the index is re-published manually.", e),
+      Some(crate::consts::WARN_INDEX_PUBLISH_FAILED),
+    );
   }
 
   // Invalidate AFTER publishing (see the same note in upload_v2.rs).
@@ -565,40 +962,66 @@ pub async fn upload_patch(
     let mut svc = service.lock().await;
     svc.invalidate_releases();
   }
+  reporter.done(Stage::PublishIndex);
 
   // ------------------------------------------------------------------
-  // 5. Tag the game git repositories with the patch tag (anchors the
+  // 8. Tag the game git repositories with the patch tag (anchors the
   //    diff base for the NEXT patch). Never aborts the finished upload.
   // ------------------------------------------------------------------
-  let mut warnings: Vec<String> = Vec::new();
-  let repos: Vec<RepoTagReport> = match gameSourceDir.as_deref().filter(|s| !s.is_empty()) {
+  reporter.start(Stage::TagRepos);
+  let mut extra_warnings: Vec<String> = Vec::new();
+  let repos: Vec<RepoTagReport> = match game_source_dir.as_deref().filter(|s| !s.is_empty()) {
     Some(source) => {
-      patch_upload_log(&app, format!("Tagging game repositories with '{}' ...", &tag_name));
+      reporter.log(format!("Tagging game repositories with '{}' ...", &tag_name));
       let source = source.to_string();
       let tag = tag_name.clone();
-      tokio::task::spawn_blocking(move || patch_collect::tag_game_repos(Path::new(&source), &tag))
-        .await
-        .map_err(|e| e.to_string())?
+      let target = reporter.target.clone();
+      let repos = tokio::task::spawn_blocking(move || {
+        let on_repo = |report: &RepoTagReport| {
+          let _ = target.app.emit(
+            "patch-upload-repo-tagged",
+            PatchRepoTaggedPayload {
+              patch_tag: target.patch_tag.clone(),
+              release_name: target.release_name.clone(),
+              report: report.clone(),
+            },
+          );
+        };
+        patch_collect::tag_game_repos(Path::new(&source), &tag, &on_repo)
+      })
+      .await
+      .map_err(|e| reporter.fail(Stage::TagRepos, e.to_string(), None))?;
+
+      for repo in &repos {
+        if !repo.pushed {
+          reporter.warn(
+            Stage::TagRepos,
+            format!("repo '{}': {}", repo.repo_rel_path, repo.message.clone().unwrap_or_else(|| "not pushed".to_string())),
+            Some(crate::consts::WARN_TAG_PUSH_FAILED),
+          );
+        }
+      }
+      reporter.done(Stage::TagRepos);
+      repos
     }
     None => {
-      warnings.push("Game source dir not provided: game repositories were not tagged. Next patch may collect duplicates.".to_string());
+      let message = "Game source dir not provided: game repositories were not tagged. Next patch may collect duplicates.".to_string();
+      reporter.skipped(Stage::TagRepos, message.clone(), Some(crate::consts::SKIP_NO_GAME_SOURCE_DIR));
+      extra_warnings.push(message);
       Vec::new()
     }
   };
-  for repo in &repos {
-    if !repo.pushed {
-      warnings.push(format!("repo '{}': {}", repo.repo_rel_path, repo.message.clone().unwrap_or_else(|| "not pushed".to_string())));
-    }
-  }
 
   // The pack dir is deliberately NOT removed: it is the archive the developer
   // re-uploads by hand when a release ends up half-published. The next pack of
   // this folder cleans it (`cleanup_previous_pack`).
-  patch_upload_log(&app, format!("Archive kept for manual re-upload: {}", pack_dir_str));
+  reporter.log(format!("Archive kept for manual re-upload: {}", pack_dir_str));
 
-  log::info!("upload_patch done: release: {} patch: {} repos tagged: {}", &name, &tag_name, repos.len());
-  let _ = app.emit("patch-upload-files-count", (total_count, total_count));
+  log::info!("upload_patch done: release: {} patch: {} repos tagged: {}", name, &tag_name, repos.len());
+  reporter.target.emit_files_count(total_count, total_count);
 
+  let mut warnings = reporter.take_warnings();
+  warnings.extend(extra_warnings);
   Ok(PatchUploadResult { repos, warnings })
 }
 

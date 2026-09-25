@@ -332,6 +332,95 @@ declare interface PatchUploadResult {
   warnings: string[];
 }
 
+// Partial update patches: upload status events (Rust -> front).
+// Contract: plans/launcher/patch-upload-status-plan.md, stage 1.
+// Stage order is fixed exactly like this.
+declare type PatchUploadStage =
+  | "prepare"
+  | "fe_fragment"
+  | "save_break_scan"
+  | "packing"
+  | "create_release"
+  | "upload"
+  | "publish_index"
+  | "tag_repos";
+declare type StageState = "running" | "done" | "skipped" | "warning" | "failed";
+/// `patch-upload-stage`: start (running) and end of every stage.
+declare interface PatchUploadStagePayload {
+  patch_tag: string;
+  release_name: string;
+  stage: PatchUploadStage;
+  state: StageState;
+  message: string | null;
+  code: string | null;
+}
+declare type PatchUploadFinishedKind = "done" | "failed" | "cancelled";
+/// `patch-upload-finished`: exactly once at the end of `upload_patch`.
+declare interface PatchUploadFinishedPayload {
+  patch_tag: string;
+  release_name: string;
+  kind: PatchUploadFinishedKind;
+  /// Stage the upload failed / was cancelled on; null for done.
+  stage: PatchUploadStage | null;
+  message: string | null;
+  code: string | null;
+  /// Only for done.
+  result: PatchUploadResult | null;
+}
+/// `patch-upload-manifest`: every asset that is going to be uploaded.
+declare interface PatchUploadManifestPayload {
+  patch_tag: string;
+  release_name: string;
+  files: { name: string; size: number }[];
+}
+/// `patch-upload-repo-tagged`: one game repo processed by tag_game_repos.
+declare interface PatchRepoTaggedPayload {
+  patch_tag: string;
+  release_name: string;
+  report: RepoTagReport;
+}
+/// Routing key of the patch upload events.
+declare interface PatchUploadTag {
+  patch_tag: string;
+  release_name: string;
+}
+
+/// `patch-upload-log`.
+declare interface PatchUploadLogPayload extends PatchUploadTag {
+  message: string;
+}
+
+/// `patch-upload-files-count`.
+declare interface PatchFilesCountPayload extends PatchUploadTag {
+  done: number;
+  total: number;
+}
+
+/// `patch-upload-progress`.
+declare type PatchUploadProgressPayload = UploadProgressPayload & PatchUploadTag;
+
+/// `patch-pack-progress`.
+declare type PatchPackProgressPayload = CompressProgressPayload & PatchUploadTag;
+
+declare type PatchFileStatus = "uploading" | "waiting_server" | "verifying" | "retrying" | "done";
+/// `patch-upload-file-status`: per-file sub-status on the upload stage.
+declare interface PatchFileStatusPayload {
+  patch_tag: string;
+  release_name: string;
+  file_name: string;
+  status: PatchFileStatus;
+}
+declare type PatchCollectStage = "scan" | "diff" | "copy" | "fe_fragment" | "done";
+/// `patch-collect-progress`: progress of the `collect_patch` command.
+declare interface PatchCollectProgress {
+  stage: PatchCollectStage;
+  repo: string | null;
+  repos_done: number;
+  repos_total: number;
+  files_done: number;
+  files_total: number;
+}
+
 
 // 
 

@@ -180,3 +180,184 @@ pub struct FileErrorPayload {
   pub code: String,
   pub message: String,
 }
+
+// ---------------------------------------------------------------------------
+// Staged progress of long multi-step commands (patch upload today, the full
+// release upload later). The event contract is shared with the frontend
+// (`typing.d.ts`): names and enum values must not change.
+// ---------------------------------------------------------------------------
+
+/// Stages of `upload_patch`, in the order they run.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchUploadStage {
+  /// Validation, updates repo lookup, base patch, `.gitkeep` of an empty repo.
+  Prepare,
+  /// `finalize_fe_fragment`.
+  FeFragment,
+  /// `scan_save_breaking`.
+  SaveBreakScan,
+  /// Split archives + checksums.
+  Packing,
+  /// `create_tag` + `create_release`.
+  CreateRelease,
+  /// Asset upload loop (with server-side hash verification).
+  Upload,
+  /// `publish_index` + release cache invalidation.
+  PublishIndex,
+  /// Tagging the game git repositories.
+  TagRepos,
+}
+
+/// State of one stage. A stage gets `Running` when it starts and one of the
+/// others when it ends; `Warning` may also arrive several times in between.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageState {
+  Running,
+  Done,
+  Skipped,
+  Warning,
+  Failed,
+}
+
+/// Payload of a stage event (`patch-upload-stage` for patches). Generic over
+/// the stage enum so other staged commands can reuse it.
+#[derive(Debug, Clone, Serialize)]
+pub struct StageEventPayload<S: Serialize> {
+  /// Routing key for the frontend (the patch tag for patch uploads).
+  pub patch_tag: String,
+  pub release_name: String,
+  pub stage: S,
+  pub state: StageState,
+  /// Human-readable detail (file, repo, error text).
+  pub message: Option<String>,
+  /// Machine code for localized hints (see `consts::ERR_*` / `WARN_*`).
+  pub code: Option<String>,
+}
+
+/// Any payload of a staged command's event plus its routing key, so the
+/// frontend can tell concurrent uploads apart (`patch-upload-log`,
+/// `patch-upload-files-count`, `patch-upload-progress`).
+#[derive(Debug, Clone, Serialize)]
+pub struct TaggedPayload<T: Serialize> {
+  pub patch_tag: String,
+  pub release_name: String,
+  #[serde(flatten)]
+  pub payload: T,
+}
+
+/// `patch-upload-log` body.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogLinePayload {
+  pub message: String,
+}
+
+/// `patch-upload-files-count` body.
+#[derive(Debug, Clone, Serialize)]
+pub struct FilesCountPayload {
+  pub done: u32,
+  pub total: u32,
+}
+
+/// Result of a finished patch upload (return value of `upload_patch`).
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchUploadResult {
+  /// Per-repo outcome of tagging the game repositories with the patch tag.
+  pub repos: Vec<crate::utils::patch_collect::RepoTagReport>,
+  /// Non-fatal issues (e.g. failed tag pushes).
+  pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadFinishedKind {
+  Done,
+  Failed,
+  Cancelled,
+}
+
+/// Payload of `patch-upload-finished`: emitted exactly once per `upload_patch`
+/// call, whatever the outcome.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchUploadFinishedPayload {
+  pub patch_tag: String,
+  pub release_name: String,
+  pub kind: UploadFinishedKind,
+  /// Stage that failed / was cancelled; `None` for `Done`.
+  pub stage: Option<PatchUploadStage>,
+  pub message: Option<String>,
+  pub code: Option<String>,
+  /// Only for `Done`.
+  pub result: Option<PatchUploadResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchManifestEntry {
+  pub name: String,
+  pub size: u64,
+}
+
+/// Payload of `patch-upload-manifest`: every asset about to be uploaded.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchUploadManifestPayload {
+  pub patch_tag: String,
+  pub release_name: String,
+  pub files: Vec<PatchManifestEntry>,
+}
+
+/// Payload of `patch-upload-repo-tagged`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchRepoTaggedPayload {
+  pub patch_tag: String,
+  pub release_name: String,
+  pub report: crate::utils::patch_collect::RepoTagReport,
+}
+
+/// Sub-status of one asset during the upload stage.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadFileStatus {
+  Uploading,
+  /// The whole body is sent, waiting for the server response.
+  WaitingServer,
+  /// Fetching the server-side sha256.
+  Verifying,
+  /// Hash mismatch: the asset was deleted and is uploaded again.
+  Retrying,
+  Done,
+}
+
+/// Payload of `patch-upload-file-status`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchUploadFileStatusPayload {
+  pub patch_tag: String,
+  pub release_name: String,
+  pub file_name: String,
+  pub status: UploadFileStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectStage {
+  Scan,
+  Diff,
+  Copy,
+  FeFragment,
+  Done,
+}
+
+/// Payload of `patch-collect-progress`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchCollectProgress {
+  pub stage: CollectStage,
+  /// Repository being processed (relative path, the source folder name for
+  /// the root repo).
+  pub repo: Option<String>,
+  pub repos_done: u32,
+  pub repos_total: u32,
+  /// Files copied so far over all repos.
+  pub files_done: u32,
+  /// Changed paths seen so far over all repos (grows as repos are diffed).
+  pub files_total: u32,
+}

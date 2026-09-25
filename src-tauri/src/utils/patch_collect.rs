@@ -23,6 +23,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::consts::{FE_DEFAULT_CONFIG_REL_PATH, FE_PATCH_FRAGMENT_STAGING};
+use crate::handlers::dto::{CollectStage, PatchCollectProgress};
 use crate::service::faction_patch::{self, FePatchFragment};
 
 /// Per-repository outcome of the collection.
@@ -158,91 +159,97 @@ pub struct RepoTagReport {
 /// from this tag. All repos are tagged (not only changed ones) to keep the
 /// diff bases consistent across the whole game tree. Errors are collected
 /// into per-repo reports and never abort the whole run.
-pub fn tag_game_repos(source_dir: &Path, tag_name: &str) -> Vec<RepoTagReport> {
+///
+/// `on_repo` is called with each report as soon as its repo is processed
+/// (live progress for the UI); it runs on the calling thread.
+pub fn tag_game_repos(source_dir: &Path, tag_name: &str, on_repo: &dyn Fn(&RepoTagReport)) -> Vec<RepoTagReport> {
   let mut reports = Vec::new();
 
   for repo_dir in find_git_roots(source_dir) {
-    let repo_rel_path = repo_dir
-      .strip_prefix(source_dir)
-      .map(|p| p.to_string_lossy().into_owned())
-      .unwrap_or_default();
-
-    let mut report = RepoTagReport {
-      repo_rel_path,
-      tagged: false,
-      pushed: false,
-      message: None,
-    };
-
-    let repo = match git2::Repository::open(&repo_dir) {
-      Ok(repo) => repo,
-      Err(e) => {
-        report.message = Some(format!("cannot open repository: {}", e));
-        reports.push(report);
-        continue;
-      }
-    };
-
-    let head = match repo.head().and_then(|r| r.peel_to_commit()) {
-      Ok(commit) => commit,
-      Err(e) => {
-        report.message = Some(format!("cannot resolve HEAD: {}", e));
-        reports.push(report);
-        continue;
-      }
-    };
-
-    // Already tagged (e.g. retry after a failed push) — skip creation.
-    if repo.find_reference(&format!("refs/tags/{}", tag_name)).is_ok() {
-      report.message = Some("tag already exists".to_string());
-    } else {
-      // Prefer the committer identity from git config, fall back to a fixed one.
-      let signature = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("GW Launcher", "launcher@globalwar.local"));
-      let signature = match signature {
-        Ok(s) => s,
-        Err(e) => {
-          report.message = Some(format!("cannot build signature: {}", e));
-          reports.push(report);
-          continue;
-        }
-      };
-
-      let msg = format!("Patch {}", tag_name);
-      if let Err(e) = repo.tag(tag_name, head.as_object(), &signature, &msg, false) {
-        report.message = Some(format!("cannot create tag: {}", e));
-        reports.push(report);
-        continue;
-      }
-      report.tagged = true;
-    }
-
-    // Push via the system git binary — it reuses the developer's stored
-    // credentials (credential manager / ssh agent) without extra setup.
-    let push = std::process::Command::new("git")
-      .arg("-C")
-      .arg(&repo_dir)
-      .args(["push", "origin", tag_name])
-      .output();
-
-    match push {
-      Ok(out) if out.status.success() => {
-        report.pushed = true;
-      }
-      Ok(out) => {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        report.message = Some(format!("git push failed: {}", stderr));
-      }
-      Err(e) => {
-        report.message = Some(format!("cannot run git: {}", e));
-      }
-    }
-
+    let report = tag_game_repo(&repo_dir, source_dir, tag_name);
+    on_repo(&report);
     reports.push(report);
   }
 
   reports
+}
+
+/// Tags and pushes a single repository of [`tag_game_repos`].
+fn tag_game_repo(repo_dir: &Path, source_dir: &Path, tag_name: &str) -> RepoTagReport {
+  let repo_rel_path = repo_dir
+    .strip_prefix(source_dir)
+    .map(|p| p.to_string_lossy().into_owned())
+    .unwrap_or_default();
+
+  let mut report = RepoTagReport {
+    repo_rel_path,
+    tagged: false,
+    pushed: false,
+    message: None,
+  };
+
+  let repo = match git2::Repository::open(repo_dir) {
+    Ok(repo) => repo,
+    Err(e) => {
+      report.message = Some(format!("cannot open repository: {}", e));
+      return report;
+    }
+  };
+
+  let head = match repo.head().and_then(|r| r.peel_to_commit()) {
+    Ok(commit) => commit,
+    Err(e) => {
+      report.message = Some(format!("cannot resolve HEAD: {}", e));
+      return report;
+    }
+  };
+
+  // Already tagged (e.g. retry after a failed push) — skip creation.
+  if repo.find_reference(&format!("refs/tags/{}", tag_name)).is_ok() {
+    report.message = Some("tag already exists".to_string());
+  } else {
+    // Prefer the committer identity from git config, fall back to a fixed one.
+    let signature = repo
+      .signature()
+      .or_else(|_| git2::Signature::now("GW Launcher", "launcher@globalwar.local"));
+    let signature = match signature {
+      Ok(s) => s,
+      Err(e) => {
+        report.message = Some(format!("cannot build signature: {}", e));
+        return report;
+      }
+    };
+
+    let msg = format!("Patch {}", tag_name);
+    if let Err(e) = repo.tag(tag_name, head.as_object(), &signature, &msg, false) {
+      report.message = Some(format!("cannot create tag: {}", e));
+      return report;
+    }
+    report.tagged = true;
+  }
+
+  // Push via the system git binary — it reuses the developer's stored
+  // credentials (credential manager / ssh agent) without extra setup.
+  let push = std::process::Command::new("git")
+    .arg("-C")
+    .arg(repo_dir)
+    .args(["push", "origin", tag_name])
+    .output();
+
+  match push {
+    Ok(out) if out.status.success() => {
+      report.pushed = true;
+    }
+    Ok(out) => {
+      let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+      report.message = Some(format!("git push failed: {}", stderr));
+    }
+    Err(e) => {
+      report.message = Some(format!("cannot run git: {}", e));
+    }
+  }
+
+  report
 }
 
 /// Base dir for collected patches: a `patches` folder next to the launcher exe.
@@ -339,7 +346,18 @@ fn build_exclude_set(exclude_patterns: &[String]) -> Result<Option<GlobSet>> {
   Ok(Some(builder.build().context("failed to build exclude glob set")?))
 }
 
-pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Result<PatchCollectResult> {
+/// Minimum interval between two `Copy` progress reports of [`collect_patch`].
+const COLLECT_COPY_PROGRESS_THROTTLE_MS: u128 = 200;
+
+/// `on_progress` gets live progress for the UI (`patch-collect-progress`):
+/// once the repos are found (`Scan`), before each repo diff (`Diff`), while
+/// files are copied (`Copy`, throttled), when the faction-editor fragment is
+/// staged (`FeFragment`) and at the end (`Done`). It runs on the calling thread.
+pub fn collect_patch(
+  source_dir: PathBuf,
+  exclude_patterns: Vec<String>,
+  on_progress: &dyn Fn(PatchCollectProgress),
+) -> Result<PatchCollectResult> {
   if !source_dir.is_dir() {
     bail!("source dir does not exist: {:?}", source_dir);
   }
@@ -364,9 +382,45 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
   };
   let mut fe_fragment: Option<FePatchFragment> = None;
 
-  for repo_dir in find_git_roots(&source_dir) {
-    let report = collect_repo(
-      &repo_dir,
+  let repo_dirs = find_git_roots(&source_dir);
+  let repos_total = repo_dirs.len() as u32;
+  // Totals over the repos finished so far; the current repo adds on top.
+  let mut files_done_before: u32 = 0;
+  let mut files_total_before: u32 = 0;
+  let progress = |stage: CollectStage, repo: Option<String>, repos_done: u32, files_done: u32, files_total: u32| {
+    on_progress(PatchCollectProgress {
+      stage,
+      repo,
+      repos_done,
+      repos_total,
+      files_done,
+      files_total,
+    })
+  };
+  progress(CollectStage::Scan, None, 0, 0, 0);
+
+  for (repo_index, repo_dir) in repo_dirs.iter().enumerate() {
+    let repo_label = repo_progress_label(repo_dir, &source_dir);
+    let repos_done = repo_index as u32;
+    progress(CollectStage::Diff, Some(repo_label.clone()), repos_done, files_done_before, files_total_before);
+
+    let last_copy_emit = std::cell::Cell::new(std::time::Instant::now());
+    let on_file = |copied: u32, deltas: u32| {
+      if last_copy_emit.get().elapsed().as_millis() < COLLECT_COPY_PROGRESS_THROTTLE_MS {
+        return;
+      }
+      last_copy_emit.set(std::time::Instant::now());
+      progress(
+        CollectStage::Copy,
+        Some(repo_label.clone()),
+        repos_done,
+        files_done_before + copied,
+        files_total_before + deltas,
+      );
+    };
+
+    let (report, repo_deltas) = collect_repo(
+      repo_dir,
       &source_dir,
       &patch_dir,
       &mut result.deleted_files,
@@ -374,7 +428,10 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
       &mut fe_fragment,
       &save_breaking_set,
       &mut result.save_breaking_files,
+      &on_file,
     );
+    files_done_before += report.changed;
+    files_total_before += repo_deltas;
     log::debug!(
       "collect_patch repo {:?}: status={:?} changed={} deleted={}",
       report.repo_rel_path,
@@ -407,6 +464,7 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
   // changed. The patch tag is not known yet, so it is written under the
   // staging name; `upload_patch` renames it.
   if let Some(fragment) = fe_fragment.as_ref().filter(|f| !f.is_empty()) {
+    progress(CollectStage::FeFragment, None, repos_total, files_done_before, files_total_before);
     let dir = crate::utils::patch_markers::patches_dir(&patch_dir);
     fs::create_dir_all(&dir).with_context(|| format!("create {:?}", dir))?;
     let path = dir.join(FE_PATCH_FRAGMENT_STAGING);
@@ -428,8 +486,22 @@ pub fn collect_patch(source_dir: PathBuf, exclude_patterns: Vec<String>) -> Resu
     result.breaks_saves,
     result.patch_dir
   );
+  progress(CollectStage::Done, None, repos_total, files_done_before, files_total_before);
 
   Ok(result)
+}
+
+/// Repo name shown in the collect progress: the path relative to the source
+/// dir, or the source folder name for the root repo.
+fn repo_progress_label(repo_dir: &Path, source_dir: &Path) -> String {
+  let rel = repo_dir.strip_prefix(source_dir).map(to_rel_slash).unwrap_or_default();
+  if !rel.is_empty() {
+    return rel;
+  }
+  source_dir
+    .file_name()
+    .map(|n| n.to_string_lossy().into_owned())
+    .unwrap_or_else(|| to_rel_slash(source_dir))
 }
 
 /// Diff the two committed versions of `faction_editor_default_config.ltx` a
@@ -451,6 +523,10 @@ fn diff_fe_default_config(repo: &git2::Repository, delta: &git2::DiffDelta<'_>) 
 
 /// Collects tag..HEAD changes of a single repository into the patch folder.
 /// Files matching `exclude_set` (relative to `source_dir`) are silently skipped.
+///
+/// Returns the report and the number of diff deltas of the repo (0 when no
+/// diff was made). `on_file(copied, deltas)` is called after every copied file.
+#[allow(clippy::too_many_arguments)]
 fn collect_repo(
   repo_dir: &Path,
   source_dir: &Path,
@@ -460,7 +536,8 @@ fn collect_repo(
   fe_fragment: &mut Option<FePatchFragment>,
   save_breaking_set: &GlobSet,
   save_breaking_files: &mut Vec<String>,
-) -> RepoPatchReport {
+  on_file: &dyn Fn(u32, u32),
+) -> (RepoPatchReport, u32) {
   let rel_prefix = repo_dir
     .strip_prefix(source_dir)
     .map(|p| p.to_path_buf())
@@ -481,7 +558,7 @@ fn collect_repo(
     Err(e) => {
       report.status = RepoPatchStatus::Error;
       report.message = Some(format!("cannot open repository: {}", e));
-      return report;
+      return (report, 0);
     }
   };
 
@@ -490,19 +567,19 @@ fn collect_repo(
     Err(e) => {
       report.status = RepoPatchStatus::Error;
       report.message = Some(format!("cannot resolve HEAD: {}", e));
-      return report;
+      return (report, 0);
     }
   };
 
   let Some((tag_name, base_commit)) = latest_reachable_tag(&repo, &head) else {
     report.status = RepoPatchStatus::NoTags;
-    return report;
+    return (report, 0);
   };
   report.base_tag = tag_name.clone();
 
   if base_commit.id() == head.id() {
     report.status = RepoPatchStatus::NoChanges;
-    return report;
+    return (report, 0);
   }
 
   let base_tree = match base_commit.tree() {
@@ -510,7 +587,7 @@ fn collect_repo(
     Err(e) => {
       report.status = RepoPatchStatus::Error;
       report.message = Some(format!("cannot read base tree of tag '{}': {}", tag_name, e));
-      return report;
+      return (report, 0);
     }
   };
   let head_tree = match head.tree() {
@@ -518,7 +595,7 @@ fn collect_repo(
     Err(e) => {
       report.status = RepoPatchStatus::Error;
       report.message = Some(format!("cannot read HEAD tree: {}", e));
-      return report;
+      return (report, 0);
     }
   };
 
@@ -527,10 +604,11 @@ fn collect_repo(
     Err(e) => {
       report.status = RepoPatchStatus::Error;
       report.message = Some(format!("diff failed ({}..HEAD): {}", tag_name, e));
-      return report;
+      return (report, 0);
     }
   };
 
+  let deltas_total = diff.deltas().len() as u32;
   for delta in diff.deltas() {
     let status = delta.status();
 
@@ -603,16 +681,17 @@ fn collect_repo(
           if let Err(e) = fs::create_dir_all(parent).context("create patch subfolder") {
             report.status = RepoPatchStatus::Error;
             report.message = Some(format!("cannot create {:?}: {}", parent, e));
-            return report;
+            return (report, deltas_total);
           }
         }
         if let Err(e) = fs::copy(&src, &dest).context("copy patch file") {
           report.status = RepoPatchStatus::Error;
           report.message = Some(format!("cannot copy {:?}: {}", src, e));
-          return report;
+          return (report, deltas_total);
         }
 
         report.changed += 1;
+        on_file(report.changed, deltas_total);
       }
     }
   }
@@ -622,7 +701,7 @@ fn collect_repo(
     report.status = RepoPatchStatus::NoChanges;
   }
 
-  report
+  (report, deltas_total)
 }
 
 #[cfg(test)]

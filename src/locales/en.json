@@ -393,7 +393,65 @@
         "tagOk": "tag pushed",
         "tagFail": "not pushed",
         "excludePatterns": "Exclude from patch",
-        "resetDefaults": "Reset to defaults"
+        "resetDefaults": "Reset to defaults",
+        "stage": {
+          "prepare": "Preparation",
+          "feFragment": "Faction editor settings",
+          "saveBreakScan": "Save compatibility check",
+          "packing": "Packing",
+          "createRelease": "Creating release",
+          "upload": "Uploading files",
+          "publishIndex": "Publishing index",
+          "tagRepos": "Tags in repositories"
+        },
+        "stageState": {
+          "pending": "pending",
+          "running": "running",
+          "done": "done",
+          "skipped": "skipped",
+          "warning": "with warning",
+          "failed": "failed"
+        },
+        "headerStatus": "Uploading patch: {stage}",
+        "headerFailed": "Patch upload failed",
+        "filesCount": "Files: {done} / {total}",
+        "overall": "Total",
+        "speed": "{value} {unit}/s",
+        "fileStatus": {
+          "uploading": "uploading",
+          "waitingServer": "waiting for server response",
+          "verifying": "verifying checksum",
+          "retrying": "checksum mismatch, re-uploading",
+          "done": "uploaded"
+        },
+        "failedAt": "Failed at stage \"{stage}\"",
+        "failedUnknown": "Patch upload failed",
+        "cancelled": "Upload cancelled",
+        "cancelling": "Cancelling…",
+        "cancelFailed": "Failed to cancel the upload",
+        "cancelDisabledHint": "The upload can be stopped only while files are being uploaded",
+        "warningsTitle": "Warnings:",
+        "showLog": "Show log",
+        "collectProgress": "Repository {done} / {total}: {repo}",
+        "collectFiles": "Files copied: {done} / {total}",
+        "collectStage": {
+          "scan": "searching repositories",
+          "diff": "comparing changes",
+          "copy": "copying files",
+          "feFragment": "building faction editor settings",
+          "done": "done"
+        },
+        "hint": {
+          "alreadyRunning": "This patch is already being uploaded.",
+          "releaseExists": "A release with this tag already exists in the updates repository (an unfinished patch?). Delete the release and the tag on the provider website and upload the patch again.",
+          "hashMismatch": "The server returned a different checksum after 3 attempts.",
+          "updatesRepoNotFound": "The updates repository of the release was not found.",
+          "indexPublishFailed": "The index was not published, players will not see the patch until it is published manually (the \"Republish index\" button).",
+          "saveBreaking": "The patch breaks old saves and will be marked as incompatible with them.",
+          "packSkippedFiles": "Some files could not be read and were left out of the patch.",
+          "tagPushFailed": "The tag was not pushed to some game repositories — push it manually.",
+          "noGameSourceDir": "The game folder is not set — tags in the game repositories were not created."
+        }
       }
     },
     "patches": {
