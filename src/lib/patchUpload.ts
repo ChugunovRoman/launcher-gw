@@ -45,7 +45,7 @@ export const PATCH_HINT_KEYS: Record<string, string> = {
   RELEASE_EXISTS: "app.releases.patch.hint.releaseExists",
   UPLOAD_HASH_MISMATCH: "app.releases.patch.hint.hashMismatch",
   UPDATES_REPO_NOT_FOUND: "app.releases.patch.hint.updatesRepoNotFound",
-  INDEX_PUBLISH_FAILED: "app.releases.patch.hint.indexPublishFailed",
+  INDEX_PUBLISH_MANUAL: "app.releases.patch.hint.indexPublishManual",
   SAVE_BREAKING: "app.releases.patch.hint.saveBreaking",
   PACK_SKIPPED_FILES: "app.releases.patch.hint.packSkippedFiles",
   TAG_PUSH_FAILED: "app.releases.patch.hint.tagPushFailed",

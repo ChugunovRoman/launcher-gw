@@ -325,6 +325,8 @@ declare interface RepoTagReport {
   repo_rel_path: string;
   tagged: boolean;
   pushed: boolean;
+  /// No changes since the repo's latest tag — not tagged.
+  skipped: boolean;
   message?: string | null;
 }
 declare interface PatchUploadResult {

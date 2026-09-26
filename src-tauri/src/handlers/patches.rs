@@ -440,8 +440,12 @@ fn is_updates_repo_missing(message: &str) -> bool {
 /// Flow: find the updates repo -> detect `base_patch` (latest existing patch
 /// release) -> pack the patch folder into split archives with a patch
 /// manifest (data*.zip + manifest.json as release assets) -> create tag +
-/// release -> upload assets -> tag the game git repositories with the patch
-/// tag (anchors the diff base for the next patch).
+/// release -> upload assets -> tag the changed game git repositories with the
+/// patch tag (anchors the diff base for the next patch).
+///
+/// The release index is NOT re-published here: the index carries the release
+/// notes, which the developer writes on the provider's site after the upload,
+/// and then republishes the index by hand.
 ///
 /// Every stage is reported as `patch-upload-stage`; `patch-upload-finished`
 /// is emitted exactly once, whatever the outcome. The returned `Err` keeps
@@ -958,23 +962,19 @@ async fn run_upload_patch(
   reporter.done(Stage::Upload);
 
   // ------------------------------------------------------------------
-  // 7. Re-publish the static release index. Non-fatal but visible.
+  // 7. The release index is NOT re-published: it carries the release notes,
+  //    which the developer adds on the provider's site after the upload.
+  //    Players see the patch once the index is republished by hand.
   // ------------------------------------------------------------------
-  reporter.start(Stage::PublishIndex);
-  if let Err(e) = crate::service::index_publisher::publish_index(api, false).await {
-    reporter.warn(
-      Stage::PublishIndex,
-      format!("Failed to publish release index: {}. The patch may not appear for players until the index is re-published manually.", e),
-      Some(crate::consts::WARN_INDEX_PUBLISH_FAILED),
-    );
-  }
-
-  // Invalidate AFTER publishing (see the same note in upload_v2.rs).
   {
     let mut svc = service.lock().await;
     svc.invalidate_releases();
   }
-  reporter.done(Stage::PublishIndex);
+  reporter.skipped(
+    Stage::PublishIndex,
+    "Release index was not re-published: add the release notes on the provider's site, then press \"Republish index\"".to_string(),
+    Some(crate::consts::SKIP_INDEX_PUBLISH_MANUAL),
+  );
 
   // ------------------------------------------------------------------
   // 8. Tag the game git repositories with the patch tag (anchors the
@@ -1005,7 +1005,7 @@ async fn run_upload_patch(
       .map_err(|e| reporter.fail(Stage::TagRepos, e.to_string(), None))?;
 
       for repo in &repos {
-        if !repo.pushed {
+        if !repo.pushed && !repo.skipped {
           reporter.warn(
             Stage::TagRepos,
             format!("repo '{}': {}", repo.repo_rel_path, repo.message.clone().unwrap_or_else(|| "not pushed".to_string())),

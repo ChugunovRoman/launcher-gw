@@ -151,14 +151,20 @@ pub struct RepoTagReport {
   pub tagged: bool,
   /// Tag pushed to origin (via system `git`).
   pub pushed: bool,
+  /// Not tagged: no commits since the repo's latest tag, so the patch has
+  /// nothing from it and its diff base stays on that tag.
+  pub skipped: bool,
   pub message: Option<String>,
 }
 
-/// Creates `tag_name` on HEAD of every repo under `source_dir` and pushes it
-/// to origin. This anchors the "state at patch N" so the next collect diffs
-/// from this tag. All repos are tagged (not only changed ones) to keep the
-/// diff bases consistent across the whole game tree. Errors are collected
-/// into per-repo reports and never abort the whole run.
+/// Creates `tag_name` on HEAD of every CHANGED repo under `source_dir` and
+/// pushes it to origin. This anchors the "state at patch N" so the next
+/// collect diffs from this tag. A repo whose HEAD tree equals its latest
+/// reachable tag is skipped: the collector diffs each repo from its own
+/// latest reachable tag, so leaving an unchanged repo on an older tag keeps
+/// the next diff empty just the same. Repos without any tag are still tagged
+/// (it gives them a base). Errors are collected into per-repo reports and
+/// never abort the whole run.
 ///
 /// `on_repo` is called with each report as soon as its repo is processed
 /// (live progress for the UI); it runs on the calling thread.
@@ -185,6 +191,7 @@ fn tag_game_repo(repo_dir: &Path, source_dir: &Path, tag_name: &str) -> RepoTagR
     repo_rel_path,
     tagged: false,
     pushed: false,
+    skipped: false,
     message: None,
   };
 
@@ -204,8 +211,24 @@ fn tag_game_repo(repo_dir: &Path, source_dir: &Path, tag_name: &str) -> RepoTagR
     }
   };
 
+  let already_tagged = repo.find_reference(&format!("refs/tags/{}", tag_name)).is_ok();
+
+  // No changes since the latest tag (same tree — also covers reverted
+  // commits): nothing of this repo is in the patch, leave it untagged.
+  // Checked after `already_tagged`, so a retry after a failed push still
+  // pushes the tag it created.
+  if !already_tagged {
+    if let Some((base_tag, base_commit)) = latest_reachable_tag(&repo, &head) {
+      if base_commit.id() == head.id() || base_commit.tree_id() == head.tree_id() {
+        report.skipped = true;
+        report.message = Some(format!("no changes since tag '{}'", base_tag));
+        return report;
+      }
+    }
+  }
+
   // Already tagged (e.g. retry after a failed push) — skip creation.
-  if repo.find_reference(&format!("refs/tags/{}", tag_name)).is_ok() {
+  if already_tagged {
     report.message = Some("tag already exists".to_string());
   } else {
     // Prefer the committer identity from git config, fall back to a fixed one.

@@ -203,7 +203,8 @@ pub enum PatchUploadStage {
   CreateRelease,
   /// Asset upload loop (with server-side hash verification).
   Upload,
-  /// `publish_index` + release cache invalidation.
+  /// Release cache invalidation only: the index is republished by hand after
+  /// the release notes are written (always reported as `Skipped`).
   PublishIndex,
   /// Tagging the game git repositories.
   TagRepos,

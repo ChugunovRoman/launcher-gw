@@ -142,7 +142,9 @@ pub const ERR_VERIFY_ALREADY_RUNNING: &str = "VERIFY_ALREADY_RUNNING";
 pub const ERR_PATCH_UPLOAD_ALREADY_RUNNING: &str = "PATCH_UPLOAD_ALREADY_RUNNING";
 pub const ERR_RELEASE_EXISTS: &str = "RELEASE_EXISTS";
 pub const ERR_UPDATES_REPO_NOT_FOUND: &str = "UPDATES_REPO_NOT_FOUND";
-pub const WARN_INDEX_PUBLISH_FAILED: &str = "INDEX_PUBLISH_FAILED";
+/// The index is not re-published by a patch upload: the developer writes the
+/// release notes on the provider's site first, then republishes by hand.
+pub const SKIP_INDEX_PUBLISH_MANUAL: &str = "INDEX_PUBLISH_MANUAL";
 pub const WARN_SAVE_BREAKING: &str = "SAVE_BREAKING";
 pub const WARN_PACK_SKIPPED_FILES: &str = "PACK_SKIPPED_FILES";
 pub const WARN_TAG_PUSH_FAILED: &str = "TAG_PUSH_FAILED";

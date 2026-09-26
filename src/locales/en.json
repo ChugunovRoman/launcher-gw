@@ -392,6 +392,7 @@
         "tagReport": "Tags in game repositories:",
         "tagOk": "tag pushed",
         "tagFail": "not pushed",
+        "tagSkipped": "no changes, not tagged",
         "excludePatterns": "Exclude from patch",
         "resetDefaults": "Reset to defaults",
         "stage": {
@@ -446,7 +447,7 @@
           "releaseExists": "A release with this tag already exists in the updates repository (an unfinished patch?). Delete the release and the tag on the provider website and upload the patch again.",
           "hashMismatch": "The server returned a different checksum after 3 attempts.",
           "updatesRepoNotFound": "The updates repository of the release was not found.",
-          "indexPublishFailed": "The index was not published, players will not see the patch until it is published manually (the \"Republish index\" button).",
+          "indexPublishManual": "The index is not republished automatically. Add the release notes to the patch release on the provider's site and press \"Re-publish index\" — players will not see the patch until then.",
           "saveBreaking": "The patch breaks old saves and will be marked as incompatible with them.",
           "packSkippedFiles": "Some files could not be read and were left out of the patch.",
           "tagPushFailed": "The tag was not pushed to some game repositories — push it manually.",

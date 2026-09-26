@@ -130,7 +130,7 @@
             <span class="step-message" class:warn={st === "warning"}>{info.message}</span>
           {/if}
         </div>
-        {#if st === "warning" && hintFor(info?.code)}
+        {#if (st === "warning" || st === "skipped") && hintFor(info?.code)}
           <div class="step-detail step-hint">{hintFor(info?.code)}</div>
         {/if}
 
@@ -178,8 +178,10 @@
             {#each state.repos as repo (repo.repo_rel_path)}
               <div class="repo-line">
                 <span class="repo-path">{repo.repo_rel_path || "(root)"}</span>
-                <span class={repo.pushed ? "repo-ok" : "repo-err"}>
-                  {#if repo.pushed}
+                <span class={repo.skipped ? "repo-skip" : repo.pushed ? "repo-ok" : "repo-err"}>
+                  {#if repo.skipped}
+                    {$_("app.releases.patch.tagSkipped")}
+                  {:else if repo.pushed}
                     {$_("app.releases.patch.tagOk")}
                   {:else}
                     {$_("app.releases.patch.tagFail")}{repo.message ? `: ${repo.message}` : ""}
@@ -391,6 +393,9 @@
   }
   .repo-err {
     color: #f44336;
+  }
+  .repo-skip {
+    color: #999;
   }
 
   .last-log {
