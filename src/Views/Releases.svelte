@@ -99,6 +99,9 @@
   let patchError = $state("");
   let patchExcludePatterns = $state<string[]>([...DEFAULT_EXCLUDE_PATTERNS]);
   let patchExcludeText = $state("");
+  // Automatic collect mode for the selected source path: git (tag..HEAD) or
+  // folder (every file under the path, when it has no git repository).
+  let patchSourceMode = $state<CollectMode | null>(null);
   // Faction editor props the developer keeps in the patch fragment.  Filled
   // from every successful collect (all props enabled) and sent to upload_patch.
   // Svelte 5 does not proxy Set: every mutation must reassign a NEW Set,
@@ -110,6 +113,21 @@
     if (next.has(field)) next.delete(field);
     else next.add(field);
     feSelectedFields = next;
+  }
+
+  /// Cheap probe so the form can label the automatic mode before collecting.
+  async function refreshPatchSourceMode(path: string) {
+    if (!path.trim()) {
+      patchSourceMode = null;
+      return;
+    }
+    try {
+      const mode = await invoke<string>("detect_patch_source_mode", { sourceDir: path });
+      patchSourceMode = mode === "folder" ? "folder" : "git";
+    } catch (e) {
+      console.error("detect_patch_source_mode failed:", e);
+      patchSourceMode = null;
+    }
   }
 
   /// Opens the folder holding the pending fragment in the system file manager
@@ -144,6 +162,7 @@
     await choosePath((selected) => {
       patchSourcePath = selected;
       invoke("set_patch_source_dir", { source: selected });
+      refreshPatchSourceMode(selected);
     });
   }
 
@@ -166,6 +185,7 @@
         sourceDir: patchSourcePath,
         excludePatterns: patchExcludePatterns,
       });
+      patchSourceMode = patchResult.collect_mode;
       // Every collected prop is enabled by default — the developer only has to
       // uncheck what must not reach the players.
       feSelectedFields = new Set(patchResult.fe_updated_fields);
@@ -267,13 +287,15 @@
     // Reuse collect results (deleted files / base tag) when uploading the
     // folder produced by the collector in this session.
     const fromCollect = patchResult !== null && patchResult.patch_dir === state.uploadPath;
+    // Folder-mode collects have no git repos to tag — skip TagRepos entirely.
+    const collectMode: CollectMode | null = fromCollect && patchResult ? patchResult.collect_mode : null;
 
     try {
       const result = await invoke<PatchUploadResult>("upload_patch", {
         name: releaseNameStr,
         patchName: state.uploadName,
         patchDir: state.uploadPath,
-        gameSourceDir: patchSourcePath || null,
+        gameSourceDir: collectMode === "folder" ? null : patchSourcePath || null,
         deletedFiles: fromCollect && patchResult ? patchResult.deleted_files : [],
         baseReleaseTag: fromCollect && patchResult ? patchResult.base_tag : null,
         // Faction editor props kept by the developer; the backend rebuilds the
@@ -572,6 +594,7 @@
       invoke<AppConfig>("get_config").then((config) => {
         if (config.patch_source_dir) {
           patchSourcePath = config.patch_source_dir;
+          refreshPatchSourceMode(config.patch_source_dir);
         }
         if (config.patch_upload_dir) {
           lastPatchUploadPath = config.patch_upload_dir;
@@ -728,6 +751,11 @@
                 {$_("app.releases.browse")}
               </button>
             </div>
+            {#if patchSourceMode}
+              <div class="patch-mode-badge" class:folder-mode={patchSourceMode === "folder"}>
+                {patchSourceMode === "folder" ? $_("app.releases.patch.mode.folder") : $_("app.releases.patch.mode.git")}
+              </div>
+            {/if}
           </div>
           <div class="input-group">
             <label class="input-label">{$_("app.releases.patch.excludePatterns")}</label>
@@ -773,6 +801,10 @@
             <div class="patch-report">
               <span>{$_("app.releases.patch.changed")}{patchResult.changed}</span>
               <span>{$_("app.releases.patch.deleted")}{patchResult.deleted}</span>
+              <span>
+                {$_("app.releases.patch.modeLabel")}
+                {patchResult.collect_mode === "folder" ? $_("app.releases.patch.mode.folder") : $_("app.releases.patch.mode.git")}
+              </span>
               <span class="patch-dir">{$_("app.releases.patch.patchDir")}{patchResult.patch_dir}</span>
             </div>
 
@@ -1300,6 +1332,17 @@
     color: #aaa;
     font-family: monospace;
     font-size: 0.8rem;
+  }
+
+  /* Automatic collect mode under the source path: git vs folder copy. */
+  .patch-mode-badge {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+    color: #8bc34a;
+  }
+
+  .patch-mode-badge.folder-mode {
+    color: #ffb74d;
   }
 
   .patch-repos {

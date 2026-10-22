@@ -293,6 +293,8 @@ declare interface UploadFileData {
 
 // Partial update patches: git collection result (stage 1)
 declare type RepoPatchStatus = "collected" | "no_tags" | "no_changes" | "error";
+/// How the patch was collected: git tag..HEAD diffs, or a plain folder copy.
+declare type CollectMode = "git" | "folder";
 declare interface RepoPatchReport {
   repo_rel_path: string;
   base_tag: string;
@@ -305,6 +307,8 @@ declare interface RepoPatchReport {
 // session has no prop selection for the folder, so everything staged ships.
 declare interface PatchCollectResult {
   patch_dir: string;
+  /// Git (tag..HEAD) or folder (every file under the source dir).
+  collect_mode: CollectMode;
   deleted_files: string[];
   base_tag: string | null;
   repos: RepoPatchReport[];

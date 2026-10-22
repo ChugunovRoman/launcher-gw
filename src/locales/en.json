@@ -373,12 +373,17 @@
       "fePatchShowFragment": "Show fragment",
       "patch": {
         "collectTitle": "Collect patch",
-        "source": "Path to the game folder (main repository)",
+        "source": "Path to the game folder (main repository) or a prepared patch folder",
         "collect": "Collect",
         "done": "Patch collected",
         "changed": "Changed files: ",
         "deleted": "Files to delete: ",
         "patchDir": "Patch folder: ",
+        "modeLabel": "Mode:",
+        "mode": {
+          "git": "Git repositories (latest tag → HEAD)",
+          "folder": "All files in folder (no git)"
+        },
         "reposReport": "Repositories report:",
         "statusCollected": "changes collected",
         "statusNoTags": "no tags — skipped",
@@ -451,7 +456,8 @@
           "saveBreaking": "The patch breaks old saves and will be marked as incompatible with them.",
           "packSkippedFiles": "Some files could not be read and were left out of the patch.",
           "tagPushFailed": "The tag was not pushed to some game repositories — push it manually.",
-          "noGameSourceDir": "The game folder is not set — tags in the game repositories were not created."
+          "noGameSourceDir": "The game folder is not set — tags in the game repositories were not created.",
+          "noGameRepos": "No git repositories under the selected folder — nothing was tagged. A later git-mode collect may pick up duplicates."
         }
       }
     },

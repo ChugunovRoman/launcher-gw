@@ -78,6 +78,7 @@ pub fn register_handlers(app: Builder<Wry>) -> Builder<Wry> {
     handlers::upload_v2::continue_upload_v2,
     // patches (developer: collect & upload)
     handlers::patches::collect_patch,
+    handlers::patches::detect_patch_source_mode,
     handlers::patches::upload_patch,
     handlers::patches::cancel_patch_upload,
     // patches (player: check & install)

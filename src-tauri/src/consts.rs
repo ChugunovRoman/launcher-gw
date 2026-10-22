@@ -149,6 +149,10 @@ pub const WARN_SAVE_BREAKING: &str = "SAVE_BREAKING";
 pub const WARN_PACK_SKIPPED_FILES: &str = "PACK_SKIPPED_FILES";
 pub const WARN_TAG_PUSH_FAILED: &str = "TAG_PUSH_FAILED";
 pub const SKIP_NO_GAME_SOURCE_DIR: &str = "NO_GAME_SOURCE_DIR";
+/// `game_source_dir` was provided but `find_git_roots` found nothing under it
+/// (folder-mode collect source) — nothing to tag, and the next git-mode collect
+/// has no new base anchor.
+pub const SKIP_NO_GAME_REPOS: &str = "NO_GAME_REPOS";
 // Progress events of the packer: the Pack view and patch uploads listen to
 // different ones so a patch upload does not drive the Pack view.
 pub const EVT_PACKING_PROGRESS: &str = "packing-progress";

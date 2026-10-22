@@ -1,4 +1,4 @@
-//! Patch collection from game git repositories.
+//! Patch collection from game git repositories, with a folder fallback.
 //!
 //! Port of the reference script `patch/_collect_gw_diff.py` with improvements:
 //! walks every git repository (main repo + nested repos/submodules) under the
@@ -13,6 +13,13 @@
 //! The "latest reachable tag" rule covers both the first patch after a full
 //! release (tag of the full release) and subsequent patches (tag created by
 //! the launcher when the previous patch was uploaded).
+//!
+//! When the selected folder contains no git repository at all (no root repo
+//! and no nested checkout), collection switches to **folder mode** and copies
+//! every file under the folder instead — for prepared patch trees such as
+//! `patch/0.5.5-patch5/`. Exclude patterns and save-breaking markers still
+//! apply; `deleted_files`, `base_tag` and the faction-editor fragment stay
+//! empty because there is no git baseline to diff against.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,6 +32,16 @@ use uuid::Uuid;
 use crate::consts::{FE_DEFAULT_CONFIG_REL_PATH, FE_PATCH_FRAGMENT_STAGING};
 use crate::handlers::dto::{CollectStage, PatchCollectProgress};
 use crate::service::faction_patch::{self, FePatchFragment};
+
+/// How the patch was collected: git tag..HEAD diffs, or a plain folder copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectMode {
+  /// At least one git repository was found under the source dir.
+  Git,
+  /// No git repository at all — every file under the source dir is copied.
+  Folder,
+}
 
 /// Per-repository outcome of the collection.
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +75,8 @@ pub struct PatchCollectResult {
   /// Folder with the copied patch files (`patches/` next to the launcher exe,
   /// relative layout preserved).
   pub patch_dir: String,
+  /// Git (tag..HEAD) or folder (every file) collection.
+  pub collect_mode: CollectMode,
   /// Files to delete when applying the patch, `/`-separated, relative to the game root.
   pub deleted_files: Vec<String>,
   /// Base tag of the root repo — used as base_release_tag in the patch manifest.
@@ -78,6 +97,16 @@ pub struct PatchCollectResult {
   /// save-breaking markers, both changed and deleted. Kept for the developer
   /// UI; the manifest carries only the boolean.
   pub save_breaking_files: Vec<String>,
+}
+
+/// Collect mode implied by the source folder: git when any repository root
+/// exists under it (including nested checkouts), folder otherwise.
+pub fn detect_collect_mode(source_dir: &Path) -> CollectMode {
+  if find_git_roots(source_dir).is_empty() {
+    CollectMode::Folder
+  } else {
+    CollectMode::Git
+  }
 }
 
 /// Finds all git repository roots under `base` (including `base` itself).
@@ -393,6 +422,7 @@ pub fn collect_patch(
 
   let mut result = PatchCollectResult {
     patch_dir: patch_dir.to_string_lossy().into_owned(),
+    collect_mode: CollectMode::Git,
     deleted_files: Vec::new(),
     base_tag: None,
     repos: Vec::new(),
@@ -406,6 +436,28 @@ pub fn collect_patch(
   let mut fe_fragment: Option<FePatchFragment> = None;
 
   let repo_dirs = find_git_roots(&source_dir);
+  if repo_dirs.is_empty() {
+    // No git anywhere under the source dir — treat it as a prepared patch tree.
+    result.collect_mode = CollectMode::Folder;
+    collect_folder_patch(
+      &source_dir,
+      &patch_dir,
+      exclude_set.as_ref(),
+      &save_breaking_set,
+      &mut result,
+      on_progress,
+    )?;
+    log::info!(
+      "collect_patch done (folder): changed: {}, deleted: {}, breaks_saves: {}, patch_dir: {:?}",
+      result.changed,
+      result.deleted,
+      result.breaks_saves,
+      result.patch_dir
+    );
+    return Ok(result);
+  }
+
+  result.collect_mode = CollectMode::Git;
   let repos_total = repo_dirs.len() as u32;
   // Totals over the repos finished so far; the current repo adds on top.
   let mut files_done_before: u32 = 0;
@@ -525,6 +577,118 @@ fn repo_progress_label(repo_dir: &Path, source_dir: &Path) -> String {
     .file_name()
     .map(|n| n.to_string_lossy().into_owned())
     .unwrap_or_else(|| to_rel_slash(source_dir))
+}
+
+/// Copies every file under `source_dir` into `patch_dir` (folder collect mode).
+///
+/// Relative paths are preserved, exclude patterns match against them the same
+/// way as in [`collect_repo`], and save-breaking markers are applied. There is
+/// no git baseline, so `deleted_files`, `base_tag` and the faction-editor
+/// fragment stay empty. Progress is `Scan` → `Copy` (throttled) → `Done`.
+fn collect_folder_patch(
+  source_dir: &Path,
+  patch_dir: &Path,
+  exclude_set: Option<&GlobSet>,
+  save_breaking_set: &GlobSet,
+  result: &mut PatchCollectResult,
+  on_progress: &dyn Fn(PatchCollectProgress),
+) -> Result<()> {
+  let folder_label = repo_progress_label(source_dir, source_dir);
+  let progress = |stage: CollectStage, files_done: u32, files_total: u32| {
+    on_progress(PatchCollectProgress {
+      stage,
+      repo: Some(folder_label.clone()),
+      repos_done: 0,
+      repos_total: 1,
+      files_done,
+      files_total,
+    })
+  };
+
+  progress(CollectStage::Scan, 0, 0);
+
+  // First pass: count files that survive the exclude filter so Copy progress
+  // has a total. WalkDir order is stable enough for a second identical walk.
+  let mut files_total: u32 = 0;
+  for entry in walkdir::WalkDir::new(source_dir).follow_links(false).into_iter().filter_entry(|e| e.file_name() != ".git") {
+    let Ok(entry) = entry else { continue };
+    if !entry.file_type().is_file() {
+      continue;
+    }
+    let rel = match entry.path().strip_prefix(source_dir) {
+      Ok(p) => p.to_path_buf(),
+      Err(_) => continue,
+    };
+    if exclude_set.map_or(false, |s| s.is_match(&rel)) {
+      continue;
+    }
+    files_total += 1;
+  }
+
+  let mut copied: u32 = 0;
+  let last_copy_emit = std::cell::Cell::new(std::time::Instant::now());
+  for entry in walkdir::WalkDir::new(source_dir).follow_links(false).into_iter().filter_entry(|e| e.file_name() != ".git") {
+    let Ok(entry) = entry else { continue };
+    if !entry.file_type().is_file() {
+      continue;
+    }
+    let rel = match entry.path().strip_prefix(source_dir) {
+      Ok(p) => p.to_path_buf(),
+      Err(_) => continue,
+    };
+    if exclude_set.map_or(false, |s| s.is_match(&rel)) {
+      continue;
+    }
+
+    note_save_breaking(save_breaking_set, &to_rel_slash(&rel), &mut result.save_breaking_files);
+
+    let dest = patch_dir.join(&rel);
+    if let Some(parent) = dest.parent() {
+      fs::create_dir_all(parent).with_context(|| format!("create {:?}", parent))?;
+    }
+    fs::copy(entry.path(), &dest).with_context(|| format!("copy {:?}", entry.path()))?;
+
+    copied += 1;
+    if last_copy_emit.get().elapsed().as_millis() >= COLLECT_COPY_PROGRESS_THROTTLE_MS {
+      last_copy_emit.set(std::time::Instant::now());
+      progress(CollectStage::Copy, copied, files_total);
+    }
+  }
+  progress(CollectStage::Copy, copied, files_total);
+
+  result.changed = copied;
+  result.deleted = 0;
+  result.breaks_saves = !result.save_breaking_files.is_empty();
+  if result.breaks_saves {
+    log::warn!(
+      "collect_patch (folder): patch breaks existing saves, markers: {}",
+      result.save_breaking_files.join(", ")
+    );
+  }
+
+  result.repos.push(RepoPatchReport {
+    repo_rel_path: String::new(),
+    base_tag: String::new(),
+    status: if copied == 0 {
+      RepoPatchStatus::NoChanges
+    } else {
+      RepoPatchStatus::Collected
+    },
+    changed: copied,
+    deleted: 0,
+    message: if copied == 0 {
+      Some(if exclude_set.is_some() {
+        "no files to collect (empty folder or all excluded)".to_string()
+      } else {
+        "no files to collect".to_string()
+      })
+    } else {
+      None
+    },
+  });
+
+  progress(CollectStage::Done, copied, files_total);
+  Ok(())
 }
 
 /// Diff the two committed versions of `faction_editor_default_config.ltx` a
@@ -811,5 +975,215 @@ mod tests {
     assert!(scan_save_breaking(&root, &[]).is_empty());
 
     fs::remove_dir_all(&root).ok();
+  }
+
+  fn temp_root(name: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("gw_collect_mode_{}_{}_{}", name, std::process::id(), n));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    root
+  }
+
+  /// Folder mode engages only when no git root exists under the source dir;
+  /// a nested checkout keeps git mode even if the selected folder itself
+  /// is not a repository.
+  #[test]
+  fn detect_collect_mode_switches_only_without_any_git_root() {
+    let plain = temp_root("plain");
+    fs::create_dir_all(plain.join("gamedata/scripts")).unwrap();
+    assert!(matches!(detect_collect_mode(&plain), CollectMode::Folder));
+
+    let nested = temp_root("nested");
+    fs::create_dir_all(nested.join("gamedata")).unwrap();
+    fs::create_dir_all(nested.join("gamedata/.git")).unwrap();
+    assert!(matches!(detect_collect_mode(&nested), CollectMode::Git));
+
+    let _ = fs::remove_dir_all(&plain);
+    let _ = fs::remove_dir_all(&nested);
+  }
+
+  /// Folder collect copies the tree with relative paths, honors exclude masks
+  /// and never descends into `.git`.
+  #[test]
+  fn collect_folder_patch_copies_tree_and_skips_excluded() {
+    let source = temp_root("src");
+    let patch_dir = temp_root("dst");
+    fs::create_dir_all(source.join("gamedata/scripts")).unwrap();
+    fs::create_dir_all(source.join("gamedata/configs")).unwrap();
+    fs::create_dir_all(source.join(".git")).unwrap();
+    fs::write(source.join("gamedata/scripts/ui_mm_opt_main.script"), b"local x = 1\n").unwrap();
+    fs::write(source.join("gamedata/configs/weapons.ltx"), b"[wpn]\n").unwrap();
+    fs::write(source.join("gamedata/configs/debug.pdb"), b"pdb").unwrap();
+    fs::write(source.join(".git/config"), b"[core]").unwrap();
+
+    let exclude = build_exclude_set(&["**/*.pdb".to_owned()]).unwrap();
+    let save_breaking = build_save_breaking_set();
+    let mut result = PatchCollectResult {
+      patch_dir: patch_dir.to_string_lossy().into_owned(),
+      collect_mode: CollectMode::Folder,
+      deleted_files: Vec::new(),
+      base_tag: None,
+      repos: Vec::new(),
+      changed: 0,
+      deleted: 0,
+      fe_updated_fields: Vec::new(),
+      fe_fragment_entries: 0,
+      breaks_saves: false,
+      save_breaking_files: Vec::new(),
+    };
+    let stages: std::cell::RefCell<Vec<CollectStage>> = std::cell::RefCell::new(Vec::new());
+    collect_folder_patch(
+      &source,
+      &patch_dir,
+      exclude.as_ref(),
+      &save_breaking,
+      &mut result,
+      &|p| stages.borrow_mut().push(p.stage),
+    )
+    .expect("folder collect succeeds");
+
+    assert_eq!(result.changed, 2);
+    assert!(patch_dir.join("gamedata/scripts/ui_mm_opt_main.script").is_file());
+    assert!(patch_dir.join("gamedata/configs/weapons.ltx").is_file());
+    assert!(!patch_dir.join("gamedata/configs/debug.pdb").exists());
+    assert!(!patch_dir.join(".git").exists());
+    assert!(result.deleted_files.is_empty());
+    assert!(result.base_tag.is_none());
+    assert!(matches!(result.repos[0].status, RepoPatchStatus::Collected));
+
+    let stages = stages.into_inner();
+    assert_eq!(stages.first(), Some(&CollectStage::Scan));
+    assert_eq!(stages.last(), Some(&CollectStage::Done));
+    assert!(stages.contains(&CollectStage::Copy));
+
+    let _ = fs::remove_dir_all(&source);
+    let _ = fs::remove_dir_all(&patch_dir);
+  }
+
+  /// Save-breaking markers apply in folder mode exactly as in git mode.
+  #[test]
+  fn collect_folder_patch_flags_save_breaking_files() {
+    let source = temp_root("break_src");
+    let patch_dir = temp_root("break_dst");
+    fs::create_dir_all(source.join("gamedata/spawns")).unwrap();
+    fs::write(source.join("gamedata/spawns/all.spawn"), b"spawn").unwrap();
+
+    let mut result = PatchCollectResult {
+      patch_dir: patch_dir.to_string_lossy().into_owned(),
+      collect_mode: CollectMode::Folder,
+      deleted_files: Vec::new(),
+      base_tag: None,
+      repos: Vec::new(),
+      changed: 0,
+      deleted: 0,
+      fe_updated_fields: Vec::new(),
+      fe_fragment_entries: 0,
+      breaks_saves: false,
+      save_breaking_files: Vec::new(),
+    };
+    collect_folder_patch(
+      &source,
+      &patch_dir,
+      None,
+      &build_save_breaking_set(),
+      &mut result,
+      &|_| {},
+    )
+    .expect("folder collect succeeds");
+
+    assert!(result.breaks_saves);
+    assert_eq!(result.save_breaking_files, vec!["gamedata/spawns/all.spawn".to_string()]);
+
+    let _ = fs::remove_dir_all(&source);
+    let _ = fs::remove_dir_all(&patch_dir);
+  }
+
+  /// An empty / fully excluded folder still returns a well-formed folder result.
+  #[test]
+  fn collect_folder_patch_empty_after_excludes() {
+    let source = temp_root("empty_src");
+    let patch_dir = temp_root("empty_dst");
+    fs::write(source.join("notes.txt"), b"x").unwrap();
+
+    let exclude = build_exclude_set(&["**/*.txt".to_owned(), "*.txt".to_owned()]).unwrap();
+    let mut result = PatchCollectResult {
+      patch_dir: patch_dir.to_string_lossy().into_owned(),
+      collect_mode: CollectMode::Folder,
+      deleted_files: Vec::new(),
+      base_tag: None,
+      repos: Vec::new(),
+      changed: 0,
+      deleted: 0,
+      fe_updated_fields: Vec::new(),
+      fe_fragment_entries: 0,
+      breaks_saves: false,
+      save_breaking_files: Vec::new(),
+    };
+    collect_folder_patch(
+      &source,
+      &patch_dir,
+      exclude.as_ref(),
+      &build_save_breaking_set(),
+      &mut result,
+      &|_| {},
+    )
+    .expect("empty folder collect succeeds");
+
+    assert_eq!(result.changed, 0);
+    assert!(result.base_tag.is_none());
+    assert!(result.deleted_files.is_empty());
+    assert!(matches!(result.repos[0].status, RepoPatchStatus::NoChanges));
+
+    let _ = fs::remove_dir_all(&source);
+    let _ = fs::remove_dir_all(&patch_dir);
+  }
+
+  /// Sanity check against the prepared 0.5.5-patch5 tree (skipped when absent).
+  #[test]
+  fn collect_folder_patch_on_prepared_055_patch5() {
+    let Ok(source) = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("../../../../patch/0.5.5-patch5")
+      .canonicalize()
+    else {
+      // External fixture is not present on this machine/CI.
+      return;
+    };
+    if !source.is_dir() {
+      return;
+    }
+    assert!(matches!(detect_collect_mode(&source), CollectMode::Folder));
+
+    let patch_dir = temp_root("e2e_dst");
+    let mut result = PatchCollectResult {
+      patch_dir: patch_dir.to_string_lossy().into_owned(),
+      collect_mode: CollectMode::Folder,
+      deleted_files: Vec::new(),
+      base_tag: None,
+      repos: Vec::new(),
+      changed: 0,
+      deleted: 0,
+      fe_updated_fields: Vec::new(),
+      fe_fragment_entries: 0,
+      breaks_saves: false,
+      save_breaking_files: Vec::new(),
+    };
+    collect_folder_patch(
+      &source,
+      &patch_dir,
+      None,
+      &build_save_breaking_set(),
+      &mut result,
+      &|_| {},
+    )
+    .expect("collect prepared patch");
+
+    assert!(result.changed >= 1, "at least the settings-fix script");
+    assert!(patch_dir.join("gamedata/scripts/ui_mm_opt_main.script").is_file());
+    assert!(result.base_tag.is_none());
+    assert!(result.deleted_files.is_empty());
+
+    let _ = fs::remove_dir_all(&patch_dir);
   }
 }

@@ -380,9 +380,12 @@ async fn upload_patch_asset_stream(
   Ok(uploaded_for_emit.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Collects a partial-update patch from the game git repositories:
-/// committed changes (latest reachable tag -> HEAD) of every repo found
-/// under the selected folder. Heavy git/fs work runs on a blocking thread.
+/// Collects a partial-update patch from the game source folder.
+///
+/// Git mode (at least one repository under `source_dir`): committed changes
+/// (latest reachable tag -> HEAD) of every repo found under the selected
+/// folder. Folder mode (no git at all): every file under the folder is copied
+/// — for prepared patch trees. Heavy git/fs work runs on a blocking thread.
 /// Progress goes out as `patch-collect-progress`.
 #[tauri::command]
 pub async fn collect_patch(
@@ -406,13 +409,32 @@ pub async fn collect_patch(
   })?;
 
   log::info!(
-    "collect_patch done: repos: {}, changed: {}, deleted: {}",
+    "collect_patch done: mode: {:?}, repos: {}, changed: {}, deleted: {}",
+    result.collect_mode,
     result.repos.len(),
     result.changed,
     result.deleted
   );
 
   Ok(result)
+}
+
+/// Returns `"git"` or `"folder"` for the selected source path, so the collect
+/// form can show the automatic mode before anything is collected.
+#[tauri::command]
+pub async fn detect_patch_source_mode(source_dir: String) -> Result<String, String> {
+  let path = std::path::PathBuf::from(&source_dir);
+  if !path.is_dir() {
+    return Err(format!("source dir does not exist: {}", source_dir));
+  }
+  let mode = patch_collect::detect_collect_mode(&path);
+  Ok(
+    match mode {
+      patch_collect::CollectMode::Git => "git",
+      patch_collect::CollectMode::Folder => "folder",
+    }
+    .to_string(),
+  )
 }
 
 /// Cancels an in-progress patch upload by patch name (raw, as typed).
@@ -433,6 +455,17 @@ pub async fn cancel_patch_upload(cancel_map: tauri::State<'_, UploadCancelMap>, 
 /// updates repo does not exist (as opposed to a network/API error).
 fn is_updates_repo_missing(message: &str) -> bool {
   message.starts_with("No updates repo found") || (message.starts_with("Release '") && message.ends_with("' not found"))
+}
+
+/// Skip reason for `Stage::TagRepos` when `tag_game_repos` found no repository
+/// under a provided `game_source_dir` (folder-mode collect source). Distinct
+/// from [`crate::consts::SKIP_NO_GAME_SOURCE_DIR`] so the UI hint matches the
+/// actual cause.
+fn empty_tag_repos_skip() -> (String, &'static str) {
+  (
+    "No git repositories under the game source dir: nothing was tagged. Next git-mode collect may pick up duplicates.".to_string(),
+    crate::consts::SKIP_NO_GAME_REPOS,
+  )
 }
 
 /// Uploads a patch into the updates repo of a game release.
@@ -1004,16 +1037,24 @@ async fn run_upload_patch(
       .await
       .map_err(|e| reporter.fail(Stage::TagRepos, e.to_string(), None))?;
 
-      for repo in &repos {
-        if !repo.pushed && !repo.skipped {
-          reporter.warn(
-            Stage::TagRepos,
-            format!("repo '{}': {}", repo.repo_rel_path, repo.message.clone().unwrap_or_else(|| "not pushed".to_string())),
-            Some(crate::consts::WARN_TAG_PUSH_FAILED),
-          );
+      if repos.is_empty() {
+        // Path given but no git root under it (folder-mode collect source).
+        // Nothing to tag — do not claim success on an empty run.
+        let (message, code) = empty_tag_repos_skip();
+        reporter.skipped(Stage::TagRepos, message.clone(), Some(code));
+        extra_warnings.push(message);
+      } else {
+        for repo in &repos {
+          if !repo.pushed && !repo.skipped {
+            reporter.warn(
+              Stage::TagRepos,
+              format!("repo '{}': {}", repo.repo_rel_path, repo.message.clone().unwrap_or_else(|| "not pushed".to_string())),
+              Some(crate::consts::WARN_TAG_PUSH_FAILED),
+            );
+          }
         }
+        reporter.done(Stage::TagRepos);
       }
-      reporter.done(Stage::TagRepos);
       repos
     }
     None => {
@@ -1040,6 +1081,17 @@ async fn run_upload_patch(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Empty `tag_game_repos` must skip with its own code — reusing
+  /// `NO_GAME_SOURCE_DIR` would show a contradictory "folder is not set" hint
+  /// when the folder *was* provided but has no git root (folder-mode source).
+  #[test]
+  fn empty_tag_repos_uses_distinct_skip_code() {
+    let (message, code) = empty_tag_repos_skip();
+    assert_eq!(code, crate::consts::SKIP_NO_GAME_REPOS);
+    assert_ne!(code, crate::consts::SKIP_NO_GAME_SOURCE_DIR);
+    assert!(!message.is_empty());
+  }
 
   /// The staging fragment is kept out of the archive by an exclude pattern
   /// spelled with `/`, while `pack_split_archives` matches it against paths

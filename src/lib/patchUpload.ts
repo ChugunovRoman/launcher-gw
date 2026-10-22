@@ -50,6 +50,7 @@ export const PATCH_HINT_KEYS: Record<string, string> = {
   PACK_SKIPPED_FILES: "app.releases.patch.hint.packSkippedFiles",
   TAG_PUSH_FAILED: "app.releases.patch.hint.tagPushFailed",
   NO_GAME_SOURCE_DIR: "app.releases.patch.hint.noGameSourceDir",
+  NO_GAME_REPOS: "app.releases.patch.hint.noGameRepos",
 };
 
 export const PATCH_CODE_ALREADY_RUNNING = "PATCH_UPLOAD_ALREADY_RUNNING";
