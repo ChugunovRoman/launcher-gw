@@ -513,7 +513,7 @@
       "fontLegacy": "Старые XRay шрифты (r_font_legacy)",
       "gameLang": "Язык:",
       "renderer": "Тип рендера:",
-      "fpsLimit": "Лимит ФПС (rs_fps_limit):",
+      "fpsLimit": "Лимит ФПС:",
       "fpsLimitUnlimited": "Без ограничения",
       "preset": "Пресет:",
       "applyPresetOnLaunch": "Применять пресет при запуске игры",

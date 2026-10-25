@@ -513,7 +513,7 @@
       "fontLegacy": "Legacy XRay fonts (r_font_legacy)",
       "gameLang": "Game language:",
       "renderer": "Renderer type:",
-      "fpsLimit": "FPS limit (rs_fps_limit):",
+      "fpsLimit": "FPS limit:",
       "fpsLimitUnlimited": "Unlimited",
       "preset": "Preset:",
       "applyPresetOnLaunch": "Apply preset when starting the game",
