@@ -127,6 +127,16 @@ export const ALIFE_RANGES = {
   switch_distance: { min: 30, max: 1000, step: 5 },
 } as const;
 
+/**
+ * FPS limit combobox (rs_fps_limit). 501 is the engine's "no limit" sentinel:
+ * the cvar only accepts [30, 501] and 501 leaves a 1 ms frame budget, which is
+ * also the engine default. Must match default_rs_fps_limit() in
+ * src-tauri/src/configs/AppConfig.rs.
+ */
+export const FPS_LIMIT_UNLIMITED = 501;
+export const FPS_LIMIT_DEFAULT = 120;
+export const FPS_LIMIT_OPTIONS = [180, 120, 60, 30, FPS_LIMIT_UNLIMITED];
+
 export enum Lang {
   Ru = 'ru',
   En = 'en',

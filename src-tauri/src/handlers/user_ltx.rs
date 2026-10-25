@@ -253,6 +253,7 @@ pub async fn apply_run_params_to_ltx(ltx_path: &Path, run_params: &RunParams, pr
     if run_params.check_wait_press_any_key { "1" } else { "0" }.to_string(),
   );
   ltx.set("rs_v_sync".to_string(), if run_params.check_vsync { "1" } else { "0" }.to_string());
+  ltx.set("rs_fps_limit".to_string(), run_params.rs_fps_limit.to_string());
   ltx.set("rs_fullscreen".to_string(), if run_params.windowed_mode { "0" } else { "1" }.to_string());
   ltx.set("g_god".to_string(), if run_params.god_mode { "on" } else { "off" }.to_string());
   ltx.set(
@@ -609,6 +610,28 @@ mod tests {
 
     let mut ltx = AlifeConfig::load(&path).unwrap().unwrap();
     assert!(!write_alife_entries(&mut ltx, &[], &RunParams::default().alife_pairs()));
+    std::fs::remove_file(&path).ok();
+  }
+
+  #[tokio::test]
+  async fn writes_rs_fps_limit_into_ltx() {
+    let path = std::env::temp_dir().join(format!("rs_fps_limit_test_{}.ltx", std::process::id()));
+    std::fs::remove_file(&path).ok();
+
+    // The default config must write the launcher's default cap (120).
+    let mut run_params = RunParams::default();
+    assert_eq!(run_params.rs_fps_limit, 120);
+    apply_run_params_to_ltx(&path, &run_params, None).await.unwrap();
+    let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).to_string();
+    assert!(text.contains("rs_fps_limit 120"), "default cap must be written: {}", text);
+
+    // "Unlimited" is 501 (the engine's uncapped sentinel, range [30, 501]) —
+    // the previous value must be patched in place, not left behind.
+    run_params.rs_fps_limit = 501;
+    apply_run_params_to_ltx(&path, &run_params, None).await.unwrap();
+    let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).to_string();
+    assert!(text.contains("rs_fps_limit 501"), "unlimited sentinel must be written: {}", text);
+    assert!(!text.contains("rs_fps_limit 120"), "the old cap must be replaced: {}", text);
     std::fs::remove_file(&path).ok();
   }
 }

@@ -122,6 +122,8 @@ declare interface RunParams {
   check_wait_press_any_key: boolean;
   check_without_cache: boolean;
   check_vsync: boolean;
+  // FPS cap for rs_fps_limit; 501 = no limit (the engine's sentinel).
+  rs_fps_limit: number;
   check_no_staging: boolean;
   windowed_mode: boolean;
   ui_debug: boolean;

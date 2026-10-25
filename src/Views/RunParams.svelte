@@ -2,7 +2,7 @@
   import { _ } from "svelte-i18n";
   import { invoke } from "@tauri-apps/api/core";
   import { appConfig, configReady, startupState, showDlgMaxPerformancePresetWarning } from "../store/main";
-  import { ALIFE_DEFAULTS, ALIFE_RANGES, LangType, RenderType, ScopeType } from "../consts";
+  import { ALIFE_DEFAULTS, ALIFE_RANGES, FPS_LIMIT_DEFAULT, FPS_LIMIT_OPTIONS, FPS_LIMIT_UNLIMITED, LangType, RenderType, ScopeType } from "../consts";
   import { BiMap } from "../utils/BiMap";
 
   import Scroll from "../Components/Scroll.svelte";
@@ -66,6 +66,7 @@
   let launchArgs = $state("");
   let selectedResolution = $state("");
   let vsyncEnabled = $state(true);
+  let selectedFpsLimit = $state<number>(FPS_LIMIT_DEFAULT);
   let selectedLang = $state(langMap.getValue(LangType.Rus) || "");
   let selectedRenderer = $state(renderersMap.getValue(RenderType.RendererR4) || "");
   let selectedScope = $state(scopesMap.getValue(ScopeType.Scopes2dStatic) || "");
@@ -138,6 +139,7 @@
       check_wait_press_any_key: waitForKeypress,
       check_without_cache: noPrefetch,
       check_vsync: vsyncEnabled,
+      rs_fps_limit: selectedFpsLimit,
       check_no_staging: noStaging,
       windowed_mode: windowedMode,
       ui_debug: uiDebug,
@@ -188,6 +190,9 @@
         waitForKeypress = config.run_params.check_wait_press_any_key;
         noPrefetch = config.run_params.check_without_cache;
         vsyncEnabled = config.run_params.check_vsync;
+        // An unknown saved value (hand-edited config) would leave the select
+        // blank — fall back to the default so the next save writes a valid one.
+        selectedFpsLimit = FPS_LIMIT_OPTIONS.includes(config.run_params.rs_fps_limit) ? config.run_params.rs_fps_limit : FPS_LIMIT_DEFAULT;
         noStaging = config.run_params.check_no_staging;
         windowedMode = config.run_params.windowed_mode;
         uiDebug = config.run_params.ui_debug;
@@ -292,6 +297,22 @@
                 <select bind:value={selectedRenderer}>
                   {#each renderersMap as [type, name]}
                     <option value={name}>{$_(`app.renderer.${name}`)}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="opt">
+            <span>
+              {$_("app.params.fpsLimit")}
+            </span>
+            <div class="options-row">
+              <label class="checkbox-label">
+                <select bind:value={selectedFpsLimit}>
+                  {#each FPS_LIMIT_OPTIONS as limit}
+                    <option value={limit}>
+                      {limit === FPS_LIMIT_UNLIMITED ? $_("app.params.fpsLimitUnlimited") : limit}
+                    </option>
                   {/each}
                 </select>
               </label>

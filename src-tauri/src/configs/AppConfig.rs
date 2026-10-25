@@ -167,6 +167,11 @@ fn default_true() -> bool {
   true
 }
 
+/// The launcher's default FPS cap. The engine's own default is 501 (uncapped).
+fn default_rs_fps_limit() -> u32 {
+  120
+}
+
 fn default_alife_objects_per_update() -> u32 {
   ALIFE_DEFAULT_OBJECTS_PER_UPDATE
 }
@@ -195,6 +200,10 @@ pub struct RunParams {
   pub check_without_cache: bool,
   #[serde(default)]
   pub check_vsync: bool,
+  // FPS cap for the rs_fps_limit cvar. 501 = no limit: the engine rejects
+  // values outside [30, 501] and treats 501 as its own uncapped default.
+  #[serde(default = "default_rs_fps_limit")]
+  pub rs_fps_limit: u32,
   #[serde(default)]
   pub check_no_staging: bool,
   #[serde(default)]
@@ -255,6 +264,7 @@ impl Default for RunParams {
       check_wait_press_any_key: true,
       check_without_cache: false,
       check_vsync: true,
+      rs_fps_limit: default_rs_fps_limit(),
       check_no_staging: false,
       windowed_mode: true,
       ui_debug: false,
