@@ -1,14 +1,45 @@
 ---
 feature: fps-limit
-status: in-progress
+status: delivered
 updated: 2026-10-25
 branch: master
-commits: 
+commits: c96dcdf..d63aaf5
 ---
 
 # FPS limit setting (rs_fps_limit)
 
 ## Report
+
+**What was built** — The run-params view gains an FPS limit combobox for the
+`rs_fps_limit` cvar with exactly five entries — 180, 120 (default), 60, 30,
+Unlimited — placed right after the renderer row. The choice persists as
+`RunParams.rs_fps_limit` (u32, serde and `Default` → 120) and is patched into
+`user.ltx`/`tmp.ltx` on save and before launch like the other run params.
+"Unlimited" writes **501**, the engine's uncapped sentinel: `CCC_Integer` only
+accepts [30, 501] (0/-1 are rejected, not clamped) and
+`updateDelta = 1000 / 501` leaves a 1 ms frame budget. A saved value outside the
+option list displays as 120, so the select is never blank and the next save
+writes a valid entry (the vid_mode precedent). Labels are localized
+(`app.params.fpsLimit` / `app.params.fpsLimitUnlimited`, ru/en).
+
+**Verification** — `cargo test --lib` (src-tauri): 154 passed / 0 failed
+(153 pre-existing baseline + new `writes_rs_fps_limit_into_ltx`, which asserts
+the default 120 and replace-in-place of 120→501).
+`node_modules/.bin/svelte-check --tsconfig ./tsconfig.json`: 0 errors /
+81 warnings (all pre-existing). `vite build`: pass. `python json.load` on both
+locale files: pass. Independent review of `c96dcdf..d63aaf5` (fresh subagent):
+APPROVE — every T1–T5 criterion met, no critical or major findings.
+
+**Journey log**
+- Engine contract discovery: `rs_fps_limit` is not 0-based — `CCC_Integer`
+  rejects out-of-range values and 501 is the built-in uncapped default, so
+  "Unlimited" must write 501 (0 would leave the previous value with a syntax
+  error in the log).
+- `npm run check` is broken in this repo (`svelte-kit` is not a dependency) —
+  run `node_modules/.bin/svelte-check --tsconfig ./tsconfig.json` directly
+  (same lesson as folder-patch-mode).
+- On this machine the PowerShell `npm` shim is blocked by execution policy;
+  run node_modules bins through `cmd /c`.
 
 ## [S1] Problem
 
@@ -112,8 +143,8 @@ select is never blank and the next save writes a valid value.
 
 ## Tasks
 
-- [ ] T1: Backend `rs_fps_limit` field + ltx write + unit test — acceptance: `RunParams` carries `rs_fps_limit` (default 120, serde default 120); `apply_run_params_to_ltx` writes `rs_fps_limit 501` for the unlimited value and `rs_fps_limit 120` for a default config into a temp ltx; `cargo test` in `src-tauri` green. (covers: S2 Data model, S2 user.ltx write)
-- [ ] T2: TS type + shared constants — acceptance: `RunParams` in `src/typing.d.ts` declares `rs_fps_limit: number`; `FPS_LIMIT_UNLIMITED` / `FPS_LIMIT_DEFAULT` / `FPS_LIMIT_OPTIONS` exist in `src/consts.ts` with the documented values. (covers: S2 Data model)
-- [ ] T3: i18n labels — acceptance: `app.params.fpsLimit` and `app.params.fpsLimitUnlimited` exist in both locale files with the documented text. (covers: S2 i18n)
-- [ ] T4: Combobox in RunParams.svelte — acceptance: the view shows a select right after the renderer row with the five entries in the specified order, defaults to 120, falls back to 120 for unknown saved values, and sends the chosen number as `rs_fps_limit` on save. (covers: S2 UI; depends: T2, T3)
-- [ ] T5: Verification — acceptance: `cargo test` (src-tauri) and `svelte-check` run clean (0 errors; warnings pre-existing) with results recorded. (covers: S2; depends: T1, T4)
+- [x] T1: Backend `rs_fps_limit` field + ltx write + unit test — acceptance: `RunParams` carries `rs_fps_limit` (default 120, serde default 120); `apply_run_params_to_ltx` writes `rs_fps_limit 501` for the unlimited value and `rs_fps_limit 120` for a default config into a temp ltx; `cargo test` in `src-tauri` green. (covers: S2 Data model, S2 user.ltx write)
+- [x] T2: TS type + shared constants — acceptance: `RunParams` in `src/typing.d.ts` declares `rs_fps_limit: number`; `FPS_LIMIT_UNLIMITED` / `FPS_LIMIT_DEFAULT` / `FPS_LIMIT_OPTIONS` exist in `src/consts.ts` with the documented values. (covers: S2 Data model)
+- [x] T3: i18n labels — acceptance: `app.params.fpsLimit` and `app.params.fpsLimitUnlimited` exist in both locale files with the documented text. (covers: S2 i18n)
+- [x] T4: Combobox in RunParams.svelte — acceptance: the view shows a select right after the renderer row with the five entries in the specified order, defaults to 120, falls back to 120 for unknown saved values, and sends the chosen number as `rs_fps_limit` on save. (covers: S2 UI; depends: T2, T3)
+- [x] T5: Verification — acceptance: `cargo test` (src-tauri) and `svelte-check` run clean (0 errors; warnings pre-existing) with results recorded. (covers: S2; depends: T1, T4)
