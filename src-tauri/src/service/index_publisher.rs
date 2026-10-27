@@ -220,6 +220,10 @@ async fn collect_release_index(api: &(dyn ApiProvider + Send + Sync)) -> Result<
     assets: launcher_release
       .assets
       .iter()
+      // Publish only recognized launcher binaries: old clients pick the
+      // update asset by the leniently classified platform field, so a stray
+      // file (checksum, archive) must not end up in `launcher.assets`.
+      .filter(|a| crate::providers::dto::ReleasePlatform::from_launcher_name(&a.name).is_some())
       .map(|a| IndexLauncherAsset {
         name: a.name.clone(),
         platform: format!("{:?}", a.platform).to_lowercase(),

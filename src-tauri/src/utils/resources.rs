@@ -9,6 +9,8 @@ pub fn game_exe() -> String {
 pub fn launcher_exe() -> String {
   let binary_name = if cfg!(windows) {
     EXE_WIN_NAME.to_owned()
+  } else if cfg!(target_os = "macos") {
+    EXE_MACOS_NAME.to_owned()
   } else {
     EXE_LINUX_NAME.to_owned()
   };

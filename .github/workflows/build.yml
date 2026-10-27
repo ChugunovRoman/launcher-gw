@@ -38,12 +38,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: 'npm'
-          
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           cache: true
@@ -53,3 +53,24 @@ jobs:
           npm ci
           npm run gen-icons
           npm run tauri build
+
+  # Сборка под macOS для проверки компиляции (universal: arm64 + x86_64)
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build
+        run: |
+          npm ci
+          npm run gen-icons
+          npm run tauri build -- --target universal-apple-darwin

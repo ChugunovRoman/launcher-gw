@@ -13,6 +13,10 @@ pub const VERSIONS_DIR: &str = "versions";
 
 pub const EXE_WIN_NAME: &str = "Launcher.exe";
 pub const EXE_LINUX_NAME: &str = "Launcher";
+// Published name of the universal macOS binary. The self-update picks the
+// asset by this name (see ReleasePlatform::from_launcher_name), so CI must
+// upload the macOS build under exactly this name.
+pub const EXE_MACOS_NAME: &str = "Launcher-macos";
 pub const BASE_DIR: &str = "com.ruut.stalker";
 pub const CONFIG_NAME: &str = "config.json";
 

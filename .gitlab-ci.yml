@@ -50,6 +50,24 @@ check-build-windows:
     - npm run gen-icons
     - npm run tauri-build-windows
 
+# macOS builds need a self-hosted runner (GitLab.com has no macOS shared
+# runners). Gate on MACOS_RUNNER_ENABLED=true so pipelines never sit in
+# "waiting for runner". Requires: rustup, node/npm on the runner.
+check-build-macos:
+  stage: test
+  tags: [macos]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" && $MACOS_RUNNER_ENABLED == "true"
+      when: manual
+      allow_failure: true
+  before_script:
+    - rustup default stable
+    - rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    - npm ci
+  script:
+    - npm run gen-icons
+    - npm run tauri build -- --target universal-apple-darwin
+
 build-linux:
   stage: build
   image: rust:latest
@@ -91,6 +109,27 @@ build-windows:
     paths:
       - dist/windows/
 
+# macOS build (universal: arm64 + x86_64) on a self-hosted runner with the
+# `macos` tag. The published name ${APP_NAME}-macos is the self-update
+# contract (EXE_MACOS_NAME in src-tauri/src/consts.rs).
+build-macos:
+  stage: build
+  tags: [macos]
+  rules:
+    - if: $CI_COMMIT_TAG && $MACOS_RUNNER_ENABLED == "true"
+  before_script:
+    - rustup default stable
+    - rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    - npm ci
+  script:
+    - npm run gen-icons
+    - npm run tauri build -- --target universal-apple-darwin
+    - mkdir -p ./dist/macos
+    - cp src-tauri/target/universal-apple-darwin/release/${APP_NAME} ./dist/macos/${APP_NAME}-macos
+  artifacts:
+    paths:
+      - dist/macos/
+
 publish-release:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
@@ -99,12 +138,19 @@ publish-release:
   needs:
     - build-linux
     - build-windows
+    # optional: the job is skipped when MACOS_RUNNER_ENABLED is not "true"
+    - job: build-macos
+      optional: true
   before_script:
     - apk add --no-cache git curl jq
   script: |
       # 1. Загрузка в Generic Packages
       curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/linux/${APP_NAME} "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}"
       curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/windows/${APP_NAME}.exe "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}.exe"
+      # macOS is built only when a macos runner is registered (MACOS_RUNNER_ENABLED)
+      if [ -f dist/macos/${APP_NAME}-macos ]; then
+        curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/macos/${APP_NAME}-macos "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}-macos"
+      fi
   release:
     name: 'Release $CI_COMMIT_TAG'
     tag_name: '$CI_COMMIT_TAG'
@@ -115,6 +161,11 @@ publish-release:
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}"
         - name: 'Windows'
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}.exe"
+        # Points at the generic package; 404 on tags published without a
+        # macos build (MACOS_RUNNER_ENABLED off). The launcher reads index.json
+        # (update-index below), which drops the macos entry in that case.
+        - name: 'macOS'
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}/${APP_NAME}-macos"
 
 # --- ЭТАП 4: Обновление launcher-секции индекса ---
 update-index:
@@ -128,6 +179,9 @@ update-index:
       artifacts: true
     - job: build-windows
       artifacts: true
+    - job: build-macos
+      artifacts: true
+      optional: true
   before_script:
     - apk add --no-cache curl jq coreutils bash
   script: |
@@ -135,16 +189,38 @@ update-index:
     INDEX_API="${CI_API_V4_URL}/projects/85506224/repository/files/index.json"
     WIN_SIZE=$(wc -c < dist/windows/Launcher.exe)
     LIN_SIZE=$(wc -c < dist/linux/Launcher)
+    WIN_SHA=$(sha256sum dist/windows/Launcher.exe | cut -d' ' -f1)
+    LIN_SHA=$(sha256sum dist/linux/Launcher | cut -d' ' -f1)
+    # macOS is built only when a macos runner is registered. When this tag
+    # carries no macOS binary the macos entries are DROPPED (not kept stale):
+    # a stale entry would make macOS clients re-download the old binary
+    # forever under the new version number. The launcher's updater refuses
+    # to offer an update that has no asset for the current platform.
+    MAC_SIZE=0
+    MAC_SHA=""
+    if [ -f dist/macos/Launcher-macos ]; then
+      MAC_SIZE=$(wc -c < dist/macos/Launcher-macos)
+      MAC_SHA=$(sha256sum dist/macos/Launcher-macos | cut -d' ' -f1)
+    fi
     BG_ETAG=$(curl -fsSIL "${CI_API_V4_URL}/projects/75545910/repository/files/data%2Fbg%2Fbg.jpg/raw?ref=master" | tr -d '\r' | awk 'tolower($1)=="etag:"{sub(/^etag:[ \t]*/,""); print}' | tail -n1)
     curl -fsS -H "PRIVATE-TOKEN: ${LAUNCHER_INDEX_TOKEN}" "${INDEX_API}/raw?ref=master" -o current.json
     BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/stalker-gw/${CI_COMMIT_TAG}"
-    jq --arg tag "$CI_COMMIT_TAG" --arg etag "$BG_ETAG" --arg base "$BASE_URL" --argjson ws "$WIN_SIZE" --argjson ls "$LIN_SIZE" '
+    jq --arg tag "$CI_COMMIT_TAG" --arg etag "$BG_ETAG" --arg base "$BASE_URL" \
+       --argjson ws "$WIN_SIZE" --argjson ls "$LIN_SIZE" --argjson ms "$MAC_SIZE" \
+       --arg wsha "$WIN_SHA" --arg lsha "$LIN_SHA" --arg msha "$MAC_SHA" '
       .launcher.version = $tag
       | .launcher.bg_etag = (if $etag == "" then null else $etag end)
-      | .launcher.assets = [
-          {name:"Launcher.exe", platform:"windows", size:$ws, url:($base + "/Launcher.exe")},
-          {name:"Launcher", platform:"linux", size:$ls, url:($base + "/Launcher")}
-        ]
+      | .launcher.assets = (
+          [
+            {name:"Launcher.exe", platform:"windows", size:$ws, sha256:$wsha, url:($base + "/Launcher.exe")},
+            {name:"Launcher", platform:"linux", size:$ls, sha256:$lsha, url:($base + "/Launcher")}
+          ]
+          + (if $ms > 0 then
+              [{name:"Launcher-macos", platform:"macos", size:$ms, sha256:$msha, url:($base + "/Launcher-macos")}]
+            else
+              []
+            end)
+        )
       | .generated_at = (now | todate)' current.json > new.json
     jq -n --rawfile c new.json --arg msg "Update launcher to ${CI_COMMIT_TAG}" \
       '{content:$c, commit_message:$msg, branch:"master"}' > body.json

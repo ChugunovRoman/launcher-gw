@@ -52,17 +52,30 @@ impl ServiceUpdater {
       let latest_v = Version::parse(&index.launcher.version).unwrap_or(Version::new(0, 0, 0));
 
       if latest_v > current_v {
+        // Strict classification (platform string first, file name as a
+        // fallback): an entry naming no known launcher binary is dropped so
+        // it can never win the asset `find()` in `download`.
         let assets: Vec<ReleaseAssetGit> = index
           .launcher
           .assets
           .iter()
-          .map(|a| ReleaseAssetGit {
-            name: a.name.clone(),
-            platform: parse_platform(&a.platform),
-            size: a.size,
-            download_link: a.url.clone(),
+          .filter_map(|a| {
+            let platform = ReleasePlatform::from_launcher_name(&a.platform).or_else(|| ReleasePlatform::from_launcher_name(&a.name))?;
+            Some(ReleaseAssetGit {
+              name: a.name.clone(),
+              platform,
+              size: a.size,
+              download_link: a.url.clone(),
+            })
           })
           .collect();
+        // An update that cannot be installed on this platform must not be
+        // offered: without a matching asset the UI would prompt for a restart
+        // that changes nothing (e.g. a tag published without a macOS build).
+        if !has_platform_asset(&assets) {
+          log::warn!("ServiceUpdater.check, no launcher asset for this platform in index {}, skipping update", &index.launcher.version);
+          return Ok(None);
+        }
         return Ok(Some(ReleaseGit {
           name: "Launcher".to_string(),
           version: index.launcher.version,
@@ -95,6 +108,10 @@ impl ServiceUpdater {
     );
 
     if latest_v > current_v {
+      if !has_platform_asset(&latest_release.assets) {
+        log::warn!("ServiceUpdater.check, no launcher asset for this platform in release {}, skipping update", &latest_release.version);
+        return Ok(None);
+      }
       return Ok(Some(latest_release));
     }
 
@@ -140,19 +157,19 @@ impl ServiceUpdater {
 
     log::debug!("ServiceUpdater.download, start");
 
-    let mut asset_name = ReleasePlatform::Windows;
-
-    if cfg!(target_os = "windows") {
-      asset_name = ReleasePlatform::Windows;
-    } else if cfg!(target_os = "macos") {
-      asset_name = ReleasePlatform::MacOS;
-    } else {
-      asset_name = ReleasePlatform::Linux;
-    }
+    let asset_name = current_platform();
 
     log::debug!("ServiceUpdater.download, asset_name: {:?}", &asset_name);
 
-    if let Some(target) = release.assets.iter().find(|&asset| asset.platform == asset_name) {
+    // Match by published asset name, not by the leniently classified
+    // `platform` field: the classifier files any unknown asset under MacOS,
+    // and this download REPLACES the running executable — a checksum or
+    // archive file must never be picked instead of the real binary.
+    if let Some(target) = release
+      .assets
+      .iter()
+      .find(|asset| ReleasePlatform::from_launcher_name(&asset.name) == Some(asset_name))
+    {
       log::debug!("ServiceUpdater.download, target: {:?}", &target);
 
       let (mut stream, _stream_start) = api.get_blob_by_url_stream(&target.download_link, &None).await?;
@@ -272,10 +289,20 @@ impl ServiceUpdater {
   }
 }
 
-fn parse_platform(s: &str) -> ReleasePlatform {
-  match s {
-    "windows" => ReleasePlatform::Windows,
-    "linux" => ReleasePlatform::Linux,
-    _ => ReleasePlatform::MacOS,
+/// Platform binary this build replaces itself with.
+fn current_platform() -> ReleasePlatform {
+  if cfg!(target_os = "windows") {
+    ReleasePlatform::Windows
+  } else if cfg!(target_os = "macos") {
+    ReleasePlatform::MacOS
+  } else {
+    ReleasePlatform::Linux
   }
+}
+
+/// True when the asset list carries a binary for this platform. The match is
+/// by published name — the same predicate `download` selects with — so the
+/// guard exactly predicts whether an update can be installed.
+fn has_platform_asset(assets: &[ReleaseAssetGit]) -> bool {
+  assets.iter().any(|a| ReleasePlatform::from_launcher_name(&a.name) == Some(current_platform()))
 }

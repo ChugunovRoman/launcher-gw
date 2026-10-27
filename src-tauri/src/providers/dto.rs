@@ -16,6 +16,25 @@ pub enum ReleasePlatform {
   MacOS,
 }
 
+impl ReleasePlatform {
+  /// Classify a launcher asset by the name it is published under.
+  ///
+  /// Accepts the binary file names (`Launcher.exe`, `Launcher`,
+  /// `Launcher-macos`), the GitLab release-link labels (`Windows`, `Linux`,
+  /// `MacOS`) and the lowercase index `platform` strings. Anything else
+  /// returns None: the self-update replaces the RUNNING executable, so a
+  /// stray release asset (checksum file, bundle, source archive) must never
+  /// be mistaken for a platform binary.
+  pub fn from_launcher_name(name: &str) -> Option<ReleasePlatform> {
+    match name.to_ascii_lowercase().as_str() {
+      "launcher.exe" | "windows" => Some(ReleasePlatform::Windows),
+      "launcher" | "linux" => Some(ReleasePlatform::Linux),
+      "launcher-macos" | "macos" | "darwin" => Some(ReleasePlatform::MacOS),
+      _ => None,
+    }
+  }
+}
+
 #[derive(Serialize, Debug, Clone)]
 pub struct ProviderStatus {
   pub available: bool,
@@ -156,4 +175,35 @@ pub struct AssetSha256 {
   pub size: Option<u64>,
   #[serde(default)]
   pub sha256: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::ReleasePlatform;
+
+  /// The self-update replaces the running executable with the matched asset,
+  /// so classification must be exact: known launcher names only, everything
+  /// else None. A catch-all bucket would let a checksum or archive file
+  /// shadow the real macOS binary in `find()`.
+  #[test]
+  fn launcher_name_classification_is_exact() {
+    // Binary file names (GitHub release assets / index `name`).
+    assert_eq!(ReleasePlatform::from_launcher_name("Launcher.exe"), Some(ReleasePlatform::Windows));
+    assert_eq!(ReleasePlatform::from_launcher_name("Launcher"), Some(ReleasePlatform::Linux));
+    assert_eq!(ReleasePlatform::from_launcher_name("Launcher-macos"), Some(ReleasePlatform::MacOS));
+    // GitLab release-link labels (publish-release job).
+    assert_eq!(ReleasePlatform::from_launcher_name("Windows"), Some(ReleasePlatform::Windows));
+    assert_eq!(ReleasePlatform::from_launcher_name("Linux"), Some(ReleasePlatform::Linux));
+    assert_eq!(ReleasePlatform::from_launcher_name("MacOS"), Some(ReleasePlatform::MacOS));
+    // Lowercase index `platform` strings (CI jq / index publisher).
+    assert_eq!(ReleasePlatform::from_launcher_name("windows"), Some(ReleasePlatform::Windows));
+    assert_eq!(ReleasePlatform::from_launcher_name("linux"), Some(ReleasePlatform::Linux));
+    assert_eq!(ReleasePlatform::from_launcher_name("macos"), Some(ReleasePlatform::MacOS));
+    assert_eq!(ReleasePlatform::from_launcher_name("darwin"), Some(ReleasePlatform::MacOS));
+    // Stray release assets must never be treated as a platform binary.
+    assert_eq!(ReleasePlatform::from_launcher_name("SHA256SUMS.txt"), None);
+    assert_eq!(ReleasePlatform::from_launcher_name("Launcher.dmg"), None);
+    assert_eq!(ReleasePlatform::from_launcher_name("Launcher.zip"), None);
+    assert_eq!(ReleasePlatform::from_launcher_name(""), None);
+  }
 }
