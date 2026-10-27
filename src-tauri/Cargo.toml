@@ -37,7 +37,11 @@ sha2 = "0.10"
 tauri-plugin-dialog = "2.4.0"
 tauri-plugin-single-instance = "2"
 regex = "1"
-git2 = "0.20.2"
+# Local repository ops only (patch collect/tag/diff); network git goes through
+# the system `git` binary and the provider APIs. The default https/ssh features
+# pull in openssl-sys/libssh2-sys, which break the macOS universal (cross-arch)
+# build and are dead weight on every platform.
+git2 = { version = "0.20.2", default-features = false }
 async-trait = "0.1.89"
 bytes = "1.10.1"
 base64 = "0.22.1"
